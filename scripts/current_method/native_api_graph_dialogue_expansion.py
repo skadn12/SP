@@ -166,6 +166,10 @@ STAGE64_GENERIC_QUESTION_RE = re.compile(
     r"\bbased\s+on\s+the\s+conversation\b",
     re.IGNORECASE,
 )
+STAGE64_QA_REPAIRABLE_RE = re.compile(
+    r"stage64 API QA|qa_proposal|query_plan|answer_type|qa_operation|gold|options|anchor_refs|graph reference",
+    re.IGNORECASE,
+)
 # Hard cap (as a share of n_samples) for any single qtype/skill in the ACCEPTED set.
 EASY_V2_MAX_QUESTION_TYPE_SHARE = 0.40
 EASY_V2_MAX_ATTACK_SKILL_SHARE = 0.40
@@ -1031,6 +1035,12 @@ def _failure_reason_from_exception(exc: Exception, raw_record: dict[str, Any] | 
     if "base validation" in message:
         return "base_validation"
     return type(exc).__name__
+
+
+def _is_stage64_qa_repairable_error(exc: Exception) -> bool:
+    if not isinstance(exc, NativeGraphDialogueReject):
+        return False
+    return bool(STAGE64_QA_REPAIRABLE_RE.search(str(exc)))
 
 
 def _final_dialogue_reject_reason(
@@ -3252,6 +3262,8 @@ def call_api_graph_conditioned_dialogue_expansion(
                     "If a fact was originally phrased as a Q/A artifact, rewrite only the real-world fact in natural language; never quote the literal Q: or A: wrapper in question/options.",
                     "Every question must name a concrete entity/person/place/object and ask for a concrete relation, date, count, visibility scope, cause, comparison, or consequence.",
                     "For temporal_state_update, ask about the concrete person/place/object and the latest real-world fact from the dialogue; do not ask generic questions like which event is settled as true, which event is currently settled as true, which option reflects the state after all updates, or which statement is correct.",
+                    "For temporal_state_update, the question must be concrete, e.g. 'After the later correction, what place did Audrey settle on for the dogs?' Never use 'Which event...', 'currently settled as true', 'settled as true', 'final active state', or 'state after all updates'.",
+                    "qa_proposal.gold must always be option labels only, such as ['A'] or ['D']; never put a marker, anchor_ref, event_instance_id, or answer text in gold.",
                 ]
                 if stage64_qa_mode
                 else []
@@ -3429,6 +3441,165 @@ def call_api_alignment_repair(
     meta["prompt_tokens_estimate"] = prompt_token_estimate
     meta["parent_context_turns"] = ((parent_context.get("diagnostics") or {}).get("parent_context_turns") if isinstance(parent_context.get("diagnostics"), dict) else None)
     meta["parent_context_tokens_estimate"] = ((parent_context.get("diagnostics") or {}).get("parent_context_tokens_estimate") if isinstance(parent_context.get("diagnostics"), dict) else None)
+    return proposal, meta
+
+
+def _stage64_event_candidates_for_prompt(
+    current_event_plan_with_anchors: dict[str, Any],
+    current_alignment: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Compact graph evidence view for QA-only repair.
+
+    The repair call should be much cheaper than full dialogue regeneration, so
+    expose only event refs and natural claims that the QA schema may cite.
+    """
+    dialogue_plan = sanitize_event_plan_for_dialogue_api(current_event_plan_with_anchors)
+    event_to_anchor = current_event_plan_with_anchors.get("current_event_instance_to_anchor")
+    if not isinstance(event_to_anchor, dict):
+        event_to_anchor = {}
+    rows: list[dict[str, Any]] = []
+    for event in dialogue_plan.get("events") or []:
+        if not isinstance(event, dict):
+            continue
+        event_id = normalize_space(event.get("event_instance_id"))
+        marker = normalize_space(event.get("marker") or event_to_anchor.get(event_id))
+        if not event_id:
+            continue
+        rows.append(
+            {
+                "event_instance_id": event_id,
+                "marker": marker,
+                "entity": normalize_space(event.get("entity")),
+                "slot": normalize_space(event.get("slot")),
+                "status": normalize_space(event.get("status")),
+                "answer_candidate_text": normalize_space(
+                    event.get("dialogue_support_claim")
+                    or event.get("value")
+                    or event.get("dialogue_value")
+                ),
+                "evidence_turn_ids": _turn_ids_for_event(event, current_alignment),
+            }
+        )
+    return rows
+
+
+def _stage64_compact_appended_turns_for_prompt(appended_dialogue_turns: list[dict[str, Any]]) -> list[dict[str, str]]:
+    compact: list[dict[str, str]] = []
+    for turn in appended_dialogue_turns:
+        if not isinstance(turn, dict):
+            continue
+        text = normalize_space(GENERIC_MARKER_RE.sub(" ", str(turn.get("text") or "")))
+        if not text:
+            continue
+        compact.append(
+            {
+                "speaker": normalize_space(turn.get("speaker") or "Speaker"),
+                "text": text,
+            }
+        )
+    return compact[-80:]
+
+
+def call_api_stage64_qa_repair(
+    current_event_plan_with_anchors: dict[str, Any],
+    current_alignment: dict[str, Any],
+    previous_qa_proposal: dict[str, Any] | None,
+    stage64_target: dict[str, Any] | None,
+    failure_reason: str,
+    appended_dialogue_turns: list[dict[str, Any]],
+    args: argparse.Namespace,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    target_operation = normalize_space((stage64_target or {}).get("qa_operation")) if isinstance(stage64_target, dict) else ""
+    preferred_answer_type = normalize_space((stage64_target or {}).get("preferred_answer_type")) if isinstance(stage64_target, dict) else ""
+    required_answer_types = sorted(STAGE64_OPERATION_REQUIRED_ANSWER_TYPES.get(target_operation) or [])
+    prompt = {
+        "task": "repair Stage64 qa_proposal only",
+        "requirements": [
+            "Do not rewrite dialogue. Do not invent new graph facts. Return JSON only.",
+            "Return exactly one key: qa_proposal.",
+            "The previous qa_proposal failed local validation. Fix only the QA schema, operation, answer type, options, gold, query_plan, and anchor_refs.",
+            "Use only event_instance_id or marker values listed in event_candidates as graph references.",
+            "For non-YesNo answers, provide exactly four options A-D. For YesNo, provide exactly two options A-B.",
+            "Every option must include id, text, answer_type, source_event_instance_id, anchor_ref, anchor_kind, and truth_value.",
+            "gold must be an array with exactly one option id, such as [\"A\"].",
+            "query_plan.answer_source must be graph_anchor, and query_plan qa_operation / qa_subtype / answer_type must match qa_proposal.",
+            "Do not include raw_qa, Q:, A:, current graph, graph anchor, anchor, marker, event instance, latest confirmed detail, final active state, or schema language in the user-facing question or options.",
+            "Name concrete people/entities/places/objects in the question; avoid generic questions like which event is settled as true.",
+            "If qa_operation is temporal_state_update, ask for the concrete latest real-world detail about a named entity. Never write 'Which event...', 'currently settled as true', 'settled as true', 'final active state', 'state after all updates', or 'which statement is correct'.",
+            "qa_proposal.gold must be option labels only, such as [\"A\"] or [\"D\"]; never put a marker, anchor_ref, event_instance_id, or answer text in gold.",
+        ],
+        "validator_failure_reason": failure_reason,
+        "target": {
+            "qa_operation": target_operation or list(STAGE64_QA_OPERATIONS),
+            "preferred_answer_type": preferred_answer_type or None,
+            "required_answer_types": required_answer_types,
+            "answer_type_rule": (
+                f"Must use one of {required_answer_types}."
+                if required_answer_types
+                else f"Prefer {preferred_answer_type}, but choose another allowed answer_type if the evidence does not support it."
+            ),
+        },
+        "event_candidates": _stage64_event_candidates_for_prompt(current_event_plan_with_anchors, current_alignment),
+        "already_validated_appended_dialogue": _stage64_compact_appended_turns_for_prompt(appended_dialogue_turns),
+        "previous_qa_proposal": previous_qa_proposal if isinstance(previous_qa_proposal, dict) else {},
+        "answer_type_allowed_values": list(STAGE64_ANSWER_TYPES),
+        "qa_operation_allowed_values": list(STAGE64_QA_OPERATIONS),
+        "output_schema": {
+            "qa_proposal": {
+                "question_type": "single_choice",
+                "qa_operation": target_operation or "one allowed qa_operation",
+                "qa_subtype": "short subtype string",
+                "answer_type": "one allowed answer_type",
+                "answer_format": "single_choice_mcq",
+                "question": "natural MCQ question",
+                "question_text": "same as question",
+                "options": [
+                    {
+                        "id": "A",
+                        "text": "option text",
+                        "answer_type": "same answer_type as qa_proposal",
+                        "truth_value": True,
+                        "source_event_instance_id": "event_instance_id from event_candidates",
+                        "anchor_ref": "event_instance_id or marker from event_candidates",
+                        "anchor_kind": "event",
+                    }
+                ],
+                "gold": ["A"],
+                "gold_answer_text": "text of gold option",
+                "query_plan": {
+                    "answer_source": "graph_anchor",
+                    "qa_operation": "same as qa_operation",
+                    "qa_subtype": "same as qa_subtype",
+                    "answer_type": "same as answer_type",
+                    "reasoning_anchor_path": ["event_instance_id or marker refs"],
+                    "required_anchor_refs": ["event_instance_id or marker refs"],
+                    "supporting_anchor_refs": ["event_instance_id or marker refs"],
+                    "gold_anchor_refs": ["event_instance_id or marker refs"],
+                    "distractor_anchor_refs": ["event_instance_id or marker refs"],
+                    "gold_answer": "text of gold option",
+                    "normalized_gold_answer": "lowercase normalized gold answer text",
+                },
+                "anchor_refs": {
+                    "support": ["event_instance_id or marker refs"],
+                    "gold": ["event_instance_id or marker refs"],
+                    "distractors": ["event_instance_id or marker refs"],
+                },
+            }
+        },
+    }
+    prompt_token_estimate = estimate_json_tokens(prompt)
+    proposal, meta = call_raw_json_api(
+        args,
+        prompt,
+        system_prompt=(
+            "You are a strict JSON-only Stage64 QA schema repair editor. "
+            "Fix qa_proposal only. Do not rewrite dialogue. Return exactly one JSON object."
+        ),
+        required_keys=("qa_proposal",),
+        call_kind="api_stage64_qa_repair",
+        max_tokens_override=2048,
+    )
+    meta["prompt_tokens_estimate"] = prompt_token_estimate
     return proposal, meta
 
 
@@ -8509,6 +8680,11 @@ def _empty_summary() -> dict[str, Any]:
         "by_qa_operation": {},
         "by_answer_type": {},
         "stage64_api_qa_schema_pass_count": 0,
+        "stage64_qa_repair_attempt_count": 0,
+        "stage64_qa_repair_success_count": 0,
+        "stage64_qa_repair_failed_count": 0,
+        "stage64_qa_repair_saved_full_regeneration_count": 0,
+        "stage64_qa_repair_failure_reason": {},
         "api_failure_count": 0,
         "challenger_api_used": True,
         "old_gate_generate_samples_called": False,
@@ -9539,18 +9715,75 @@ def generate_graph_conditioned_api_dialogue_samples(
                 qa_question_type = plan_qtype
             else:
                 qa_question_type = plan_qtype or "ordering"
-            qa = build_qa_from_current_graph_and_alignment(
-                current_event_plan,
-                graph_update,
-                alignment_result["current_alignment"],
-                dialogue_proposal.get("qa_proposal") if isinstance(dialogue_proposal, dict) else None,
-                qa_question_type,
-                rng,
-                hashes,
-                final_dialogue,
-                policy,
-                seed_row=seed_row,
-            )
+            qa_proposal_for_build = dialogue_proposal.get("qa_proposal") if isinstance(dialogue_proposal, dict) else None
+            try:
+                qa = build_qa_from_current_graph_and_alignment(
+                    current_event_plan,
+                    graph_update,
+                    alignment_result["current_alignment"],
+                    qa_proposal_for_build,
+                    qa_question_type,
+                    rng,
+                    hashes,
+                    final_dialogue,
+                    policy,
+                    seed_row=seed_row,
+                )
+            except Exception as qa_exc:
+                if not (
+                    isinstance(policy, dict)
+                    and policy.get("qa_operation_answer_type_diversification")
+                    and _is_stage64_qa_repairable_error(qa_exc)
+                ):
+                    raise
+                summary["stage64_qa_repair_attempt_count"] += 1
+                repair_payload, repair_meta = call_api_stage64_qa_repair(
+                    current_event_plan,
+                    alignment_result["current_alignment"],
+                    qa_proposal_for_build if isinstance(qa_proposal_for_build, dict) else None,
+                    policy.get("stage64_target") if isinstance(policy.get("stage64_target"), dict) else None,
+                    str(qa_exc),
+                    accepted_appended_dialogue_marked,
+                    api_args,
+                )
+                raw_record.setdefault("api_stage64_qa_repair_attempts", []).append(
+                    {
+                        "failure_reason": str(qa_exc),
+                        "meta": repair_meta,
+                        "payload": repair_payload,
+                    }
+                )
+                _record_api_meta_retry_diagnostics(summary, repair_meta)
+                repaired_qa_proposal = repair_payload.get("qa_proposal") if isinstance(repair_payload, dict) else None
+                if not repair_meta.get("used") or not isinstance(repaired_qa_proposal, dict):
+                    summary["stage64_qa_repair_failed_count"] += 1
+                    _bump_failure_reason(summary, "stage64_qa_repair_api_failed")
+                    reason_counts = summary.setdefault("stage64_qa_repair_failure_reason", {})
+                    reason_counts["api_failed"] = int(reason_counts.get("api_failed") or 0) + 1
+                    raise qa_exc
+                try:
+                    qa = build_qa_from_current_graph_and_alignment(
+                        current_event_plan,
+                        graph_update,
+                        alignment_result["current_alignment"],
+                        repaired_qa_proposal,
+                        qa_question_type,
+                        rng,
+                        hashes,
+                        final_dialogue,
+                        policy,
+                        seed_row=seed_row,
+                    )
+                except Exception as repaired_exc:
+                    summary["stage64_qa_repair_failed_count"] += 1
+                    reason = normalize_space(str(repaired_exc)) or type(repaired_exc).__name__
+                    reason_counts = summary.setdefault("stage64_qa_repair_failure_reason", {})
+                    reason_counts[reason[:160]] = int(reason_counts.get(reason[:160]) or 0) + 1
+                    raise repaired_exc
+                summary["stage64_qa_repair_success_count"] += 1
+                summary["stage64_qa_repair_saved_full_regeneration_count"] += 1
+                if isinstance(dialogue_proposal, dict):
+                    dialogue_proposal["qa_proposal"] = repaired_qa_proposal
             if _is_easy_curriculum(policy):
                 _clean_qa_option_display_text(qa)
             clean_sample = build_clean_sample(

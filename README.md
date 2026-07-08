@@ -297,6 +297,23 @@ Stage64 当前方法：显式控制 qa_operation + answer_type，生成更多类
 
    这些信息写在 `generation_summary.json` 和 `graph_conditioned_api_dialogue_rejects.jsonl` 里。
 
+9. **新增 QA-only repair，减少 API token 浪费**
+
+   Stage64 API 生成里最贵的是长对话扩展。如果 appended dialogue 已经通过 graph/dialogue alignment 和长度验证，但最终 `qa_proposal` 只是因为 schema、`gold`、`answer_type`、`qa_operation`、`query_plan` 或 `anchor_refs` 的小错误被拒绝，直接整条重跑会浪费大量 token。
+
+   当前代码增加了一次短 prompt 的 QA-only repair：
+
+   ```text
+   1. API 生成 graph event plan + appended dialogue + qa_proposal
+   2. 本地验证 graph/dialogue alignment、长度和 Stage64 QA
+   3. 如果 dialogue 已合格，但 Stage64 QA validator 报 qa_proposal 类错误
+   4. 只把失败原因、event candidates、已验证 appended dialogue 和旧 qa_proposal 发回 API
+   5. API 只重写 qa_proposal，不重写 dialogue
+   6. 修复后的 qa_proposal 仍必须重新通过完整 Stage64 validator
+   ```
+
+   这个机制的作用是降低 API 失败样本带来的 token 浪费。它不会把 Stage64 改回本地模板派生：最终 question/options/gold 仍然必须来自 API，本地只是把失败原因反馈给 API，并在修复后继续严格验证。
+
 ### Stage64 没有做什么
 
 Stage64 当前**不做本地最终 QA 派生**。也就是说，本地代码不会自己根据 graph anchor 重新生成 question/options/gold。它只验证 API 给出的 `qa_proposal` 是否满足目标题目类型、答案类型和 graph evidence 约束。
