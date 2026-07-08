@@ -1,0 +1,112 @@
+{
+  "experiment": "base_restart_current_method_validation",
+  "stage": "stage2_repair_topup_from_stage1",
+  "created_by": "manual_after_stage2_heldout_failure_diagnosis",
+  "solver_name": "solver_base_restart_stage1_merged",
+  "stage1_solver_path": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/accepted_models/solver_base_restart_stage1_merged",
+  "seed_parent_path": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/seed_parents/seed_parents.jsonl",
+  "diagnosis_source": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/04_stage2_train_from_stage1/diagnostics/heldout_failure_diagnosis.json",
+  "difficulty_plan": {
+    "question_type_shares": {
+      "single_choice": 0.75,
+      "multi_select": 0.25,
+      "ordering": 0.0
+    },
+    "allowed_question_types": [
+      "single_choice",
+      "multi_select"
+    ],
+    "single_choice_subtype_shares": {
+      "ordinary_single_choice": 0.0,
+      "hard_single_choice": 1.0
+    },
+    "single_choice_subtype_hardness_mix": {
+      "ordinary_single_choice": {
+        "h0": 1.0,
+        "h1": 0.0,
+        "h2": 0.0
+      },
+      "hard_single_choice": {
+        "h0": 0.55,
+        "h1": 0.4,
+        "h2": 0.05
+      }
+    },
+    "hard_single_choice_template_shares": {
+      "sequence_as_single_choice": 0.45,
+      "latest_valid_state": 0.2,
+      "minimal_difference": 0.2,
+      "guaranteed_vs_possible": 0.1,
+      "override_sensitive": 0.05
+    },
+    "cell_weights": {
+      "single_choice|conditional_plan": 0.55,
+      "single_choice|delayed_activation": 0.45,
+      "multi_select|conditional_plan": 1.0,
+      "multi_select|permission_visibility_scope": 0.0,
+      "ordering|timeline_fork_merge": 0.0,
+      "ordering|conditional_plan": 0.0
+    },
+    "cell_hardness_mix": {
+      "single_choice|conditional_plan": {
+        "h0": 0.6,
+        "h1": 0.35,
+        "h2": 0.05
+      },
+      "single_choice|delayed_activation": {
+        "h0": 0.55,
+        "h1": 0.4,
+        "h2": 0.05
+      },
+      "multi_select|conditional_plan": {
+        "h0": 0.7,
+        "h1": 0.3,
+        "h2": 0.0
+      },
+      "multi_select|permission_visibility_scope": {
+        "h0": 1.0,
+        "h1": 0.0,
+        "h2": 0.0
+      },
+      "ordering|timeline_fork_merge": {
+        "h0": 1.0,
+        "h1": 0.0,
+        "h2": 0.0
+      },
+      "ordering|conditional_plan": {
+        "h0": 1.0,
+        "h1": 0.0,
+        "h2": 0.0
+      }
+    },
+    "qtype_curriculum": {
+      "stage": "stage2_repair_topup_from_stage1",
+      "mode": "guarded_repair_topup",
+      "ordinary_single_choice": 0.0,
+      "hard_single_choice": 0.75,
+      "multi_select": 0.25,
+      "ordering": 0.0,
+      "single_choice": 0.75,
+      "ordering_probe_only": false,
+      "ordering_bonus_allowed": false,
+      "repair_focus": [
+        "sequence_as_single_choice",
+        "latest_valid_state",
+        "multi_select|conditional_plan_h0_h1"
+      ],
+      "manual_policy_correction": "stage2 repair: focus failed heldout templates, freeze ordering, multi_select conditional_plan h0/h1 only"
+    }
+  },
+  "constraints": {
+    "not_stage3": true,
+    "fixed_solver_for_mining": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/accepted_models/solver_base_restart_stage1_merged",
+    "init_model_if_training": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/accepted_models/solver_base_restart_stage1_merged",
+    "failed_stage2_model_used_as_init": false,
+    "ordering_frozen": true,
+    "no_evidence_window_prompt": true,
+    "evidence_window_used_as_prompt": false,
+    "r4_r5_r1_data_or_model_used": false,
+    "max_model_len": 16384,
+    "tokenizer": "/root/autodl-tmp/Qwen3-4B"
+  }
+}

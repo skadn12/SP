@@ -1,0 +1,107 @@
+{
+  "experiment": "base_restart_current_method_validation",
+  "created_by": "topup_hard_single_choice_from_combined_frontier66",
+  "solver_name": "solver_base_qwen3_4b",
+  "difficulty_plan": {
+    "question_type_shares": {
+      "single_choice": 1.0,
+      "multi_select": 0.0,
+      "ordering": 0.0
+    },
+    "allowed_question_types": [
+      "single_choice"
+    ],
+    "single_choice_subtype_shares": {
+      "ordinary_single_choice": 0.0,
+      "hard_single_choice": 1.0
+    },
+    "single_choice_subtype_hardness_mix": {
+      "ordinary_single_choice": {
+        "h0": 1.0,
+        "h1": 0.0,
+        "h2": 0.0
+      },
+      "hard_single_choice": {
+        "h0": 0.7,
+        "h1": 0.3,
+        "h2": 0.0
+      }
+    },
+    "hard_single_choice_template_shares": {
+      "sequence_as_single_choice": 0.34,
+      "latest_valid_state": 0.33,
+      "minimal_difference": 0.33,
+      "guaranteed_vs_possible": 0.0,
+      "override_sensitive": 0.0
+    },
+    "cell_weights": {
+      "single_choice|conditional_plan": 0.5,
+      "single_choice|delayed_activation": 0.5,
+      "multi_select|conditional_plan": 0.0,
+      "multi_select|permission_visibility_scope": 0.0,
+      "ordering|timeline_fork_merge": 0.0,
+      "ordering|conditional_plan": 0.0
+    },
+    "cell_hardness_mix": {
+      "single_choice|conditional_plan": {
+        "h0": 0.7,
+        "h1": 0.3,
+        "h2": 0.0
+      },
+      "single_choice|delayed_activation": {
+        "h0": 0.7,
+        "h1": 0.3,
+        "h2": 0.0
+      },
+      "multi_select|conditional_plan": {
+        "h0": 1.0,
+        "h1": 0.0,
+        "h2": 0.0
+      },
+      "multi_select|permission_visibility_scope": {
+        "h0": 1.0,
+        "h1": 0.0,
+        "h2": 0.0
+      },
+      "ordering|timeline_fork_merge": {
+        "h0": 1.0,
+        "h1": 0.0,
+        "h2": 0.0
+      },
+      "ordering|conditional_plan": {
+        "h0": 1.0,
+        "h1": 0.0,
+        "h2": 0.0
+      }
+    },
+    "qtype_curriculum": {
+      "stage": "base_restart_topup_hard_single_choice_450",
+      "mode": "frontier_pool_topup_after_mining500_failed",
+      "ordinary_single_choice": 0.0,
+      "hard_single_choice": 1.0,
+      "multi_select": 0.0,
+      "ordering": 0.0
+    }
+  },
+  "topup_plan": {
+    "starting_frontier_pool_count": 66,
+    "target_combined_frontier_pool_count": 100,
+    "candidate_budget": 450,
+    "question_type": "single_choice",
+    "subtype": "hard_single_choice",
+    "template_basis": "combined mining500 observed frontier_pool rates",
+    "template_weights": {
+      "sequence_as_single_choice": 0.34,
+      "latest_valid_state": 0.33,
+      "minimal_difference": 0.33,
+      "guaranteed_vs_possible": 0.0,
+      "override_sensitive": 0.0
+    },
+    "hardness_basis": "combined mining500 h0 frontier_pool_rate 0.1069, h1 0.0820, h2 0.0444",
+    "hardness_mix": {
+      "h0": 0.7,
+      "h1": 0.3,
+      "h2": 0.0
+    }
+  }
+}

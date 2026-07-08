@@ -1,0 +1,31 @@
+{
+  "method": "current_method",
+  "frontier_count": 0,
+  "frontier_yield": 0.0,
+  "primary_frontier_count": 0,
+  "secondary_frontier_count": 0,
+  "frontier_candidate_count": 0,
+  "weighted_frontier_candidate_score": 0,
+  "frontier_by_bucket": {
+    "0/5": 120
+  },
+  "excluded_0of5_count": 120,
+  "excluded_5of5_count": 0,
+  "future_hard_set_count": 120,
+  "clean_replay_candidate_count": 0,
+  "near_miss_count": 0,
+  "hard_correct_count": 0,
+  "true_too_hard_count": 0,
+  "bad_question_count": 120,
+  "shortcut_issue_count": 0,
+  "easy_count": 0,
+  "label_counts": {
+    "bad_question": 120
+  },
+  "frontier_by_question_type": {},
+  "frontier_by_attack_skill": {},
+  "largest_type_share": 0.0,
+  "largest_skill_share": 0.0,
+  "dev_or_heldout_frontier_count": 0,
+  "selection_policy": "stratified bucket frontier: primary {2/5,3/5} weight 1.0 + secondary {1/5,4/5} weight 0.5 (secondary requires leakage-clean train candidate); 0/5 -> future_hard_set, 5/5 -> clean_replay; balanced by question type and attack skill"
+}

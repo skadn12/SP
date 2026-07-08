@@ -1,0 +1,100 @@
+{
+  "experiment": "base_restart_current_method_validation",
+  "created_by": "stage2_smoke50_with_stage1_solver_manual_curriculum",
+  "solver_name": "solver_base_restart_stage1_merged",
+  "stage1_solver_path": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/accepted_models/solver_base_restart_stage1_merged",
+  "seed_parent_path": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/seed_parents/seed_parents.jsonl",
+  "difficulty_plan": {
+    "question_type_shares": {
+      "single_choice": 0.65,
+      "multi_select": 0.25,
+      "ordering": 0.1
+    },
+    "allowed_question_types": [
+      "single_choice",
+      "multi_select",
+      "ordering"
+    ],
+    "single_choice_subtype_shares": {
+      "ordinary_single_choice": 0.076923,
+      "hard_single_choice": 0.923077
+    },
+    "single_choice_subtype_hardness_mix": {
+      "ordinary_single_choice": {
+        "h0": 0.85,
+        "h1": 0.15,
+        "h2": 0.0
+      },
+      "hard_single_choice": {
+        "h0": 0.45,
+        "h1": 0.4,
+        "h2": 0.15
+      }
+    },
+    "hard_single_choice_template_shares": {
+      "minimal_difference": 0.24,
+      "latest_valid_state": 0.24,
+      "sequence_as_single_choice": 0.24,
+      "guaranteed_vs_possible": 0.14,
+      "override_sensitive": 0.14
+    },
+    "cell_weights": {
+      "single_choice|conditional_plan": 0.4,
+      "single_choice|delayed_activation": 0.6,
+      "multi_select|conditional_plan": 0.85,
+      "multi_select|permission_visibility_scope": 0.15,
+      "ordering|timeline_fork_merge": 0.85,
+      "ordering|conditional_plan": 0.15
+    },
+    "cell_hardness_mix": {
+      "single_choice|conditional_plan": {
+        "h0": 0.5,
+        "h1": 0.35,
+        "h2": 0.15
+      },
+      "single_choice|delayed_activation": {
+        "h0": 0.45,
+        "h1": 0.4,
+        "h2": 0.15
+      },
+      "multi_select|conditional_plan": {
+        "h0": 0.65,
+        "h1": 0.3,
+        "h2": 0.05
+      },
+      "multi_select|permission_visibility_scope": {
+        "h0": 0.85,
+        "h1": 0.15,
+        "h2": 0.0
+      },
+      "ordering|timeline_fork_merge": {
+        "h0": 0.8,
+        "h1": 0.2,
+        "h2": 0.0
+      },
+      "ordering|conditional_plan": {
+        "h0": 0.85,
+        "h1": 0.15,
+        "h2": 0.0
+      }
+    },
+    "qtype_curriculum": {
+      "stage": "stage2_smoke50_with_stage1_solver",
+      "mode": "from_base_stage2_smoke_only",
+      "ordinary_single_choice": 0.05,
+      "hard_single_choice": 0.6,
+      "multi_select": 0.25,
+      "ordering": 0.1,
+      "single_choice": 0.65
+    }
+  },
+  "constraints": {
+    "smoke_only": true,
+    "no_mining": true,
+    "no_training": true,
+    "evidence_window_used_as_prompt": false,
+    "r4_r5_r1_data_or_model_used": false,
+    "max_model_len": 16384,
+    "tokenizer": "/root/autodl-tmp/Qwen3-4B"
+  }
+}

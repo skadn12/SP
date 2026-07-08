@@ -1,0 +1,26 @@
+{
+  "bucket_distribution": {
+    "0/5": 195,
+    "1/5": 30,
+    "2/5": 28,
+    "3/5": 29,
+    "4/5": 21,
+    "5/5": 196
+  },
+  "combined_candidate_count": 499,
+  "created_at": "2026-07-03 20:26:13",
+  "duplicate_sample_id_count": 0,
+  "evidence_window_used_as_prompt": false,
+  "input_paths": [
+    "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/03_stage2_guarded_mining300/candidate_pool.jsonl",
+    "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/05_stage2_repair_topup_from_stage1/repair_mining/candidate_pool_repair_combined_with_boundary.jsonl"
+  ],
+  "output_path": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/05_stage2_repair_topup_from_stage1/repair_mining/candidate_pool_stage2_original_plus_repair_combined.jsonl",
+  "qtype_distribution": {
+    "multi_select": 149,
+    "ordering": 12,
+    "single_choice": 338
+  },
+  "r4_r5_r1_data_or_model_used": false,
+  "status": "success"
+}

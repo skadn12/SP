@@ -1,0 +1,504 @@
+{
+  "artifact_paths": {
+    "clean_replay": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/01_mining500_train/train_mix/clean_replay.jsonl",
+    "frontier_heldout": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/01_mining500_train/train_mix/frontier_heldout.jsonl",
+    "frontier_train": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/01_mining500_train/train_mix/frontier_train.jsonl",
+    "sft_train": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/01_mining500_train/train_mix/sft_train.jsonl",
+    "train_mix": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/01_mining500_train/train_mix/train_mix.jsonl",
+    "train_mix_report": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/01_mining500_train/train_mix/reports/train_mix_report.md",
+    "train_mix_summary": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/01_mining500_train/train_mix/train_mix_summary.json"
+  },
+  "clean_replay": {
+    "bucket_distribution": {
+      "5/5": 30
+    },
+    "count": 30,
+    "difficulty_subtype_distribution": {
+      "hard_single_choice": 21,
+      "ordinary": 7,
+      "ordinary_single_choice": 2
+    },
+    "frontier_type_distribution": {
+      "exact": 30
+    },
+    "hard_single_choice_template_distribution": {
+      "guaranteed_vs_possible": 3,
+      "latest_valid_state": 6,
+      "minimal_difference": 4,
+      "none": 2,
+      "override_sensitive": 2,
+      "sequence_as_single_choice": 6
+    },
+    "qtype_distribution": {
+      "multi_select": 5,
+      "ordering": 2,
+      "single_choice": 23
+    },
+    "source_distribution": {
+      "original_mining500": 19,
+      "topup": 11
+    }
+  },
+  "clean_replay_count": 30,
+  "clean_replay_selection": {
+    "eligible_5of5_clean_nonfrontier": 375,
+    "eligible_by_qtype": {
+      "multi_select": 5,
+      "ordering": 2,
+      "single_choice": 368
+    },
+    "eligible_by_source": {
+      "original_mining500": 203,
+      "topup": 172
+    },
+    "eligible_by_source_qtype": {
+      "original_mining500|multi_select": 5,
+      "original_mining500|ordering": 2,
+      "original_mining500|single_choice": 196,
+      "topup|single_choice": 172
+    },
+    "notes": [
+      "ordering 5/5 clean candidates are scarce: available=2; selected=2"
+    ],
+    "selected": 30,
+    "selected_by_cell": {
+      "original_mining500|multi_select|conditional_plan|ordinary|none": 5,
+      "original_mining500|ordering|timeline_fork_merge|ordinary|none": 2,
+      "original_mining500|single_choice|conditional_plan|hard_single_choice|guaranteed_vs_possible": 1,
+      "original_mining500|single_choice|conditional_plan|hard_single_choice|latest_valid_state": 1,
+      "original_mining500|single_choice|conditional_plan|hard_single_choice|override_sensitive": 1,
+      "original_mining500|single_choice|conditional_plan|hard_single_choice|sequence_as_single_choice": 1,
+      "original_mining500|single_choice|conditional_plan|ordinary_single_choice|none": 2,
+      "original_mining500|single_choice|delayed_activation|hard_single_choice|guaranteed_vs_possible": 2,
+      "original_mining500|single_choice|delayed_activation|hard_single_choice|latest_valid_state": 1,
+      "original_mining500|single_choice|delayed_activation|hard_single_choice|minimal_difference": 1,
+      "original_mining500|single_choice|delayed_activation|hard_single_choice|override_sensitive": 1,
+      "original_mining500|single_choice|delayed_activation|hard_single_choice|sequence_as_single_choice": 1,
+      "topup|single_choice|conditional_plan|hard_single_choice|latest_valid_state": 2,
+      "topup|single_choice|conditional_plan|hard_single_choice|minimal_difference": 2,
+      "topup|single_choice|conditional_plan|hard_single_choice|sequence_as_single_choice": 2,
+      "topup|single_choice|delayed_activation|hard_single_choice|latest_valid_state": 2,
+      "topup|single_choice|delayed_activation|hard_single_choice|minimal_difference": 1,
+      "topup|single_choice|delayed_activation|hard_single_choice|sequence_as_single_choice": 2
+    },
+    "selected_by_qtype": {
+      "multi_select": 5,
+      "ordering": 2,
+      "single_choice": 23
+    },
+    "selected_by_source": {
+      "original_mining500": 19,
+      "topup": 11
+    },
+    "selected_by_source_qtype": {
+      "original_mining500|multi_select": 5,
+      "original_mining500|ordering": 2,
+      "original_mining500|single_choice": 12,
+      "topup|single_choice": 11
+    },
+    "target": 30
+  },
+  "clean_replay_share": 0.263158,
+  "combined_candidate_count": 900,
+  "combined_candidate_path": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/01_mining500_train/mining/topup_combined_candidate_pool.jsonl",
+  "combined_frontier_path": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/01_mining500_train/mining/topup_combined_frontier_pool.jsonl",
+  "combined_frontier_pool_count": 106,
+  "count": 114,
+  "evidence_window_used_as_prompt": false,
+  "frontier_heldout": {
+    "bucket_distribution": {
+      "0/5": 5,
+      "1/5": 5,
+      "2/5": 3,
+      "3/5": 2,
+      "4/5": 7
+    },
+    "count": 22,
+    "difficulty_subtype_distribution": {
+      "hard_single_choice": 14,
+      "ordinary": 7,
+      "ordinary_single_choice": 1
+    },
+    "frontier_type_distribution": {
+      "boundary": 17,
+      "near_miss": 5
+    },
+    "hard_single_choice_template_distribution": {
+      "guaranteed_vs_possible": 1,
+      "latest_valid_state": 3,
+      "minimal_difference": 5,
+      "none": 1,
+      "override_sensitive": 1,
+      "sequence_as_single_choice": 4
+    },
+    "qtype_distribution": {
+      "multi_select": 5,
+      "ordering": 2,
+      "single_choice": 15
+    },
+    "source_distribution": {
+      "original_mining500": 14,
+      "topup": 8
+    }
+  },
+  "frontier_heldout_count": 22,
+  "frontier_train": {
+    "bucket_distribution": {
+      "0/5": 18,
+      "1/5": 14,
+      "2/5": 17,
+      "3/5": 18,
+      "4/5": 17
+    },
+    "count": 84,
+    "difficulty_subtype_distribution": {
+      "hard_single_choice": 57,
+      "ordinary": 24,
+      "ordinary_single_choice": 3
+    },
+    "frontier_type_distribution": {
+      "boundary": 66,
+      "near_miss": 18
+    },
+    "hard_single_choice_template_distribution": {
+      "guaranteed_vs_possible": 3,
+      "latest_valid_state": 15,
+      "minimal_difference": 21,
+      "none": 3,
+      "override_sensitive": 3,
+      "sequence_as_single_choice": 15
+    },
+    "qtype_distribution": {
+      "multi_select": 18,
+      "ordering": 6,
+      "single_choice": 60
+    },
+    "source_distribution": {
+      "original_mining500": 52,
+      "topup": 32
+    }
+  },
+  "frontier_train_count": 84,
+  "frontier_type_distribution": {
+    "frontier_heldout": {
+      "boundary": 17,
+      "near_miss": 5
+    },
+    "frontier_train": {
+      "boundary": 66,
+      "near_miss": 18
+    },
+    "train_mix": {
+      "boundary": 66,
+      "exact": 30,
+      "near_miss": 18
+    }
+  },
+  "hard_single_choice_template_distribution": {
+    "clean_replay": {
+      "guaranteed_vs_possible": 3,
+      "latest_valid_state": 6,
+      "minimal_difference": 4,
+      "none": 2,
+      "override_sensitive": 2,
+      "sequence_as_single_choice": 6
+    },
+    "frontier_heldout": {
+      "guaranteed_vs_possible": 1,
+      "latest_valid_state": 3,
+      "minimal_difference": 5,
+      "none": 1,
+      "override_sensitive": 1,
+      "sequence_as_single_choice": 4
+    },
+    "frontier_train": {
+      "guaranteed_vs_possible": 3,
+      "latest_valid_state": 15,
+      "minimal_difference": 21,
+      "none": 3,
+      "override_sensitive": 3,
+      "sequence_as_single_choice": 15
+    },
+    "train_mix": {
+      "guaranteed_vs_possible": 6,
+      "latest_valid_state": 21,
+      "minimal_difference": 25,
+      "none": 5,
+      "override_sensitive": 5,
+      "sequence_as_single_choice": 21
+    }
+  },
+  "heldout_overlap_check": {
+    "dialogue_hash_overlap": 0,
+    "question_id_overlap": 0,
+    "sample_id_overlap": 0,
+    "total_overlap": 0
+  },
+  "max_length": 16384,
+  "max_sft_token_length": 12873,
+  "mean_sft_token_length": 12411.035,
+  "min_sft_token_length": 12250,
+  "output_dir": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/01_mining500_train/train_mix",
+  "over_max_length_count": 0,
+  "over_max_length_preview": [],
+  "pass_criteria": {
+    "clean_replay_count_25_to_35": true,
+    "combined_frontier_pool_count_eq_106": true,
+    "evidence_window_prompt_false": true,
+    "frontier_heldout_count_gte_20": true,
+    "frontier_train_count_gte_80": true,
+    "heldout_overlap_zero": true,
+    "max_sft_token_length_lte_16384": true,
+    "over_max_length_zero": true
+  },
+  "qtype_distribution": {
+    "clean_replay": {
+      "multi_select": 5,
+      "ordering": 2,
+      "single_choice": 23
+    },
+    "frontier_heldout": {
+      "multi_select": 5,
+      "ordering": 2,
+      "single_choice": 15
+    },
+    "frontier_train": {
+      "multi_select": 18,
+      "ordering": 6,
+      "single_choice": 60
+    },
+    "train_mix": {
+      "multi_select": 23,
+      "ordering": 8,
+      "single_choice": 83
+    }
+  },
+  "run_id": "base_restart_current_method_validation_stage1_train_mix",
+  "sft_train_count": 114,
+  "source_distribution": {
+    "clean_replay": {
+      "original_mining500": 19,
+      "topup": 11
+    },
+    "frontier_heldout": {
+      "original_mining500": 14,
+      "topup": 8
+    },
+    "frontier_train": {
+      "original_mining500": 52,
+      "topup": 32
+    },
+    "train_mix": {
+      "original_mining500": 71,
+      "topup": 43
+    }
+  },
+  "split_stats": {
+    "heldout_qtype_targets": {
+      "multi_select": 5,
+      "ordering": 2,
+      "single_choice": 15
+    },
+    "heldout_target": 22,
+    "per_stratum": [
+      {
+        "heldout": 1,
+        "stratum": {
+          "difficulty_subtype": "ordinary",
+          "frontier_type": "boundary",
+          "hard_single_choice_template": "none",
+          "question_type": "multi_select",
+          "source": "original_mining500"
+        },
+        "total": 4,
+        "train": 3
+      },
+      {
+        "heldout": 4,
+        "stratum": {
+          "difficulty_subtype": "ordinary",
+          "frontier_type": "near_miss",
+          "hard_single_choice_template": "none",
+          "question_type": "multi_select",
+          "source": "original_mining500"
+        },
+        "total": 19,
+        "train": 15
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "difficulty_subtype": "ordinary",
+          "frontier_type": "boundary",
+          "hard_single_choice_template": "none",
+          "question_type": "ordering",
+          "source": "original_mining500"
+        },
+        "total": 4,
+        "train": 3
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "difficulty_subtype": "ordinary",
+          "frontier_type": "near_miss",
+          "hard_single_choice_template": "none",
+          "question_type": "ordering",
+          "source": "original_mining500"
+        },
+        "total": 4,
+        "train": 3
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "difficulty_subtype": "hard_single_choice",
+          "frontier_type": "boundary",
+          "hard_single_choice_template": "guaranteed_vs_possible",
+          "question_type": "single_choice",
+          "source": "original_mining500"
+        },
+        "total": 4,
+        "train": 3
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "difficulty_subtype": "hard_single_choice",
+          "frontier_type": "boundary",
+          "hard_single_choice_template": "latest_valid_state",
+          "question_type": "single_choice",
+          "source": "original_mining500"
+        },
+        "total": 7,
+        "train": 6
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "difficulty_subtype": "hard_single_choice",
+          "frontier_type": "boundary",
+          "hard_single_choice_template": "minimal_difference",
+          "question_type": "single_choice",
+          "source": "original_mining500"
+        },
+        "total": 7,
+        "train": 6
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "difficulty_subtype": "hard_single_choice",
+          "frontier_type": "boundary",
+          "hard_single_choice_template": "override_sensitive",
+          "question_type": "single_choice",
+          "source": "original_mining500"
+        },
+        "total": 4,
+        "train": 3
+      },
+      {
+        "heldout": 2,
+        "stratum": {
+          "difficulty_subtype": "hard_single_choice",
+          "frontier_type": "boundary",
+          "hard_single_choice_template": "sequence_as_single_choice",
+          "question_type": "single_choice",
+          "source": "original_mining500"
+        },
+        "total": 9,
+        "train": 7
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "difficulty_subtype": "ordinary_single_choice",
+          "frontier_type": "boundary",
+          "hard_single_choice_template": "none",
+          "question_type": "single_choice",
+          "source": "original_mining500"
+        },
+        "total": 4,
+        "train": 3
+      },
+      {
+        "heldout": 2,
+        "stratum": {
+          "difficulty_subtype": "hard_single_choice",
+          "frontier_type": "boundary",
+          "hard_single_choice_template": "latest_valid_state",
+          "question_type": "single_choice",
+          "source": "topup"
+        },
+        "total": 11,
+        "train": 9
+      },
+      {
+        "heldout": 4,
+        "stratum": {
+          "difficulty_subtype": "hard_single_choice",
+          "frontier_type": "boundary",
+          "hard_single_choice_template": "minimal_difference",
+          "question_type": "single_choice",
+          "source": "topup"
+        },
+        "total": 19,
+        "train": 15
+      },
+      {
+        "heldout": 2,
+        "stratum": {
+          "difficulty_subtype": "hard_single_choice",
+          "frontier_type": "boundary",
+          "hard_single_choice_template": "sequence_as_single_choice",
+          "question_type": "single_choice",
+          "source": "topup"
+        },
+        "total": 10,
+        "train": 8
+      }
+    ]
+  },
+  "status": "audit_passed",
+  "tokenizer_path": "/root/autodl-tmp/Qwen3-4B",
+  "train_mix": {
+    "bucket_distribution": {
+      "0/5": 18,
+      "1/5": 14,
+      "2/5": 17,
+      "3/5": 18,
+      "4/5": 17,
+      "5/5": 30
+    },
+    "count": 114,
+    "difficulty_subtype_distribution": {
+      "hard_single_choice": 78,
+      "ordinary": 31,
+      "ordinary_single_choice": 5
+    },
+    "frontier_type_distribution": {
+      "boundary": 66,
+      "exact": 30,
+      "near_miss": 18
+    },
+    "hard_single_choice_template_distribution": {
+      "guaranteed_vs_possible": 6,
+      "latest_valid_state": 21,
+      "minimal_difference": 25,
+      "none": 5,
+      "override_sensitive": 5,
+      "sequence_as_single_choice": 21
+    },
+    "qtype_distribution": {
+      "multi_select": 23,
+      "ordering": 8,
+      "single_choice": 83
+    },
+    "source_distribution": {
+      "original_mining500": 71,
+      "topup": 43
+    }
+  },
+  "train_mix_count": 114,
+  "train_mix_pass": true
+}

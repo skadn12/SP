@@ -1,0 +1,81 @@
+{
+  "total": 120,
+  "by_frontier_category": {
+    "bad_question": 120
+  },
+  "by_question_type": {
+    "single_choice": 120
+  },
+  "by_attack_skill": {
+    "delayed_activation": 61,
+    "conditional_plan": 59
+  },
+  "validation_failures": {},
+  "shortcut_failures": {},
+  "soft_buckets_by_question_type": {
+    "single_choice": {
+      "0/5": 120
+    }
+  },
+  "soft_buckets_by_attack_skill": {
+    "conditional_plan": {
+      "0/5": 59
+    },
+    "delayed_activation": {
+      "0/5": 61
+    }
+  },
+  "method": "current_method",
+  "labels": [
+    "clean_near_miss",
+    "hard_correct",
+    "true_too_hard",
+    "bad_question",
+    "shortcut_issue",
+    "easy"
+  ],
+  "by_seed_split": {
+    "train": 120
+  },
+  "by_seed_sample_name": {
+    "sample2": 33,
+    "sample4": 21,
+    "sample3": 19,
+    "sample1": 17,
+    "sample5": 16,
+    "sample0": 14
+  },
+  "frontier_by_seed_sample_name": {},
+  "bad_question_reasons": {
+    "0/5 with insufficient partial credit": 120
+  },
+  "shortcut_warnings": {},
+  "by_difficulty_cell": {
+    "single_choice|conditional_plan": {
+      "n": 59,
+      "mean_soft_accuracy": 0.0,
+      "soft_buckets": {
+        "0/5": 59
+      },
+      "by_frontier_category": {
+        "bad_question": 59
+      },
+      "frontier_count": 0
+    },
+    "single_choice|delayed_activation": {
+      "n": 61,
+      "mean_soft_accuracy": 0.0,
+      "soft_buckets": {
+        "0/5": 61
+      },
+      "by_frontier_category": {
+        "bad_question": 61
+      },
+      "frontier_count": 0
+    }
+  },
+  "difficulty_cell_counts": {
+    "single_choice|conditional_plan": 59,
+    "single_choice|delayed_activation": 61
+  }
+}

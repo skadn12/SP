@@ -1,0 +1,85 @@
+{
+  "created_at": "2026-07-03 21:03:21",
+  "file_count": 14,
+  "files": [
+    {
+      "mtime": 1783081475.081203,
+      "name": "added_tokens.json",
+      "size": 707
+    },
+    {
+      "mtime": 1783081475.081203,
+      "name": "chat_template.jinja",
+      "size": 4168
+    },
+    {
+      "mtime": 1783081471.4851341,
+      "name": "config.json",
+      "size": 1536
+    },
+    {
+      "mtime": 1783081471.4851341,
+      "name": "generation_config.json",
+      "size": 214
+    },
+    {
+      "mtime": 1783081475.2212057,
+      "name": "merged_adapter_info.json",
+      "size": 1138
+    },
+    {
+      "mtime": 1783081475.145204,
+      "name": "merges.txt",
+      "size": 1671853
+    },
+    {
+      "mtime": 1783081473.0971649,
+      "name": "model-00001-of-00003.safetensors",
+      "size": 3957900840
+    },
+    {
+      "mtime": 1783081475.0372021,
+      "name": "model-00002-of-00003.safetensors",
+      "size": 3987450520
+    },
+    {
+      "mtime": 1783081475.081203,
+      "name": "model-00003-of-00003.safetensors",
+      "size": 99630640
+    },
+    {
+      "mtime": 1783081475.081203,
+      "name": "model.safetensors.index.json",
+      "size": 32855
+    },
+    {
+      "mtime": 1783081475.081203,
+      "name": "special_tokens_map.json",
+      "size": 613
+    },
+    {
+      "mtime": 1783081475.2132056,
+      "name": "tokenizer.json",
+      "size": 11422654
+    },
+    {
+      "mtime": 1783081475.081203,
+      "name": "tokenizer_config.json",
+      "size": 5404
+    },
+    {
+      "mtime": 1783081475.1052034,
+      "name": "vocab.json",
+      "size": 2776833
+    }
+  ],
+  "max_model_len": 16384,
+  "meaning": "Do not modify the stage2 accepted solver target after this record; future work should read/evaluate only unless user explicitly approves a new accepted solver.",
+  "solver_name": "solver_base_restart_stage2_merged",
+  "stage3_started": false,
+  "status": "frozen",
+  "symlink_path": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/accepted_models/solver_base_restart_stage2_merged",
+  "target_exists": true,
+  "target_path": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/05_stage2_repair_topup_from_stage1/training/models/merged",
+  "tokenizer_path": "/root/autodl-tmp/Qwen3-4B"
+}

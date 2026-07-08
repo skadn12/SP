@@ -1,0 +1,1231 @@
+{
+  "artifact_paths": {
+    "clean_replay": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/04_stage2_train_from_stage1/train_mix/clean_replay.jsonl",
+    "frontier_heldout": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/04_stage2_train_from_stage1/train_mix/frontier_heldout.jsonl",
+    "frontier_train": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/04_stage2_train_from_stage1/train_mix/frontier_train.jsonl",
+    "near_miss_aux_pool": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/04_stage2_train_from_stage1/train_mix/near_miss_aux_pool.jsonl",
+    "sft_train": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/04_stage2_train_from_stage1/train_mix/sft_train.jsonl",
+    "train_mix": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/04_stage2_train_from_stage1/train_mix/train_mix.jsonl",
+    "train_mix_report": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/04_stage2_train_from_stage1/train_mix/reports/train_mix_report.md",
+    "train_mix_summary": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/04_stage2_train_from_stage1/train_mix/train_mix_summary.json"
+  },
+  "candidate_qtype_zero_share": {
+    "multi_select": 0.441441,
+    "ordering": 0.833333,
+    "single_choice": 0.282486
+  },
+  "clean_replay": {
+    "attack_skill_distribution": {
+      "conditional_plan": 11,
+      "delayed_activation": 10,
+      "timeline_fork_merge": 2
+    },
+    "bucket_distribution": {
+      "5/5": 23
+    },
+    "count": 23,
+    "difficulty_subtype_distribution": {
+      "hard_single_choice": 15,
+      "ordinary": 8
+    },
+    "frontier_type_distribution": {
+      "exact": 23
+    },
+    "hard_single_choice_template_distribution": {
+      "guaranteed_vs_possible": 3,
+      "latest_valid_state": 2,
+      "minimal_difference": 4,
+      "override_sensitive": 3,
+      "sequence_as_single_choice": 3
+    },
+    "qtype_distribution": {
+      "multi_select": 6,
+      "ordering": 2,
+      "single_choice": 15
+    },
+    "source_phase_distribution": {
+      "base": 12,
+      "base_fill_after_recharge": 6,
+      "bonus_after_recharge_ordering_frozen": 5
+    },
+    "source_subrun_distribution": {
+      "base240": 12,
+      "base240_fill85_after_recharge": 6,
+      "bonus60_after_recharge": 5
+    }
+  },
+  "clean_replay_count": 23,
+  "clean_replay_selection": {
+    "eligible_5of5_clean_nonfrontier": 118,
+    "eligible_by_qtype": {
+      "multi_select": 43,
+      "ordering": 2,
+      "single_choice": 73
+    },
+    "eligible_by_source_subrun": {
+      "base240": 57,
+      "base240_fill5_after_recharge": 3,
+      "base240_fill85_after_recharge": 34,
+      "bonus60_after_recharge": 24
+    },
+    "notes": [
+      "ordering 5/5 clean candidates are scarce: available=2; selected=2"
+    ],
+    "ordering_5of5_clean_available": 2,
+    "selected": 23,
+    "selected_by_cell": {
+      "multi_select|conditional_plan|ordinary|none|base240": 3,
+      "multi_select|conditional_plan|ordinary|none|base240_fill85_after_recharge": 1,
+      "multi_select|conditional_plan|ordinary|none|bonus60_after_recharge": 2,
+      "ordering|timeline_fork_merge|ordinary|none|base240": 1,
+      "ordering|timeline_fork_merge|ordinary|none|base240_fill85_after_recharge": 1,
+      "single_choice|conditional_plan|hard_single_choice|guaranteed_vs_possible|base240": 1,
+      "single_choice|conditional_plan|hard_single_choice|latest_valid_state|bonus60_after_recharge": 1,
+      "single_choice|conditional_plan|hard_single_choice|minimal_difference|base240": 1,
+      "single_choice|conditional_plan|hard_single_choice|minimal_difference|bonus60_after_recharge": 1,
+      "single_choice|conditional_plan|hard_single_choice|sequence_as_single_choice|base240": 1,
+      "single_choice|delayed_activation|hard_single_choice|guaranteed_vs_possible|base240": 1,
+      "single_choice|delayed_activation|hard_single_choice|guaranteed_vs_possible|base240_fill85_after_recharge": 1,
+      "single_choice|delayed_activation|hard_single_choice|latest_valid_state|base240": 1,
+      "single_choice|delayed_activation|hard_single_choice|minimal_difference|base240": 1,
+      "single_choice|delayed_activation|hard_single_choice|minimal_difference|base240_fill85_after_recharge": 1,
+      "single_choice|delayed_activation|hard_single_choice|override_sensitive|base240": 1,
+      "single_choice|delayed_activation|hard_single_choice|override_sensitive|base240_fill85_after_recharge": 1,
+      "single_choice|delayed_activation|hard_single_choice|override_sensitive|bonus60_after_recharge": 1,
+      "single_choice|delayed_activation|hard_single_choice|sequence_as_single_choice|base240": 1,
+      "single_choice|delayed_activation|hard_single_choice|sequence_as_single_choice|base240_fill85_after_recharge": 1
+    },
+    "selected_by_qtype": {
+      "multi_select": 6,
+      "ordering": 2,
+      "single_choice": 15
+    },
+    "selected_by_source_subrun": {
+      "base240": 12,
+      "base240_fill85_after_recharge": 6,
+      "bonus60_after_recharge": 5
+    },
+    "target": 23
+  },
+  "clean_replay_share": 0.283951,
+  "count": 81,
+  "evidence_window_used_as_prompt": false,
+  "frontier_heldout": {
+    "attack_skill_distribution": {
+      "conditional_plan": 7,
+      "delayed_activation": 8
+    },
+    "bucket_distribution": {
+      "1/5": 3,
+      "2/5": 4,
+      "3/5": 6,
+      "4/5": 2
+    },
+    "count": 15,
+    "difficulty_subtype_distribution": {
+      "hard_single_choice": 11,
+      "ordinary": 4
+    },
+    "frontier_type_distribution": {
+      "boundary": 15
+    },
+    "hard_single_choice_template_distribution": {
+      "guaranteed_vs_possible": 1,
+      "latest_valid_state": 1,
+      "minimal_difference": 3,
+      "sequence_as_single_choice": 6
+    },
+    "qtype_distribution": {
+      "multi_select": 4,
+      "single_choice": 11
+    },
+    "source_phase_distribution": {
+      "base": 8,
+      "base_fill_after_recharge": 4,
+      "bonus_after_recharge_ordering_frozen": 3
+    },
+    "source_subrun_distribution": {
+      "base240": 8,
+      "base240_fill85_after_recharge": 4,
+      "bonus60_after_recharge": 3
+    }
+  },
+  "frontier_heldout_count": 15,
+  "frontier_pool_count": 73,
+  "frontier_train": {
+    "attack_skill_distribution": {
+      "conditional_plan": 34,
+      "delayed_activation": 23,
+      "permission_visibility_scope": 1
+    },
+    "bucket_distribution": {
+      "1/5": 15,
+      "2/5": 11,
+      "3/5": 19,
+      "4/5": 13
+    },
+    "count": 58,
+    "difficulty_subtype_distribution": {
+      "hard_single_choice": 39,
+      "ordinary": 15,
+      "ordinary_single_choice": 4
+    },
+    "frontier_type_distribution": {
+      "boundary": 58
+    },
+    "hard_single_choice_template_distribution": {
+      "guaranteed_vs_possible": 6,
+      "latest_valid_state": 8,
+      "minimal_difference": 15,
+      "none": 4,
+      "override_sensitive": 4,
+      "sequence_as_single_choice": 6
+    },
+    "qtype_distribution": {
+      "multi_select": 15,
+      "single_choice": 43
+    },
+    "source_phase_distribution": {
+      "base": 29,
+      "base_fill_after_recharge": 19,
+      "bonus_after_recharge_ordering_frozen": 10
+    },
+    "source_subrun_distribution": {
+      "base240": 29,
+      "base240_fill5_after_recharge": 2,
+      "base240_fill85_after_recharge": 17,
+      "bonus60_after_recharge": 10
+    }
+  },
+  "frontier_train_count": 58,
+  "frontier_type_distribution": {
+    "frontier_heldout": {
+      "boundary": 15
+    },
+    "frontier_train": {
+      "boundary": 58
+    },
+    "near_miss_aux_pool": {
+      "boundary": 47,
+      "near_miss": 6,
+      "too_hard": 48
+    },
+    "train_mix": {
+      "boundary": 58,
+      "exact": 23
+    }
+  },
+  "hard_single_choice_template_distribution": {
+    "clean_replay": {
+      "guaranteed_vs_possible": 3,
+      "latest_valid_state": 2,
+      "minimal_difference": 4,
+      "override_sensitive": 3,
+      "sequence_as_single_choice": 3
+    },
+    "frontier_heldout": {
+      "guaranteed_vs_possible": 1,
+      "latest_valid_state": 1,
+      "minimal_difference": 3,
+      "sequence_as_single_choice": 6
+    },
+    "frontier_train": {
+      "guaranteed_vs_possible": 6,
+      "latest_valid_state": 8,
+      "minimal_difference": 15,
+      "none": 4,
+      "override_sensitive": 4,
+      "sequence_as_single_choice": 6
+    },
+    "train_mix": {
+      "guaranteed_vs_possible": 9,
+      "latest_valid_state": 10,
+      "minimal_difference": 19,
+      "none": 4,
+      "override_sensitive": 7,
+      "sequence_as_single_choice": 9
+    }
+  },
+  "heldout_overlap_check": {
+    "dialogue_hash_overlap": 0,
+    "question_id_overlap": 0,
+    "sample_id_overlap": 0,
+    "total_overlap": 0
+  },
+  "max_length": 16384,
+  "max_sft_token_length": 12882,
+  "mean_sft_token_length": 12389.457,
+  "min_sft_token_length": 12243,
+  "near_miss_aux_note": "Diagnostic-only pool using current_method frontier_label.category=clean_near_miss. It intentionally preserves the reported near_miss_count=101 and may overlap strict frontier rows; near_miss_aux_pool is not included in train_mix.",
+  "near_miss_aux_pool": {
+    "attack_skill_distribution": {
+      "conditional_plan": 66,
+      "delayed_activation": 19,
+      "permission_visibility_scope": 9,
+      "timeline_fork_merge": 7
+    },
+    "bucket_distribution": {
+      "0/5": 54,
+      "1/5": 7,
+      "2/5": 15,
+      "3/5": 25
+    },
+    "count": 101,
+    "difficulty_subtype_distribution": {
+      "hard_single_choice": 28,
+      "ordinary": 71,
+      "ordinary_single_choice": 2
+    },
+    "frontier_type_distribution": {
+      "boundary": 47,
+      "near_miss": 6,
+      "too_hard": 48
+    },
+    "hard_single_choice_template_distribution": {
+      "guaranteed_vs_possible": 3,
+      "latest_valid_state": 5,
+      "minimal_difference": 11,
+      "none": 2,
+      "override_sensitive": 2,
+      "sequence_as_single_choice": 7
+    },
+    "qtype_distribution": {
+      "multi_select": 63,
+      "ordering": 8,
+      "single_choice": 30
+    },
+    "source_phase_distribution": {
+      "base": 54,
+      "base_fill_after_recharge": 31,
+      "bonus_after_recharge_ordering_frozen": 16
+    },
+    "source_subrun_distribution": {
+      "base240": 54,
+      "base240_fill85_after_recharge": 31,
+      "bonus60_after_recharge": 16
+    }
+  },
+  "near_miss_aux_pool_count": 101,
+  "near_miss_aux_strict_frontier_overlap_count": 47,
+  "ordering_count": 12,
+  "ordering_zero_share": 0.833333,
+  "ordering_zero_share_note": "ordering_zero_share=0.833333; ordering is too hard, not oversampled; ordering kept at natural strict-frontier proportion and only 5/5 clean replay if available",
+  "output_dir": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/04_stage2_train_from_stage1/train_mix",
+  "over_max_length_count": 0,
+  "over_max_length_preview": [],
+  "pass_criteria": {
+    "clean_replay_count_20_to_25": true,
+    "evidence_window_prompt_false": true,
+    "frontier_heldout_count_gte_14": true,
+    "frontier_pool_count_eq_73": true,
+    "frontier_train_count_gte_55": true,
+    "heldout_overlap_zero": true,
+    "max_sft_token_length_lte_16384": true,
+    "near_miss_aux_pool_count_eq_101": true,
+    "over_max_length_zero": true
+  },
+  "qtype_distribution": {
+    "clean_replay": {
+      "multi_select": 6,
+      "ordering": 2,
+      "single_choice": 15
+    },
+    "frontier_heldout": {
+      "multi_select": 4,
+      "single_choice": 11
+    },
+    "frontier_train": {
+      "multi_select": 15,
+      "single_choice": 43
+    },
+    "near_miss_aux_pool": {
+      "multi_select": 63,
+      "ordering": 8,
+      "single_choice": 30
+    },
+    "train_mix": {
+      "multi_select": 21,
+      "ordering": 2,
+      "single_choice": 58
+    }
+  },
+  "run_id": "base_restart_current_method_validation_stage2_train_mix",
+  "sft_train_count": 81,
+  "source_phase_distribution": {
+    "clean_replay": {
+      "base": 12,
+      "base_fill_after_recharge": 6,
+      "bonus_after_recharge_ordering_frozen": 5
+    },
+    "frontier_heldout": {
+      "base": 8,
+      "base_fill_after_recharge": 4,
+      "bonus_after_recharge_ordering_frozen": 3
+    },
+    "frontier_train": {
+      "base": 29,
+      "base_fill_after_recharge": 19,
+      "bonus_after_recharge_ordering_frozen": 10
+    },
+    "near_miss_aux_pool": {
+      "base": 54,
+      "base_fill_after_recharge": 31,
+      "bonus_after_recharge_ordering_frozen": 16
+    },
+    "train_mix": {
+      "base": 41,
+      "base_fill_after_recharge": 25,
+      "bonus_after_recharge_ordering_frozen": 15
+    }
+  },
+  "source_subrun_distribution": {
+    "clean_replay": {
+      "base240": 12,
+      "base240_fill85_after_recharge": 6,
+      "bonus60_after_recharge": 5
+    },
+    "frontier_heldout": {
+      "base240": 8,
+      "base240_fill85_after_recharge": 4,
+      "bonus60_after_recharge": 3
+    },
+    "frontier_train": {
+      "base240": 29,
+      "base240_fill5_after_recharge": 2,
+      "base240_fill85_after_recharge": 17,
+      "bonus60_after_recharge": 10
+    },
+    "near_miss_aux_pool": {
+      "base240": 54,
+      "base240_fill85_after_recharge": 31,
+      "bonus60_after_recharge": 16
+    },
+    "train_mix": {
+      "base240": 41,
+      "base240_fill5_after_recharge": 2,
+      "base240_fill85_after_recharge": 23,
+      "bonus60_after_recharge": 15
+    }
+  },
+  "split_stats": {
+    "heldout_qtype_targets": {
+      "multi_select": 4,
+      "single_choice": 11
+    },
+    "heldout_target": 15,
+    "per_stratum": [
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "ordinary",
+          "hard_single_choice_template": "none",
+          "question_type": "multi_select",
+          "solver_bucket": "1/5",
+          "source_phase": "base",
+          "source_subrun": "base240"
+        },
+        "total": 2,
+        "train": 2
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "ordinary",
+          "hard_single_choice_template": "none",
+          "question_type": "multi_select",
+          "solver_bucket": "1/5",
+          "source_phase": "base_fill_after_recharge",
+          "source_subrun": "base240_fill85_after_recharge"
+        },
+        "total": 4,
+        "train": 3
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "ordinary",
+          "hard_single_choice_template": "none",
+          "question_type": "multi_select",
+          "solver_bucket": "2/5",
+          "source_phase": "base",
+          "source_subrun": "base240"
+        },
+        "total": 4,
+        "train": 3
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "ordinary",
+          "hard_single_choice_template": "none",
+          "question_type": "multi_select",
+          "solver_bucket": "2/5",
+          "source_phase": "base_fill_after_recharge",
+          "source_subrun": "base240_fill85_after_recharge"
+        },
+        "total": 2,
+        "train": 1
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "ordinary",
+          "hard_single_choice_template": "none",
+          "question_type": "multi_select",
+          "solver_bucket": "3/5",
+          "source_phase": "base",
+          "source_subrun": "base240"
+        },
+        "total": 4,
+        "train": 3
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "ordinary",
+          "hard_single_choice_template": "none",
+          "question_type": "multi_select",
+          "solver_bucket": "4/5",
+          "source_phase": "base",
+          "source_subrun": "base240"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "ordinary",
+          "hard_single_choice_template": "none",
+          "question_type": "multi_select",
+          "solver_bucket": "4/5",
+          "source_phase": "bonus_after_recharge_ordering_frozen",
+          "source_subrun": "bonus60_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "permission_visibility_scope",
+          "difficulty_subtype": "ordinary",
+          "hard_single_choice_template": "none",
+          "question_type": "multi_select",
+          "solver_bucket": "1/5",
+          "source_phase": "base_fill_after_recharge",
+          "source_subrun": "base240_fill85_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "guaranteed_vs_possible",
+          "question_type": "single_choice",
+          "solver_bucket": "1/5",
+          "source_phase": "bonus_after_recharge_ordering_frozen",
+          "source_subrun": "bonus60_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "guaranteed_vs_possible",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "base_fill_after_recharge",
+          "source_subrun": "base240_fill85_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "guaranteed_vs_possible",
+          "question_type": "single_choice",
+          "solver_bucket": "4/5",
+          "source_phase": "bonus_after_recharge_ordering_frozen",
+          "source_subrun": "bonus60_after_recharge"
+        },
+        "total": 2,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "guaranteed_vs_possible",
+          "question_type": "single_choice",
+          "solver_bucket": "2/5",
+          "source_phase": "base",
+          "source_subrun": "base240"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "guaranteed_vs_possible",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "base",
+          "source_subrun": "base240"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "guaranteed_vs_possible",
+          "question_type": "single_choice",
+          "solver_bucket": "4/5",
+          "source_phase": "base",
+          "source_subrun": "base240"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "latest_valid_state",
+          "question_type": "single_choice",
+          "solver_bucket": "1/5",
+          "source_phase": "base",
+          "source_subrun": "base240"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "latest_valid_state",
+          "question_type": "single_choice",
+          "solver_bucket": "1/5",
+          "source_phase": "base_fill_after_recharge",
+          "source_subrun": "base240_fill5_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "latest_valid_state",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "base",
+          "source_subrun": "base240"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "latest_valid_state",
+          "question_type": "single_choice",
+          "solver_bucket": "4/5",
+          "source_phase": "base",
+          "source_subrun": "base240"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "latest_valid_state",
+          "question_type": "single_choice",
+          "solver_bucket": "1/5",
+          "source_phase": "base_fill_after_recharge",
+          "source_subrun": "base240_fill85_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "latest_valid_state",
+          "question_type": "single_choice",
+          "solver_bucket": "2/5",
+          "source_phase": "base_fill_after_recharge",
+          "source_subrun": "base240_fill85_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "latest_valid_state",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "base",
+          "source_subrun": "base240"
+        },
+        "total": 2,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "latest_valid_state",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "base_fill_after_recharge",
+          "source_subrun": "base240_fill85_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "minimal_difference",
+          "question_type": "single_choice",
+          "solver_bucket": "1/5",
+          "source_phase": "base_fill_after_recharge",
+          "source_subrun": "base240_fill5_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "minimal_difference",
+          "question_type": "single_choice",
+          "solver_bucket": "1/5",
+          "source_phase": "bonus_after_recharge_ordering_frozen",
+          "source_subrun": "bonus60_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "minimal_difference",
+          "question_type": "single_choice",
+          "solver_bucket": "2/5",
+          "source_phase": "base",
+          "source_subrun": "base240"
+        },
+        "total": 2,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "minimal_difference",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "base_fill_after_recharge",
+          "source_subrun": "base240_fill85_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "minimal_difference",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "bonus_after_recharge_ordering_frozen",
+          "source_subrun": "bonus60_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "minimal_difference",
+          "question_type": "single_choice",
+          "solver_bucket": "1/5",
+          "source_phase": "base",
+          "source_subrun": "base240"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "minimal_difference",
+          "question_type": "single_choice",
+          "solver_bucket": "2/5",
+          "source_phase": "base_fill_after_recharge",
+          "source_subrun": "base240_fill85_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "minimal_difference",
+          "question_type": "single_choice",
+          "solver_bucket": "2/5",
+          "source_phase": "bonus_after_recharge_ordering_frozen",
+          "source_subrun": "bonus60_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "minimal_difference",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "base",
+          "source_subrun": "base240"
+        },
+        "total": 3,
+        "train": 2
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "minimal_difference",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "base_fill_after_recharge",
+          "source_subrun": "base240_fill85_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "minimal_difference",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "bonus_after_recharge_ordering_frozen",
+          "source_subrun": "bonus60_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "minimal_difference",
+          "question_type": "single_choice",
+          "solver_bucket": "4/5",
+          "source_phase": "base",
+          "source_subrun": "base240"
+        },
+        "total": 3,
+        "train": 2
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "minimal_difference",
+          "question_type": "single_choice",
+          "solver_bucket": "4/5",
+          "source_phase": "bonus_after_recharge_ordering_frozen",
+          "source_subrun": "bonus60_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "ordinary_single_choice",
+          "hard_single_choice_template": "none",
+          "question_type": "single_choice",
+          "solver_bucket": "2/5",
+          "source_phase": "base",
+          "source_subrun": "base240"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "ordinary_single_choice",
+          "hard_single_choice_template": "none",
+          "question_type": "single_choice",
+          "solver_bucket": "1/5",
+          "source_phase": "base",
+          "source_subrun": "base240"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "ordinary_single_choice",
+          "hard_single_choice_template": "none",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "base_fill_after_recharge",
+          "source_subrun": "base240_fill85_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "ordinary_single_choice",
+          "hard_single_choice_template": "none",
+          "question_type": "single_choice",
+          "solver_bucket": "4/5",
+          "source_phase": "base_fill_after_recharge",
+          "source_subrun": "base240_fill85_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "override_sensitive",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "base",
+          "source_subrun": "base240"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "override_sensitive",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "base",
+          "source_subrun": "base240"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "override_sensitive",
+          "question_type": "single_choice",
+          "solver_bucket": "4/5",
+          "source_phase": "base_fill_after_recharge",
+          "source_subrun": "base240_fill85_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "override_sensitive",
+          "question_type": "single_choice",
+          "solver_bucket": "4/5",
+          "source_phase": "bonus_after_recharge_ordering_frozen",
+          "source_subrun": "bonus60_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "sequence_as_single_choice",
+          "question_type": "single_choice",
+          "solver_bucket": "1/5",
+          "source_phase": "bonus_after_recharge_ordering_frozen",
+          "source_subrun": "bonus60_after_recharge"
+        },
+        "total": 2,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "sequence_as_single_choice",
+          "question_type": "single_choice",
+          "solver_bucket": "2/5",
+          "source_phase": "base",
+          "source_subrun": "base240"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "sequence_as_single_choice",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "base",
+          "source_subrun": "base240"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "sequence_as_single_choice",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "base_fill_after_recharge",
+          "source_subrun": "base240_fill85_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "sequence_as_single_choice",
+          "question_type": "single_choice",
+          "solver_bucket": "4/5",
+          "source_phase": "base",
+          "source_subrun": "base240"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "sequence_as_single_choice",
+          "question_type": "single_choice",
+          "solver_bucket": "4/5",
+          "source_phase": "base_fill_after_recharge",
+          "source_subrun": "base240_fill85_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "sequence_as_single_choice",
+          "question_type": "single_choice",
+          "solver_bucket": "1/5",
+          "source_phase": "base",
+          "source_subrun": "base240"
+        },
+        "total": 1,
+        "train": 0
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "sequence_as_single_choice",
+          "question_type": "single_choice",
+          "solver_bucket": "2/5",
+          "source_phase": "base_fill_after_recharge",
+          "source_subrun": "base240_fill85_after_recharge"
+        },
+        "total": 1,
+        "train": 0
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "sequence_as_single_choice",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "base",
+          "source_subrun": "base240"
+        },
+        "total": 1,
+        "train": 0
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "sequence_as_single_choice",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "base_fill_after_recharge",
+          "source_subrun": "base240_fill85_after_recharge"
+        },
+        "total": 1,
+        "train": 0
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "sequence_as_single_choice",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "bonus_after_recharge_ordering_frozen",
+          "source_subrun": "bonus60_after_recharge"
+        },
+        "total": 1,
+        "train": 0
+      }
+    ]
+  },
+  "stage2_candidate_count": 300,
+  "stage2_candidate_path": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/03_stage2_guarded_mining300/candidate_pool.jsonl",
+  "stage2_frontier_path": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/03_stage2_guarded_mining300/frontier_pool.jsonl",
+  "status": "audit_passed",
+  "tokenizer_path": "/root/autodl-tmp/Qwen3-4B",
+  "train_mix": {
+    "attack_skill_distribution": {
+      "conditional_plan": 45,
+      "delayed_activation": 33,
+      "permission_visibility_scope": 1,
+      "timeline_fork_merge": 2
+    },
+    "bucket_distribution": {
+      "1/5": 15,
+      "2/5": 11,
+      "3/5": 19,
+      "4/5": 13,
+      "5/5": 23
+    },
+    "count": 81,
+    "difficulty_subtype_distribution": {
+      "hard_single_choice": 54,
+      "ordinary": 23,
+      "ordinary_single_choice": 4
+    },
+    "frontier_type_distribution": {
+      "boundary": 58,
+      "exact": 23
+    },
+    "hard_single_choice_template_distribution": {
+      "guaranteed_vs_possible": 9,
+      "latest_valid_state": 10,
+      "minimal_difference": 19,
+      "none": 4,
+      "override_sensitive": 7,
+      "sequence_as_single_choice": 9
+    },
+    "qtype_distribution": {
+      "multi_select": 21,
+      "ordering": 2,
+      "single_choice": 58
+    },
+    "source_phase_distribution": {
+      "base": 41,
+      "base_fill_after_recharge": 25,
+      "bonus_after_recharge_ordering_frozen": 15
+    },
+    "source_subrun_distribution": {
+      "base240": 41,
+      "base240_fill5_after_recharge": 2,
+      "base240_fill85_after_recharge": 23,
+      "bonus60_after_recharge": 15
+    }
+  },
+  "train_mix_count": 81,
+  "train_mix_pass": true
+}

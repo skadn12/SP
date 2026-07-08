@@ -1,0 +1,148 @@
+{
+  "experiment": "stage2_smoke50_with_stage1_solver",
+  "objective": "verify whether current_method challenger can still produce frontier/near-miss against the accepted stage1 from-base solver",
+  "created_at_utc": "2026-07-01T14:49:37.638860+00:00",
+  "stage1_solver_path": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/accepted_models/solver_base_restart_stage1_merged",
+  "stage1_solver_realpath": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/01_mining500_train/training/models/merged",
+  "seed_parent_path": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/seed_parents/seed_parents.jsonl",
+  "base_model": "/root/autodl-tmp/Qwen3-4B",
+  "tokenizer_path": "/root/autodl-tmp/Qwen3-4B",
+  "max_model_len": 16384,
+  "max_length": 16384,
+  "generation_backend": "native_current_method",
+  "native_challenger_mode": "graph_conditioned_api_dialogue",
+  "frontier_splits": [
+    "train"
+  ],
+  "n_train": 50,
+  "generated_count": 50,
+  "valid_count": 50,
+  "clean_count": 50,
+  "valid_rate": 1.0,
+  "clean_rate": 1.0,
+  "qtype_distribution": {
+    "multi_select": 13,
+    "ordering": 5,
+    "single_choice": 32
+  },
+  "qtype_bucket_distribution": {
+    "multi_select": {
+      "5/5": 5,
+      "0/5": 4,
+      "3/5": 2,
+      "1/5": 2
+    },
+    "ordering": {
+      "0/5": 4,
+      "2/5": 1
+    },
+    "single_choice": {
+      "5/5": 12,
+      "0/5": 9,
+      "1/5": 3,
+      "2/5": 5,
+      "3/5": 2,
+      "4/5": 1
+    }
+  },
+  "soft_buckets": {
+    "5/5": 17,
+    "0/5": 17,
+    "1/5": 5,
+    "3/5": 4,
+    "2/5": 6,
+    "4/5": 1
+  },
+  "frontier_count": 4,
+  "near_miss_count": 19,
+  "frontier_plus_near_miss_count": 23,
+  "strict_frontier_count": 4,
+  "boundary_frontier_count": 16,
+  "boundary_plus_near_miss_count": 17,
+  "frontier_pool_count": 17,
+  "overall_zero_share": 0.34,
+  "hard_single_choice_zero_share": 0.310345,
+  "multi_select_zero_share": 0.307692,
+  "ordering_zero_share": 0.8,
+  "single_choice_zero_share": 0.28125,
+  "rows_below_4000_delta": 0,
+  "anchor_leakage_count": 0,
+  "solver_visible_meta_leak_count": 0,
+  "eval_context_overflow_count": 0,
+  "truncated_count": 0,
+  "bad_question_count": 9,
+  "empty_prediction_count": 0,
+  "parsed_failure_count": 0,
+  "all_prediction_empty_count": 0,
+  "all_prediction_parse_failure_count": 0,
+  "prompt_token_mean": 12400.0,
+  "prompt_token_max": 12788,
+  "final_dialogue_token_mean": 12155.92,
+  "final_dialogue_token_max": 12208,
+  "actual_curriculum": {
+    "target": {
+      "ordinary_single_choice": 0.05,
+      "hard_single_choice": 0.6,
+      "multi_select": 0.25,
+      "ordering": 0.1,
+      "outer_single_choice": 0.65
+    },
+    "actual_qtype_distribution": {
+      "multi_select": 13,
+      "ordering": 5,
+      "single_choice": 32
+    },
+    "actual_qtype_share": {
+      "multi_select": 0.26,
+      "ordering": 0.1,
+      "single_choice": 0.64
+    },
+    "difficulty_subtype_distribution": {
+      "ordinary": 18,
+      "ordinary_single_choice": 3,
+      "hard_single_choice": 29
+    },
+    "hard_single_choice_template_distribution": {
+      "minimal_difference": 7,
+      "sequence_as_single_choice": 7,
+      "override_sensitive": 5,
+      "latest_valid_state": 5,
+      "guaranteed_vs_possible": 5
+    }
+  },
+  "api_failure_count": 13,
+  "api_failure_reason_counts": {
+    "meta_leak": 10,
+    "NativeGraphDialogueReject": 1,
+    "base_validation_anti_shortcut": 2
+  },
+  "api_timeout_count": 2,
+  "api_generation_parse_failure_count": 34,
+  "api_attempts": 63,
+  "resume_count": 0,
+  "resume_no_resume_flag": true,
+  "evidence_window_used_as_prompt": false,
+  "r4_r5_r1_data_or_model_used": false,
+  "r4_r5_r1_data_or_model_used_note": "No r4/r5/r1 data/model was used for this stage2 smoke; parent source is this validation seed_parents.jsonl and solver is the stage1 accepted merged model.",
+  "quality_gate_pass": true,
+  "frontier_gate_pass": true,
+  "frontier_gate_reason": "frontier_plus_near_miss_count>=10",
+  "stage2_smoke_pass": true,
+  "recommend_stage2_mining": "manual_consider_guarded",
+  "blockers": [],
+  "risks": [
+    "ordering_zero_share_high"
+  ],
+  "risk_notes": "ordering was very hard for the stage1 solver; keep ordering capped/guarded and inspect before using it for training.",
+  "no_auto_mining_ran": true,
+  "no_training_ran": true,
+  "no_next_round_ran": true,
+  "output_files": {
+    "samples": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/02_stage2_smoke50_with_stage1_solver/samples.jsonl",
+    "valid_samples": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/02_stage2_smoke50_with_stage1_solver/valid_samples.jsonl",
+    "clean_samples": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/02_stage2_smoke50_with_stage1_solver/clean_samples.jsonl",
+    "adaptive_smoke_summary": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/02_stage2_smoke50_with_stage1_solver/adaptive_smoke_summary.json",
+    "report_md": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/02_stage2_smoke50_with_stage1_solver/reports/report.md",
+    "log": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/logs/02_stage2_smoke50_with_stage1_solver.log"
+  }
+}

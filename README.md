@@ -2,7 +2,9 @@
 
 这是“当前方法”的干净 GitHub 代码包，包含从 parent pool 生成 self-play 样本、API challenger 扩展对话、Stage64 API QA 多样化、质量验证、frontier 选择、train mix 构建、可选 solver 训练与评测所需的主线代码。
 
-注意：这里整理的是**当前方法主线代码**，不是整个工作区的 r1-r5 历史归档。数据集、模型权重、运行输出、API key、本地缓存和 149G 工作区内容都没有放进来。
+注意：这里整理的是**当前方法主线代码**，不是整个工作区的 r1-r5 历史归档。模型权重、运行缓存、API key 和 149G 工作区内容都没有放进来。
+
+`data/` 目录已经加入当前方法实验线路的可复现数据子集，包括原始 `locomo10.json`、切分后的 seed / parent rows、stage1、stage2、stage2 repair/topup、Stage64 API self-play 与 Stage64 题目类型多样化 probe 的关键 JSON/JSONL、报告和状态文件。数据目录不是完整 29G 工作区镜像；具体包含和排除内容见 `data/README.md` 与 `data/DATA_MANIFEST.tsv`。
 
 ## 当前方法实验流程
 

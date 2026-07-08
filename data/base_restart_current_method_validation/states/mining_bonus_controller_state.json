@@ -1,0 +1,106 @@
+{
+  "experiment": "base_restart_current_method_validation",
+  "created_by": "validation_bonus_plan_from_base350",
+  "solver_name": "solver_base_qwen3_4b",
+  "difficulty_plan": {
+    "question_type_shares": {
+      "single_choice": 0.8,
+      "multi_select": 0.13333333333333333,
+      "ordering": 0.06666666666666667
+    },
+    "allowed_question_types": [
+      "single_choice",
+      "multi_select",
+      "ordering"
+    ],
+    "single_choice_subtype_shares": {
+      "ordinary_single_choice": 0.0,
+      "hard_single_choice": 1.0
+    },
+    "single_choice_subtype_hardness_mix": {
+      "ordinary_single_choice": {
+        "h0": 0.85,
+        "h1": 0.15,
+        "h2": 0.0
+      },
+      "hard_single_choice": {
+        "h0": 0.35,
+        "h1": 0.5,
+        "h2": 0.15
+      }
+    },
+    "hard_single_choice_template_shares": {
+      "sequence_as_single_choice": 0.28,
+      "latest_valid_state": 0.22,
+      "minimal_difference": 0.22,
+      "guaranteed_vs_possible": 0.14,
+      "override_sensitive": 0.14
+    },
+    "cell_weights": {
+      "single_choice|conditional_plan": 0.45,
+      "single_choice|delayed_activation": 0.55,
+      "multi_select|conditional_plan": 1.0,
+      "multi_select|permission_visibility_scope": 0.0,
+      "ordering|timeline_fork_merge": 1.0,
+      "ordering|conditional_plan": 0.0
+    },
+    "cell_hardness_mix": {
+      "single_choice|conditional_plan": {
+        "h0": 0.5,
+        "h1": 0.4,
+        "h2": 0.1
+      },
+      "single_choice|delayed_activation": {
+        "h0": 0.45,
+        "h1": 0.4,
+        "h2": 0.15
+      },
+      "multi_select|conditional_plan": {
+        "h0": 1.0,
+        "h1": 0.0,
+        "h2": 0.0
+      },
+      "multi_select|permission_visibility_scope": {
+        "h0": 1.0,
+        "h1": 0.0,
+        "h2": 0.0
+      },
+      "ordering|timeline_fork_merge": {
+        "h0": 1.0,
+        "h1": 0.0,
+        "h2": 0.0
+      },
+      "ordering|conditional_plan": {
+        "h0": 1.0,
+        "h1": 0.0,
+        "h2": 0.0
+      }
+    },
+    "qtype_curriculum": {
+      "stage": "base_restart_mining_bonus150",
+      "mode": "utility_bonus_guarded_from_base350",
+      "ordinary_single_choice": 0.0,
+      "hard_single_choice": 0.8,
+      "multi_select": 0.13333333333333333,
+      "ordering": 0.06666666666666667
+    }
+  },
+  "bonus_allocation": {
+    "candidate_budget": 150,
+    "hard_single_choice": 120,
+    "multi_select_conditional_plan": 20,
+    "ordering_timeline_fork_merge": 10,
+    "base_qtype_zero_share": {
+      "single_choice": 0.414286,
+      "multi_select": 0.886792,
+      "ordering": 0.705882,
+      "hard_single_choice": 0.445833
+    },
+    "guardrail": "multi_select and ordering zero_share exceeded 0.60 in base350, so bonus is capped and h0-only for those qtypes.",
+    "safe_buckets": [
+      "hard_single_choice templates",
+      "multi_select|conditional_plan",
+      "ordering|timeline_fork_merge"
+    ]
+  }
+}

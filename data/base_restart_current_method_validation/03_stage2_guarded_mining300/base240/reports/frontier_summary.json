@@ -1,0 +1,45 @@
+{
+  "method": "current_method",
+  "frontier_count": 37,
+  "frontier_yield": 0.23871,
+  "primary_frontier_count": 24,
+  "secondary_frontier_count": 13,
+  "frontier_candidate_count": 37,
+  "weighted_frontier_candidate_score": 30.5,
+  "frontier_by_bucket": {
+    "0/5": 61,
+    "5/5": 57,
+    "3/5": 15,
+    "2/5": 9,
+    "4/5": 7,
+    "1/5": 6
+  },
+  "excluded_0of5_count": 61,
+  "excluded_5of5_count": 57,
+  "future_hard_set_count": 61,
+  "clean_replay_candidate_count": 57,
+  "near_miss_count": 54,
+  "hard_correct_count": 0,
+  "true_too_hard_count": 6,
+  "bad_question_count": 31,
+  "shortcut_issue_count": 0,
+  "easy_count": 64,
+  "label_counts": {
+    "easy": 64,
+    "clean_near_miss": 54,
+    "bad_question": 31,
+    "true_too_hard": 6
+  },
+  "frontier_by_question_type": {
+    "single_choice": 26,
+    "multi_select": 11
+  },
+  "frontier_by_attack_skill": {
+    "conditional_plan": 21,
+    "delayed_activation": 16
+  },
+  "largest_type_share": 0.702703,
+  "largest_skill_share": 0.567568,
+  "dev_or_heldout_frontier_count": 0,
+  "selection_policy": "stratified bucket frontier: primary {2/5,3/5} weight 1.0 + secondary {1/5,4/5} weight 0.5 (secondary requires leakage-clean train candidate); 0/5 -> future_hard_set, 5/5 -> clean_replay; balanced by question type and attack skill"
+}

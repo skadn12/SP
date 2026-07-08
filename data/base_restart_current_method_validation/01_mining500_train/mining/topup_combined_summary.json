@@ -1,0 +1,107 @@
+{
+  "combined_candidate_count": 900,
+  "combined_candidate_pool_path": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/01_mining500_train/mining/topup_combined_candidate_pool.jsonl",
+  "combined_frontier_above_100": true,
+  "combined_frontier_delta_over_original": 40,
+  "combined_frontier_pool_count": 106,
+  "combined_frontier_pool_label_distribution": {
+    "boundary_frontier": 83,
+    "near_miss": 23
+  },
+  "combined_frontier_pool_path": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/01_mining500_train/mining/topup_combined_frontier_pool.jsonl",
+  "combined_frontier_qtype_distribution": {
+    "multi_select": 23,
+    "ordering": 8,
+    "single_choice": 75
+  },
+  "combined_qtype_distribution": {
+    "multi_select": 74,
+    "ordering": 27,
+    "single_choice": 799
+  },
+  "constraints": {
+    "base_model": "/root/autodl-tmp/Qwen3-4B",
+    "full_dialogue_prompt": true,
+    "max_length": 16384,
+    "max_model_len": 16384,
+    "no_evidence_window_prompt": true,
+    "r1_legacy_reused": false,
+    "r4_model_reused": false,
+    "r4_parent_reused": false,
+    "r4_train_mix_reused": false,
+    "tokenizer": "/root/autodl-tmp/Qwen3-4B"
+  },
+  "created_at_utc": "2026-07-01T10:57:48Z",
+  "experiment": "base_restart_current_method_validation",
+  "mode": "topup_hard_single_choice_from_base",
+  "next_step_recommendation": "Construct train_mix from topup_combined_frontier_pool.jsonl only if continuing this validation; do not auto-run another mining round.",
+  "original_candidate_count": 500,
+  "original_candidate_pool_path": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/01_mining500_train/mining/candidate_pool.jsonl",
+  "original_frontier_count": 66,
+  "original_frontier_pool_path": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/01_mining500_train/mining/frontier_pool.jsonl",
+  "original_metrics": {
+    "anchor_leakage_count": 0,
+    "boundary_frontier_pool_count": 43,
+    "clean_count": 500,
+    "frontier_pool_count": 66,
+    "generated_count": 500,
+    "near_miss_pool_count": 23,
+    "overflow_count": 0,
+    "rows_below_4000_delta": 0,
+    "solver_visible_meta_leak_count": 0,
+    "truncated_count": 0,
+    "valid_count": 500
+  },
+  "sample_id_overlap": {
+    "topup_frontier_vs_original_candidate": 0,
+    "topup_frontier_vs_original_frontier": 0,
+    "topup_vs_original_candidate": 0,
+    "train_safety_note": "No sample_id collisions were found; original 66 frontier rows are preserved unchanged in the combined copy."
+  },
+  "status": "topup_objective_passed",
+  "topup_candidate_count": 400,
+  "topup_frontier_bucket_distribution": {
+    "1/5": 12,
+    "2/5": 8,
+    "3/5": 11,
+    "4/5": 9
+  },
+  "topup_frontier_count": 40,
+  "topup_frontier_path": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/01_mining500_train/mining/topup_hard_sc350_resume/frontier.jsonl",
+  "topup_frontier_qtype_distribution": {
+    "single_choice": 40
+  },
+  "topup_frontier_template_distribution": {
+    "latest_valid_state": 11,
+    "minimal_difference": 19,
+    "sequence_as_single_choice": 10
+  },
+  "topup_hardness_distribution": {
+    "h0": 295,
+    "h1": 105
+  },
+  "topup_metrics": {
+    "anchor_leakage_count": 0,
+    "boundary_frontier_count": 40,
+    "clean_count": 400,
+    "frontier_count": 40,
+    "frontier_pool_count": 40,
+    "frontier_yield": 0.1,
+    "generated_count": 400,
+    "rows_below_4000_delta": 0,
+    "solver_exact_accuracy_k1": 0.48,
+    "solver_soft_accuracy_k5": 0.4785,
+    "solver_visible_meta_leak_count": 0,
+    "valid_count": 400
+  },
+  "topup_qtype_distribution": {
+    "single_choice": 400
+  },
+  "topup_run_dir": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/01_mining500_train/mining/topup_hard_sc350_resume",
+  "topup_samples_path": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/01_mining500_train/mining/topup_hard_sc350_resume/samples.jsonl",
+  "topup_template_distribution": {
+    "latest_valid_state": 125,
+    "minimal_difference": 130,
+    "sequence_as_single_choice": 145
+  }
+}

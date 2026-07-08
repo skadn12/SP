@@ -1,0 +1,1536 @@
+{
+  "artifact_paths": {
+    "clean_replay": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/05_stage2_repair_topup_from_stage1/train_mix/clean_replay.jsonl",
+    "excluded_prior_heldout": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/05_stage2_repair_topup_from_stage1/train_mix/excluded_prior_heldout.jsonl",
+    "excluded_train_heldout_key_conflicts": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/05_stage2_repair_topup_from_stage1/train_mix/excluded_train_heldout_key_conflicts.jsonl",
+    "frontier_heldout": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/05_stage2_repair_topup_from_stage1/train_mix/frontier_heldout.jsonl",
+    "frontier_train": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/05_stage2_repair_topup_from_stage1/train_mix/frontier_train.jsonl",
+    "near_miss_aux_pool": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/05_stage2_repair_topup_from_stage1/train_mix/near_miss_aux_pool.jsonl",
+    "sft_train": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/05_stage2_repair_topup_from_stage1/train_mix/sft_train.jsonl",
+    "train_mix": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/05_stage2_repair_topup_from_stage1/train_mix/train_mix.jsonl",
+    "train_mix_report": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/05_stage2_repair_topup_from_stage1/train_mix/reports/train_mix_report.md",
+    "train_mix_summary": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/05_stage2_repair_topup_from_stage1/train_mix/train_mix_summary.json"
+  },
+  "candidate_dedupe": {
+    "dropped_count": 0,
+    "input_count": 499,
+    "kept_count": 499
+  },
+  "candidate_qtype_zero_share": {
+    "multi_select": 0.463087,
+    "ordering": 0.833333,
+    "single_choice": 0.343195
+  },
+  "clean_replay": {
+    "attack_skill_distribution": {
+      "conditional_plan": 14,
+      "delayed_activation": 14,
+      "timeline_fork_merge": 2
+    },
+    "bucket_distribution": {
+      "5/5": 30
+    },
+    "count": 30,
+    "difficulty_subtype_distribution": {
+      "hard_single_choice": 22,
+      "ordinary": 8
+    },
+    "frontier_type_distribution": {
+      "exact": 30
+    },
+    "hard_single_choice_template_distribution": {
+      "guaranteed_vs_possible": 3,
+      "latest_valid_state": 6,
+      "minimal_difference": 4,
+      "override_sensitive": 1,
+      "sequence_as_single_choice": 8
+    },
+    "qtype_distribution": {
+      "multi_select": 6,
+      "ordering": 2,
+      "single_choice": 22
+    },
+    "repair_source_phase_distribution": {
+      "base": 8,
+      "base_fill_after_recharge": 6,
+      "bonus_after_recharge_ordering_frozen": 2,
+      "stage2_repair_boundary_topup_from_stage1": 8,
+      "stage2_repair_topup_from_stage1": 6
+    },
+    "repair_source_subrun_distribution": {
+      "base240": 8,
+      "base240_fill85_after_recharge": 6,
+      "bonus60_after_recharge": 2,
+      "boundary_topup80_noproxy_t180_c2": 8,
+      "repair_topup_mining119": 6
+    },
+    "source_phase_distribution": {
+      "base": 8,
+      "base_fill_after_recharge": 6,
+      "bonus_after_recharge_ordering_frozen": 2,
+      "stage2_repair_boundary_topup_from_stage1": 8,
+      "stage2_repair_topup_from_stage1": 6
+    },
+    "source_subrun_distribution": {
+      "base240": 8,
+      "base240_fill85_after_recharge": 6,
+      "bonus60_after_recharge": 2,
+      "boundary_topup80_noproxy_t180_c2": 8,
+      "repair_topup_mining119": 6
+    }
+  },
+  "clean_replay_count": 30,
+  "clean_replay_selection": {
+    "eligible_5of5_clean_nonfrontier": 196,
+    "eligible_by_qtype": {
+      "multi_select": 57,
+      "ordering": 2,
+      "single_choice": 137
+    },
+    "eligible_by_source_subrun": {
+      "base240": 57,
+      "base240_fill5_after_recharge": 3,
+      "base240_fill85_after_recharge": 34,
+      "bonus60_after_recharge": 24,
+      "boundary_topup80_noproxy_t180_c2": 33,
+      "repair_topup_mining119": 45
+    },
+    "notes": [
+      "ordering 5/5 clean candidates are scarce: available=2; selected=2"
+    ],
+    "ordering_5of5_clean_available": 2,
+    "selected": 30,
+    "selected_by_cell": {
+      "multi_select|conditional_plan|ordinary|none|base240": 2,
+      "multi_select|conditional_plan|ordinary|none|base240_fill85_after_recharge": 1,
+      "multi_select|conditional_plan|ordinary|none|bonus60_after_recharge": 1,
+      "multi_select|conditional_plan|ordinary|none|boundary_topup80_noproxy_t180_c2": 1,
+      "multi_select|conditional_plan|ordinary|none|repair_topup_mining119": 1,
+      "ordering|timeline_fork_merge|ordinary|none|base240": 1,
+      "ordering|timeline_fork_merge|ordinary|none|base240_fill85_after_recharge": 1,
+      "single_choice|conditional_plan|hard_single_choice|guaranteed_vs_possible|base240": 1,
+      "single_choice|conditional_plan|hard_single_choice|latest_valid_state|bonus60_after_recharge": 1,
+      "single_choice|conditional_plan|hard_single_choice|latest_valid_state|boundary_topup80_noproxy_t180_c2": 2,
+      "single_choice|conditional_plan|hard_single_choice|minimal_difference|boundary_topup80_noproxy_t180_c2": 1,
+      "single_choice|conditional_plan|hard_single_choice|sequence_as_single_choice|boundary_topup80_noproxy_t180_c2": 1,
+      "single_choice|conditional_plan|hard_single_choice|sequence_as_single_choice|repair_topup_mining119": 2,
+      "single_choice|delayed_activation|hard_single_choice|guaranteed_vs_possible|base240": 1,
+      "single_choice|delayed_activation|hard_single_choice|guaranteed_vs_possible|base240_fill85_after_recharge": 1,
+      "single_choice|delayed_activation|hard_single_choice|latest_valid_state|base240": 1,
+      "single_choice|delayed_activation|hard_single_choice|latest_valid_state|boundary_topup80_noproxy_t180_c2": 1,
+      "single_choice|delayed_activation|hard_single_choice|latest_valid_state|repair_topup_mining119": 1,
+      "single_choice|delayed_activation|hard_single_choice|minimal_difference|base240": 1,
+      "single_choice|delayed_activation|hard_single_choice|minimal_difference|base240_fill85_after_recharge": 1,
+      "single_choice|delayed_activation|hard_single_choice|minimal_difference|boundary_topup80_noproxy_t180_c2": 1,
+      "single_choice|delayed_activation|hard_single_choice|override_sensitive|base240_fill85_after_recharge": 1,
+      "single_choice|delayed_activation|hard_single_choice|sequence_as_single_choice|base240": 1,
+      "single_choice|delayed_activation|hard_single_choice|sequence_as_single_choice|base240_fill85_after_recharge": 1,
+      "single_choice|delayed_activation|hard_single_choice|sequence_as_single_choice|boundary_topup80_noproxy_t180_c2": 1,
+      "single_choice|delayed_activation|hard_single_choice|sequence_as_single_choice|repair_topup_mining119": 2
+    },
+    "selected_by_qtype": {
+      "multi_select": 6,
+      "ordering": 2,
+      "single_choice": 22
+    },
+    "selected_by_source_subrun": {
+      "base240": 8,
+      "base240_fill85_after_recharge": 6,
+      "bonus60_after_recharge": 2,
+      "boundary_topup80_noproxy_t180_c2": 8,
+      "repair_topup_mining119": 6
+    },
+    "target": 30
+  },
+  "clean_replay_share": 0.277778,
+  "combined_candidate_count": 499,
+  "combined_frontier_pool_count": 108,
+  "count": 108,
+  "evidence_window_used_as_prompt": false,
+  "excluded_train_heldout_key_conflict_count": 0,
+  "frontier_dedupe": {
+    "dropped_count": 0,
+    "input_count": 108,
+    "kept_count": 108
+  },
+  "frontier_heldout": {
+    "attack_skill_distribution": {
+      "conditional_plan": 19,
+      "delayed_activation": 10,
+      "permission_visibility_scope": 1
+    },
+    "bucket_distribution": {
+      "1/5": 7,
+      "2/5": 10,
+      "3/5": 9,
+      "4/5": 4
+    },
+    "count": 30,
+    "difficulty_subtype_distribution": {
+      "hard_single_choice": 21,
+      "ordinary": 9
+    },
+    "frontier_type_distribution": {
+      "boundary": 30
+    },
+    "hard_single_choice_template_distribution": {
+      "guaranteed_vs_possible": 1,
+      "latest_valid_state": 2,
+      "minimal_difference": 7,
+      "sequence_as_single_choice": 11
+    },
+    "qtype_distribution": {
+      "multi_select": 9,
+      "single_choice": 21
+    },
+    "repair_source_phase_distribution": {
+      "base": 13,
+      "base_fill_after_recharge": 6,
+      "bonus_after_recharge_ordering_frozen": 3,
+      "stage2_repair_boundary_topup_from_stage1": 5,
+      "stage2_repair_topup_from_stage1": 3
+    },
+    "repair_source_subrun_distribution": {
+      "base240": 13,
+      "base240_fill85_after_recharge": 6,
+      "bonus60_after_recharge": 3,
+      "boundary_topup80_noproxy_t180_c2": 5,
+      "repair_topup_mining119": 3
+    },
+    "source_phase_distribution": {
+      "base": 13,
+      "base_fill_after_recharge": 6,
+      "bonus_after_recharge_ordering_frozen": 3,
+      "stage2_repair_boundary_topup_from_stage1": 5,
+      "stage2_repair_topup_from_stage1": 3
+    },
+    "source_subrun_distribution": {
+      "base240": 13,
+      "base240_fill85_after_recharge": 6,
+      "bonus60_after_recharge": 3,
+      "boundary_topup80_noproxy_t180_c2": 5,
+      "repair_topup_mining119": 3
+    }
+  },
+  "frontier_heldout_count": 30,
+  "frontier_train": {
+    "attack_skill_distribution": {
+      "conditional_plan": 48,
+      "delayed_activation": 30
+    },
+    "bucket_distribution": {
+      "1/5": 23,
+      "2/5": 18,
+      "3/5": 20,
+      "4/5": 17
+    },
+    "count": 78,
+    "difficulty_subtype_distribution": {
+      "hard_single_choice": 60,
+      "ordinary": 14,
+      "ordinary_single_choice": 4
+    },
+    "frontier_type_distribution": {
+      "boundary": 78
+    },
+    "hard_single_choice_template_distribution": {
+      "guaranteed_vs_possible": 8,
+      "latest_valid_state": 13,
+      "minimal_difference": 18,
+      "none": 4,
+      "override_sensitive": 4,
+      "sequence_as_single_choice": 17
+    },
+    "qtype_distribution": {
+      "multi_select": 14,
+      "single_choice": 64
+    },
+    "repair_source_phase_distribution": {
+      "base": 24,
+      "base_fill_after_recharge": 17,
+      "bonus_after_recharge_ordering_frozen": 10,
+      "stage2_repair_boundary_topup_from_stage1": 15,
+      "stage2_repair_topup_from_stage1": 12
+    },
+    "repair_source_subrun_distribution": {
+      "base240": 24,
+      "base240_fill5_after_recharge": 2,
+      "base240_fill85_after_recharge": 15,
+      "bonus60_after_recharge": 10,
+      "boundary_topup80_noproxy_t180_c2": 15,
+      "repair_topup_mining119": 12
+    },
+    "source_phase_distribution": {
+      "base": 24,
+      "base_fill_after_recharge": 17,
+      "bonus_after_recharge_ordering_frozen": 10,
+      "stage2_repair_boundary_topup_from_stage1": 15,
+      "stage2_repair_topup_from_stage1": 12
+    },
+    "source_subrun_distribution": {
+      "base240": 24,
+      "base240_fill5_after_recharge": 2,
+      "base240_fill85_after_recharge": 15,
+      "bonus60_after_recharge": 10,
+      "boundary_topup80_noproxy_t180_c2": 15,
+      "repair_topup_mining119": 12
+    }
+  },
+  "frontier_train_count": 78,
+  "hard_single_choice_template_distribution": {
+    "clean_replay": {
+      "guaranteed_vs_possible": 3,
+      "latest_valid_state": 6,
+      "minimal_difference": 4,
+      "override_sensitive": 1,
+      "sequence_as_single_choice": 8
+    },
+    "frontier_heldout": {
+      "guaranteed_vs_possible": 1,
+      "latest_valid_state": 2,
+      "minimal_difference": 7,
+      "sequence_as_single_choice": 11
+    },
+    "frontier_train": {
+      "guaranteed_vs_possible": 8,
+      "latest_valid_state": 13,
+      "minimal_difference": 18,
+      "none": 4,
+      "override_sensitive": 4,
+      "sequence_as_single_choice": 17
+    },
+    "train_mix": {
+      "guaranteed_vs_possible": 11,
+      "latest_valid_state": 19,
+      "minimal_difference": 22,
+      "none": 4,
+      "override_sensitive": 5,
+      "sequence_as_single_choice": 25
+    }
+  },
+  "heldout_overlap_check": {
+    "dialogue_hash_overlap": 0,
+    "question_id_overlap": 0,
+    "sample_id_overlap": 0,
+    "total_overlap": 0
+  },
+  "max_length": 16384,
+  "max_sft_token_length": 12950,
+  "mean_sft_token_length": 12435.963,
+  "min_sft_token_length": 12243,
+  "near_miss_aux_pool": {
+    "attack_skill_distribution": {
+      "conditional_plan": 94,
+      "delayed_activation": 21,
+      "permission_visibility_scope": 9,
+      "timeline_fork_merge": 7
+    },
+    "bucket_distribution": {
+      "0/5": 74,
+      "1/5": 8,
+      "2/5": 23,
+      "3/5": 26
+    },
+    "count": 131,
+    "difficulty_subtype_distribution": {
+      "hard_single_choice": 37,
+      "ordinary": 92,
+      "ordinary_single_choice": 2
+    },
+    "frontier_type_distribution": {
+      "boundary": 57,
+      "near_miss": 8,
+      "too_hard": 66
+    },
+    "hard_single_choice_template_distribution": {
+      "guaranteed_vs_possible": 4,
+      "latest_valid_state": 7,
+      "minimal_difference": 14,
+      "none": 2,
+      "override_sensitive": 2,
+      "sequence_as_single_choice": 10
+    },
+    "qtype_distribution": {
+      "multi_select": 84,
+      "ordering": 8,
+      "single_choice": 39
+    },
+    "repair_source_phase_distribution": {
+      "base": 54,
+      "base_fill_after_recharge": 31,
+      "bonus_after_recharge_ordering_frozen": 16,
+      "stage2_repair_boundary_topup_from_stage1": 15,
+      "stage2_repair_topup_from_stage1": 15
+    },
+    "repair_source_subrun_distribution": {
+      "base240": 54,
+      "base240_fill85_after_recharge": 31,
+      "bonus60_after_recharge": 16,
+      "boundary_topup80_noproxy_t180_c2": 15,
+      "repair_topup_mining119": 15
+    },
+    "source_phase_distribution": {
+      "base": 54,
+      "base_fill_after_recharge": 31,
+      "bonus_after_recharge_ordering_frozen": 16,
+      "stage2_repair_boundary_topup_from_stage1": 15,
+      "stage2_repair_topup_from_stage1": 15
+    },
+    "source_subrun_distribution": {
+      "base240": 54,
+      "base240_fill85_after_recharge": 31,
+      "bonus60_after_recharge": 16,
+      "boundary_topup80_noproxy_t180_c2": 15,
+      "repair_topup_mining119": 15
+    }
+  },
+  "near_miss_aux_pool_count": 131,
+  "ordering_zero_share_note": "combined candidate ordering_zero_share=0.833333; repair top-up kept ordering frozen and does not oversample ordering.",
+  "original_candidate_count": 300,
+  "original_candidate_path": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/03_stage2_guarded_mining300/candidate_pool.jsonl",
+  "original_frontier_count": 73,
+  "original_frontier_path": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/03_stage2_guarded_mining300/frontier_pool.jsonl",
+  "output_dir": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/05_stage2_repair_topup_from_stage1/train_mix",
+  "over_max_length_count": 0,
+  "over_max_length_preview": [],
+  "pass_criteria": {
+    "clean_replay_count_25_to_35": true,
+    "combined_frontier_pool_count_gte_100": true,
+    "evidence_window_prompt_false": true,
+    "frontier_heldout_count_gte_30": true,
+    "frontier_train_count_gte_65": true,
+    "heldout_overlap_zero": true,
+    "max_sft_token_length_lte_16384": true,
+    "over_max_length_zero": true,
+    "prior_failed_heldout_not_in_train": true
+  },
+  "prior_failed_heldout_in_train_count": 0,
+  "prior_failed_heldout_path": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/04_stage2_train_from_stage1/train_mix/frontier_heldout.jsonl",
+  "prior_failed_heldout_reserved_count": 15,
+  "prior_failed_stage2_model_used": false,
+  "qtype_distribution": {
+    "clean_replay": {
+      "multi_select": 6,
+      "ordering": 2,
+      "single_choice": 22
+    },
+    "frontier_heldout": {
+      "multi_select": 9,
+      "single_choice": 21
+    },
+    "frontier_train": {
+      "multi_select": 14,
+      "single_choice": 64
+    },
+    "near_miss_aux_pool": {
+      "multi_select": 84,
+      "ordering": 8,
+      "single_choice": 39
+    },
+    "train_mix": {
+      "multi_select": 20,
+      "ordering": 2,
+      "single_choice": 86
+    }
+  },
+  "repair_candidate_count": 199,
+  "repair_candidate_path": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/05_stage2_repair_topup_from_stage1/repair_mining/candidate_pool_repair_combined_with_boundary.jsonl",
+  "repair_frontier_count": 35,
+  "repair_frontier_path": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/05_stage2_repair_topup_from_stage1/repair_mining/frontier_pool_repair_combined_with_boundary.jsonl",
+  "run_id": "base_restart_current_method_validation_stage2_repair_train_mix",
+  "sft_train_count": 108,
+  "source_phase_distribution": {
+    "clean_replay": {
+      "base": 8,
+      "base_fill_after_recharge": 6,
+      "bonus_after_recharge_ordering_frozen": 2,
+      "stage2_repair_boundary_topup_from_stage1": 8,
+      "stage2_repair_topup_from_stage1": 6
+    },
+    "frontier_heldout": {
+      "base": 13,
+      "base_fill_after_recharge": 6,
+      "bonus_after_recharge_ordering_frozen": 3,
+      "stage2_repair_boundary_topup_from_stage1": 5,
+      "stage2_repair_topup_from_stage1": 3
+    },
+    "frontier_train": {
+      "base": 24,
+      "base_fill_after_recharge": 17,
+      "bonus_after_recharge_ordering_frozen": 10,
+      "stage2_repair_boundary_topup_from_stage1": 15,
+      "stage2_repair_topup_from_stage1": 12
+    },
+    "near_miss_aux_pool": {
+      "base": 54,
+      "base_fill_after_recharge": 31,
+      "bonus_after_recharge_ordering_frozen": 16,
+      "stage2_repair_boundary_topup_from_stage1": 15,
+      "stage2_repair_topup_from_stage1": 15
+    },
+    "train_mix": {
+      "base": 32,
+      "base_fill_after_recharge": 23,
+      "bonus_after_recharge_ordering_frozen": 12,
+      "stage2_repair_boundary_topup_from_stage1": 23,
+      "stage2_repair_topup_from_stage1": 18
+    }
+  },
+  "split_stats": {
+    "heldout_qtype_targets": {
+      "multi_select": 5,
+      "single_choice": 10
+    },
+    "per_stratum": [
+      {
+        "heldout": 1,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "ordinary",
+          "hard_single_choice_template": "none",
+          "question_type": "multi_select",
+          "solver_bucket": "1/5",
+          "source_phase": "base"
+        },
+        "total": 2,
+        "train": 1
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "ordinary",
+          "hard_single_choice_template": "none",
+          "question_type": "multi_select",
+          "solver_bucket": "1/5",
+          "source_phase": "base_fill_after_recharge"
+        },
+        "total": 3,
+        "train": 2
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "ordinary",
+          "hard_single_choice_template": "none",
+          "question_type": "multi_select",
+          "solver_bucket": "1/5",
+          "source_phase": "stage2_repair_boundary_topup_from_stage1"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "ordinary",
+          "hard_single_choice_template": "none",
+          "question_type": "multi_select",
+          "solver_bucket": "2/5",
+          "source_phase": "base"
+        },
+        "total": 3,
+        "train": 2
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "ordinary",
+          "hard_single_choice_template": "none",
+          "question_type": "multi_select",
+          "solver_bucket": "2/5",
+          "source_phase": "base_fill_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "ordinary",
+          "hard_single_choice_template": "none",
+          "question_type": "multi_select",
+          "solver_bucket": "2/5",
+          "source_phase": "stage2_repair_topup_from_stage1"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "ordinary",
+          "hard_single_choice_template": "none",
+          "question_type": "multi_select",
+          "solver_bucket": "3/5",
+          "source_phase": "base"
+        },
+        "total": 3,
+        "train": 2
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "ordinary",
+          "hard_single_choice_template": "none",
+          "question_type": "multi_select",
+          "solver_bucket": "3/5",
+          "source_phase": "stage2_repair_topup_from_stage1"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "ordinary",
+          "hard_single_choice_template": "none",
+          "question_type": "multi_select",
+          "solver_bucket": "4/5",
+          "source_phase": "base"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "ordinary",
+          "hard_single_choice_template": "none",
+          "question_type": "multi_select",
+          "solver_bucket": "4/5",
+          "source_phase": "bonus_after_recharge_ordering_frozen"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "ordinary",
+          "hard_single_choice_template": "none",
+          "question_type": "multi_select",
+          "solver_bucket": "4/5",
+          "source_phase": "stage2_repair_topup_from_stage1"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "attack_skill": "permission_visibility_scope",
+          "difficulty_subtype": "ordinary",
+          "hard_single_choice_template": "none",
+          "question_type": "multi_select",
+          "solver_bucket": "1/5",
+          "source_phase": "base_fill_after_recharge"
+        },
+        "total": 1,
+        "train": 0
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "guaranteed_vs_possible",
+          "question_type": "single_choice",
+          "solver_bucket": "1/5",
+          "source_phase": "bonus_after_recharge_ordering_frozen"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "guaranteed_vs_possible",
+          "question_type": "single_choice",
+          "solver_bucket": "1/5",
+          "source_phase": "stage2_repair_boundary_topup_from_stage1"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "guaranteed_vs_possible",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "base_fill_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "guaranteed_vs_possible",
+          "question_type": "single_choice",
+          "solver_bucket": "4/5",
+          "source_phase": "bonus_after_recharge_ordering_frozen"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "guaranteed_vs_possible",
+          "question_type": "single_choice",
+          "solver_bucket": "2/5",
+          "source_phase": "base"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "guaranteed_vs_possible",
+          "question_type": "single_choice",
+          "solver_bucket": "2/5",
+          "source_phase": "stage2_repair_boundary_topup_from_stage1"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "guaranteed_vs_possible",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "base"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "guaranteed_vs_possible",
+          "question_type": "single_choice",
+          "solver_bucket": "4/5",
+          "source_phase": "base"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "latest_valid_state",
+          "question_type": "single_choice",
+          "solver_bucket": "1/5",
+          "source_phase": "base"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "latest_valid_state",
+          "question_type": "single_choice",
+          "solver_bucket": "1/5",
+          "source_phase": "base_fill_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "latest_valid_state",
+          "question_type": "single_choice",
+          "solver_bucket": "1/5",
+          "source_phase": "stage2_repair_topup_from_stage1"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "latest_valid_state",
+          "question_type": "single_choice",
+          "solver_bucket": "2/5",
+          "source_phase": "stage2_repair_boundary_topup_from_stage1"
+        },
+        "total": 2,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "latest_valid_state",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "base"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "latest_valid_state",
+          "question_type": "single_choice",
+          "solver_bucket": "4/5",
+          "source_phase": "base"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "latest_valid_state",
+          "question_type": "single_choice",
+          "solver_bucket": "4/5",
+          "source_phase": "stage2_repair_topup_from_stage1"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "latest_valid_state",
+          "question_type": "single_choice",
+          "solver_bucket": "1/5",
+          "source_phase": "base_fill_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "latest_valid_state",
+          "question_type": "single_choice",
+          "solver_bucket": "1/5",
+          "source_phase": "stage2_repair_boundary_topup_from_stage1"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "latest_valid_state",
+          "question_type": "single_choice",
+          "solver_bucket": "1/5",
+          "source_phase": "stage2_repair_topup_from_stage1"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "latest_valid_state",
+          "question_type": "single_choice",
+          "solver_bucket": "2/5",
+          "source_phase": "base_fill_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "latest_valid_state",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "base"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "latest_valid_state",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "base_fill_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "minimal_difference",
+          "question_type": "single_choice",
+          "solver_bucket": "1/5",
+          "source_phase": "base_fill_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "minimal_difference",
+          "question_type": "single_choice",
+          "solver_bucket": "1/5",
+          "source_phase": "bonus_after_recharge_ordering_frozen"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "minimal_difference",
+          "question_type": "single_choice",
+          "solver_bucket": "1/5",
+          "source_phase": "stage2_repair_boundary_topup_from_stage1"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "minimal_difference",
+          "question_type": "single_choice",
+          "solver_bucket": "2/5",
+          "source_phase": "base"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "minimal_difference",
+          "question_type": "single_choice",
+          "solver_bucket": "2/5",
+          "source_phase": "stage2_repair_boundary_topup_from_stage1"
+        },
+        "total": 3,
+        "train": 2
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "minimal_difference",
+          "question_type": "single_choice",
+          "solver_bucket": "2/5",
+          "source_phase": "stage2_repair_topup_from_stage1"
+        },
+        "total": 2,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "minimal_difference",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "base_fill_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "minimal_difference",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "bonus_after_recharge_ordering_frozen"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "minimal_difference",
+          "question_type": "single_choice",
+          "solver_bucket": "1/5",
+          "source_phase": "base"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "minimal_difference",
+          "question_type": "single_choice",
+          "solver_bucket": "1/5",
+          "source_phase": "stage2_repair_boundary_topup_from_stage1"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "minimal_difference",
+          "question_type": "single_choice",
+          "solver_bucket": "2/5",
+          "source_phase": "base_fill_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "minimal_difference",
+          "question_type": "single_choice",
+          "solver_bucket": "2/5",
+          "source_phase": "bonus_after_recharge_ordering_frozen"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "minimal_difference",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "base"
+        },
+        "total": 2,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "minimal_difference",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "base_fill_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "minimal_difference",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "bonus_after_recharge_ordering_frozen"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "minimal_difference",
+          "question_type": "single_choice",
+          "solver_bucket": "4/5",
+          "source_phase": "base"
+        },
+        "total": 2,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "minimal_difference",
+          "question_type": "single_choice",
+          "solver_bucket": "4/5",
+          "source_phase": "bonus_after_recharge_ordering_frozen"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "ordinary_single_choice",
+          "hard_single_choice_template": "none",
+          "question_type": "single_choice",
+          "solver_bucket": "2/5",
+          "source_phase": "base"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "ordinary_single_choice",
+          "hard_single_choice_template": "none",
+          "question_type": "single_choice",
+          "solver_bucket": "1/5",
+          "source_phase": "base"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "ordinary_single_choice",
+          "hard_single_choice_template": "none",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "base_fill_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "ordinary_single_choice",
+          "hard_single_choice_template": "none",
+          "question_type": "single_choice",
+          "solver_bucket": "4/5",
+          "source_phase": "base_fill_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "override_sensitive",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "base"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "override_sensitive",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "base"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "override_sensitive",
+          "question_type": "single_choice",
+          "solver_bucket": "4/5",
+          "source_phase": "base_fill_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "override_sensitive",
+          "question_type": "single_choice",
+          "solver_bucket": "4/5",
+          "source_phase": "bonus_after_recharge_ordering_frozen"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "sequence_as_single_choice",
+          "question_type": "single_choice",
+          "solver_bucket": "1/5",
+          "source_phase": "bonus_after_recharge_ordering_frozen"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "sequence_as_single_choice",
+          "question_type": "single_choice",
+          "solver_bucket": "1/5",
+          "source_phase": "stage2_repair_boundary_topup_from_stage1"
+        },
+        "total": 2,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "sequence_as_single_choice",
+          "question_type": "single_choice",
+          "solver_bucket": "1/5",
+          "source_phase": "stage2_repair_topup_from_stage1"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "sequence_as_single_choice",
+          "question_type": "single_choice",
+          "solver_bucket": "2/5",
+          "source_phase": "base"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "sequence_as_single_choice",
+          "question_type": "single_choice",
+          "solver_bucket": "2/5",
+          "source_phase": "stage2_repair_boundary_topup_from_stage1"
+        },
+        "total": 2,
+        "train": 1
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "sequence_as_single_choice",
+          "question_type": "single_choice",
+          "solver_bucket": "2/5",
+          "source_phase": "stage2_repair_topup_from_stage1"
+        },
+        "total": 2,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "sequence_as_single_choice",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "base"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "sequence_as_single_choice",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "base_fill_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "sequence_as_single_choice",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "stage2_repair_topup_from_stage1"
+        },
+        "total": 2,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "sequence_as_single_choice",
+          "question_type": "single_choice",
+          "solver_bucket": "4/5",
+          "source_phase": "base"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "sequence_as_single_choice",
+          "question_type": "single_choice",
+          "solver_bucket": "4/5",
+          "source_phase": "base_fill_after_recharge"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 1,
+        "stratum": {
+          "attack_skill": "conditional_plan",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "sequence_as_single_choice",
+          "question_type": "single_choice",
+          "solver_bucket": "4/5",
+          "source_phase": "stage2_repair_boundary_topup_from_stage1"
+        },
+        "total": 2,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "sequence_as_single_choice",
+          "question_type": "single_choice",
+          "solver_bucket": "1/5",
+          "source_phase": "stage2_repair_boundary_topup_from_stage1"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "sequence_as_single_choice",
+          "question_type": "single_choice",
+          "solver_bucket": "1/5",
+          "source_phase": "stage2_repair_topup_from_stage1"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "sequence_as_single_choice",
+          "question_type": "single_choice",
+          "solver_bucket": "3/5",
+          "source_phase": "stage2_repair_boundary_topup_from_stage1"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "sequence_as_single_choice",
+          "question_type": "single_choice",
+          "solver_bucket": "4/5",
+          "source_phase": "stage2_repair_boundary_topup_from_stage1"
+        },
+        "total": 1,
+        "train": 1
+      },
+      {
+        "heldout": 0,
+        "stratum": {
+          "attack_skill": "delayed_activation",
+          "difficulty_subtype": "hard_single_choice",
+          "hard_single_choice_template": "sequence_as_single_choice",
+          "question_type": "single_choice",
+          "solver_bucket": "4/5",
+          "source_phase": "stage2_repair_topup_from_stage1"
+        },
+        "total": 1,
+        "train": 1
+      }
+    ],
+    "selected": 15,
+    "target": 15
+  },
+  "stage2_init_solver": "solver_base_restart_stage1_merged",
+  "status": "audit_passed",
+  "tokenizer_path": "/root/autodl-tmp/Qwen3-4B",
+  "train_mix": {
+    "attack_skill_distribution": {
+      "conditional_plan": 62,
+      "delayed_activation": 44,
+      "timeline_fork_merge": 2
+    },
+    "bucket_distribution": {
+      "1/5": 23,
+      "2/5": 18,
+      "3/5": 20,
+      "4/5": 17,
+      "5/5": 30
+    },
+    "count": 108,
+    "difficulty_subtype_distribution": {
+      "hard_single_choice": 82,
+      "ordinary": 22,
+      "ordinary_single_choice": 4
+    },
+    "frontier_type_distribution": {
+      "boundary": 78,
+      "exact": 30
+    },
+    "hard_single_choice_template_distribution": {
+      "guaranteed_vs_possible": 11,
+      "latest_valid_state": 19,
+      "minimal_difference": 22,
+      "none": 4,
+      "override_sensitive": 5,
+      "sequence_as_single_choice": 25
+    },
+    "qtype_distribution": {
+      "multi_select": 20,
+      "ordering": 2,
+      "single_choice": 86
+    },
+    "repair_source_phase_distribution": {
+      "base": 32,
+      "base_fill_after_recharge": 23,
+      "bonus_after_recharge_ordering_frozen": 12,
+      "stage2_repair_boundary_topup_from_stage1": 23,
+      "stage2_repair_topup_from_stage1": 18
+    },
+    "repair_source_subrun_distribution": {
+      "base240": 32,
+      "base240_fill5_after_recharge": 2,
+      "base240_fill85_after_recharge": 21,
+      "bonus60_after_recharge": 12,
+      "boundary_topup80_noproxy_t180_c2": 23,
+      "repair_topup_mining119": 18
+    },
+    "source_phase_distribution": {
+      "base": 32,
+      "base_fill_after_recharge": 23,
+      "bonus_after_recharge_ordering_frozen": 12,
+      "stage2_repair_boundary_topup_from_stage1": 23,
+      "stage2_repair_topup_from_stage1": 18
+    },
+    "source_subrun_distribution": {
+      "base240": 32,
+      "base240_fill5_after_recharge": 2,
+      "base240_fill85_after_recharge": 21,
+      "bonus60_after_recharge": 12,
+      "boundary_topup80_noproxy_t180_c2": 23,
+      "repair_topup_mining119": 18
+    }
+  },
+  "train_mix_count": 108,
+  "train_mix_pass": true
+}

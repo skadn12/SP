@@ -1,0 +1,308 @@
+{
+  "attack_skill_distribution": {
+    "conditional_plan": 2,
+    "delayed_activation": 1
+  },
+  "bad_question_or_ambiguous_by_validator": false,
+  "created_at": "2026-07-03 21:17:58",
+  "format_issue": false,
+  "items": [
+    {
+      "attack_skill": "conditional_plan",
+      "diagnosis": "Not Stage2-specific: stage1 accepted also failed this sample 1/5. Valid parsed letters; likely brittle hard single-choice clean replay item rather than repair-induced regression.",
+      "difficulty_subtype": "hard_single_choice",
+      "gold": [
+        "C"
+      ],
+      "hard_single_choice_template": "override_sensitive",
+      "options": {
+        "A": "Joanna raw qa single hop: Q: What project is Joanna working on in her notebook on November 9, 2022? A: A suspenseful thriller set in a small Midwestern town",
+        "B": "Joanna raw qa adversarial: Q: What advice does Joanna give to Nate about making YouTube videos? A: Watch other people's videos to understand what the audience likes",
+        "C": "Joanna raw qa single hop: Q: What does Joanna do after receiving a rejection from a production company? A: keep grinding and moving ahead",
+        "D": "Joanna raw qa single hop: Q: What did Joanna find in old notebooks last week that prompted her to reflect on her progress as a writer? A: early writings"
+      },
+      "question": "Which option reflects the state rather than an earlier overridden one?",
+      "question_type": "single_choice",
+      "sample_id": "native_current_method_graph_dialogue_0071_f938eeb78d",
+      "source_solver_bucket": "5/5",
+      "stage1_bucket": "1/5",
+      "stage1_exact_count": 1,
+      "stage1_parsed_0": "A",
+      "stage1_prediction_0": "A",
+      "stage1_soft_accuracy": 0.2,
+      "stage2_bucket": "1/5",
+      "stage2_exact_count": 1,
+      "stage2_parsed_0": "A",
+      "stage2_prediction_0": "A",
+      "stage2_predictions": [
+        {
+          "exact_correct": false,
+          "parsed": "A",
+          "partial_credit": 0.0,
+          "prediction": "A",
+          "sample_index": 0
+        },
+        {
+          "exact_correct": false,
+          "parsed": "B",
+          "partial_credit": 0.0,
+          "prediction": "B",
+          "sample_index": 1
+        },
+        {
+          "exact_correct": false,
+          "parsed": "A",
+          "partial_credit": 0.0,
+          "prediction": "A",
+          "sample_index": 2
+        },
+        {
+          "exact_correct": true,
+          "parsed": "C",
+          "partial_credit": 1.0,
+          "prediction": "C",
+          "sample_index": 3
+        },
+        {
+          "exact_correct": false,
+          "parsed": "A",
+          "partial_credit": 0.0,
+          "prediction": "A",
+          "sample_index": 4
+        }
+      ],
+      "stage2_soft_accuracy": 0.2,
+      "validation": {
+        "anti_shortcut_pass": true,
+        "details": {
+          "anti_shortcut_checks": {
+            "answer_near_question_shortcut": false,
+            "distractor_too_easy": false,
+            "evidence_window_position_leakage": false,
+            "gold_label_leakage": false,
+            "gold_text_exposure": false,
+            "keyword_overlap_shortcut": false,
+            "last_session_shortcut_risk": false,
+            "metadata_leakage": false,
+            "option_overlap_shortcut": false
+          },
+          "validation_checks": {
+            "gold_derivable_from_graph": true,
+            "graph_dialogue_consistency": true,
+            "no_ambiguous_pronoun": true,
+            "no_unstated_assumption": true,
+            "options_are_valid": true
+          }
+        },
+        "gold_derivable": true,
+        "graph_dialogue_consistent": true,
+        "graph_validation_pass": true,
+        "option_valid": true,
+        "warnings": []
+      }
+    },
+    {
+      "attack_skill": "conditional_plan",
+      "diagnosis": "Weak/no migration evidence: stage2 k1 sampled the distractor D, but k5 improved from stage1 3/5 to stage2 4/5. The option texts contain repeated temporal item labels, making this sequence item brittle though validator passes.",
+      "difficulty_subtype": "hard_single_choice",
+      "gold": [
+        "C"
+      ],
+      "hard_single_choice_template": "sequence_as_single_choice",
+      "options": {
+        "A": "Melanie raw qa temporal: 24 August 2023 -> Caroline raw qa temporal: The Tuesday before 20 July 2023 -> Caroline raw qa temporal: The Tuesday before 20 July 2023 -> Melanie raw qa single hop: Once or twice a year",
+        "B": "Melanie raw qa single hop: Once or twice a year -> Caroline raw qa temporal: The Tuesday before 20 July 2023 -> Melanie raw qa temporal: 24 August 2023 -> Caroline raw qa temporal: The Tuesday before 20 July 2023",
+        "C": "Caroline raw qa temporal: The Tuesday before 20 July 2023 -> Melanie raw qa temporal: 24 August 2023 -> Caroline raw qa temporal: The Tuesday before 20 July 2023 -> Melanie raw qa single hop: Once or twice a year",
+        "D": "Caroline raw qa temporal: The Tuesday before 20 July 2023 -> Caroline raw qa temporal: The Tuesday before 20 July 2023 -> Melanie raw qa temporal: 24 August 2023 -> Melanie raw qa single hop: Once or twice a year"
+      },
+      "question": "Which sequence is consistent with the final state?",
+      "question_type": "single_choice",
+      "sample_id": "native_current_method_graph_dialogue_0377_2225dc3aa9",
+      "source_solver_bucket": "5/5",
+      "stage1_bucket": "3/5",
+      "stage1_exact_count": 3,
+      "stage1_parsed_0": "C",
+      "stage1_prediction_0": "C",
+      "stage1_soft_accuracy": 0.6,
+      "stage2_bucket": "4/5",
+      "stage2_exact_count": 4,
+      "stage2_parsed_0": "D",
+      "stage2_prediction_0": "D",
+      "stage2_predictions": [
+        {
+          "exact_correct": false,
+          "parsed": "D",
+          "partial_credit": 0.0,
+          "prediction": "D",
+          "sample_index": 0
+        },
+        {
+          "exact_correct": true,
+          "parsed": "C",
+          "partial_credit": 1.0,
+          "prediction": "C",
+          "sample_index": 1
+        },
+        {
+          "exact_correct": true,
+          "parsed": "C",
+          "partial_credit": 1.0,
+          "prediction": "C",
+          "sample_index": 2
+        },
+        {
+          "exact_correct": true,
+          "parsed": "C",
+          "partial_credit": 1.0,
+          "prediction": "C",
+          "sample_index": 3
+        },
+        {
+          "exact_correct": true,
+          "parsed": "C",
+          "partial_credit": 1.0,
+          "prediction": "C",
+          "sample_index": 4
+        }
+      ],
+      "stage2_soft_accuracy": 0.8,
+      "validation": {
+        "anti_shortcut_pass": true,
+        "details": {
+          "anti_shortcut_checks": {
+            "answer_near_question_shortcut": false,
+            "distractor_too_easy": false,
+            "evidence_window_position_leakage": false,
+            "gold_label_leakage": false,
+            "gold_text_exposure": false,
+            "keyword_overlap_shortcut": false,
+            "last_session_shortcut_risk": false,
+            "metadata_leakage": false,
+            "option_overlap_shortcut": false
+          },
+          "validation_checks": {
+            "gold_derivable_from_graph": true,
+            "graph_dialogue_consistency": true,
+            "no_ambiguous_pronoun": true,
+            "no_unstated_assumption": true,
+            "options_are_valid": true
+          }
+        },
+        "gold_derivable": true,
+        "graph_dialogue_consistent": true,
+        "graph_validation_pass": true,
+        "option_valid": true,
+        "warnings": []
+      }
+    },
+    {
+      "attack_skill": "delayed_activation",
+      "diagnosis": "Strongest migration signal: stage1 was 5/5 on A, stage2 became 1/5 favoring C. Same hard single-choice sequence template family targeted by repair mining; likely decision-boundary/preference shift from Stage2 repair.",
+      "difficulty_subtype": "hard_single_choice",
+      "gold": [
+        "A"
+      ],
+      "hard_single_choice_template": "sequence_as_single_choice",
+      "options": {
+        "A": "Joanna screenplay status: Finished and plans to submit -> Joanna allergies: Most reptiles, animals with fur, cockroaches, dairy -> Nate gaming room lighting: Red and purple lighting -> Nate raw qa commonsense: the archived report",
+        "B": "Joanna allergies: Most reptiles, animals with fur, cockroaches, dairy -> Joanna screenplay status: Finished and plans to submit -> Nate gaming room lighting: Red and purple lighting -> Nate raw qa commonsense: the archived report",
+        "C": "Joanna screenplay status: Finished and plans to submit -> Nate gaming room lighting: Red and purple lighting -> Joanna allergies: Most reptiles, animals with fur, cockroaches, dairy -> Nate raw qa commonsense: the archived report",
+        "D": "Nate raw qa commonsense: the archived report -> Nate gaming room lighting: Red and purple lighting -> Joanna allergies: Most reptiles, animals with fur, cockroaches, dairy -> Joanna screenplay status: Finished and plans to submit"
+      },
+      "question": "Which sequence is consistent with the final state?",
+      "question_type": "single_choice",
+      "sample_id": "native_current_method_graph_dialogue_0375_d51d9075cd",
+      "source_solver_bucket": "5/5",
+      "stage1_bucket": "5/5",
+      "stage1_exact_count": 5,
+      "stage1_parsed_0": "A",
+      "stage1_prediction_0": "A",
+      "stage1_soft_accuracy": 1.0,
+      "stage2_bucket": "1/5",
+      "stage2_exact_count": 1,
+      "stage2_parsed_0": "C",
+      "stage2_prediction_0": "C",
+      "stage2_predictions": [
+        {
+          "exact_correct": false,
+          "parsed": "C",
+          "partial_credit": 0.0,
+          "prediction": "C",
+          "sample_index": 0
+        },
+        {
+          "exact_correct": false,
+          "parsed": "C",
+          "partial_credit": 0.0,
+          "prediction": "C. Joanna screenplay status: Finished and",
+          "sample_index": 1
+        },
+        {
+          "exact_correct": false,
+          "parsed": "C",
+          "partial_credit": 0.0,
+          "prediction": "C",
+          "sample_index": 2
+        },
+        {
+          "exact_correct": true,
+          "parsed": "A",
+          "partial_credit": 1.0,
+          "prediction": "A",
+          "sample_index": 3
+        },
+        {
+          "exact_correct": false,
+          "parsed": "C",
+          "partial_credit": 0.0,
+          "prediction": "C",
+          "sample_index": 4
+        }
+      ],
+      "stage2_soft_accuracy": 0.2,
+      "validation": {
+        "anti_shortcut_pass": true,
+        "details": {
+          "anti_shortcut_checks": {
+            "answer_near_question_shortcut": false,
+            "distractor_too_easy": false,
+            "evidence_window_position_leakage": false,
+            "gold_label_leakage": false,
+            "gold_text_exposure": false,
+            "keyword_overlap_shortcut": false,
+            "last_session_shortcut_risk": false,
+            "metadata_leakage": false,
+            "option_overlap_shortcut": false
+          },
+          "validation_checks": {
+            "gold_derivable_from_graph": true,
+            "graph_dialogue_consistency": true,
+            "no_ambiguous_pronoun": true,
+            "no_unstated_assumption": true,
+            "options_are_valid": true
+          }
+        },
+        "gold_derivable": true,
+        "graph_dialogue_consistent": true,
+        "graph_validation_pass": true,
+        "option_valid": true,
+        "warnings": []
+      }
+    }
+  ],
+  "k1_wrong_count": 3,
+  "notes": [
+    "All k1-wrong rows parsed to valid option letters; empty_prediction_count=0 and parsed_failure_count=0.",
+    "All three source rows have validation pass and no warnings; automated bad_question_count=0.",
+    "One sequence_as_single_choice row has duplicated-looking temporal option text and is semantically brittle despite passing validators.",
+    "Only one row is a clear Stage2 repair-induced preference migration candidate."
+  ],
+  "qtype_distribution": {
+    "single_choice": 3
+  },
+  "sample_count": 30,
+  "template_distribution": {
+    "override_sensitive": 1,
+    "sequence_as_single_choice": 2
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "boundary_candidate_count": 80,
+  "boundary_frontier_count": 20,
+  "candidate_clean_count": 199,
+  "candidate_duplicate_sample_id_count": 0,
+  "candidate_output_path": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/05_stage2_repair_topup_from_stage1/repair_mining/candidate_pool_repair_combined_with_boundary.jsonl",
+  "candidate_qtype_distribution": {
+    "multi_select": 38,
+    "single_choice": 161
+  },
+  "combined_candidate_count": 199,
+  "combined_repair_frontier_count": 35,
+  "evidence_window_used_as_prompt": false,
+  "frontier_bucket_distribution": {
+    "1/5": 12,
+    "2/5": 13,
+    "3/5": 4,
+    "4/5": 6
+  },
+  "frontier_duplicate_sample_id_count": 0,
+  "frontier_output_path": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/05_stage2_repair_topup_from_stage1/repair_mining/frontier_pool_repair_combined_with_boundary.jsonl",
+  "frontier_qtype_distribution": {
+    "multi_select": 4,
+    "single_choice": 31
+  },
+  "r4_r5_r1_data_or_model_used": false,
+  "repair_candidate_count": 119,
+  "repair_frontier_count": 15,
+  "source_subrun_distribution": {
+    "boundary_topup80_noproxy_t180_c2": 80,
+    "repair_topup_mining119": 119
+  },
+  "status": "success",
+  "strict_frontier_count": 35
+}

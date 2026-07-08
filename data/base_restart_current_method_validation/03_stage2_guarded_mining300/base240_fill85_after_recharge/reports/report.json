@@ -1,0 +1,218 @@
+{
+  "method": "current_method",
+  "experiment": "stage2_guarded_mining300_base240_fill85_after_recharge_gate1000",
+  "run_name": "stage2_guarded_mining300_base240_fill85_after_recharge",
+  "run_root": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/03_stage2_guarded_mining300/base240_fill85_after_recharge",
+  "round": "r4",
+  "parent_round": "base_restart_current_method_seed",
+  "fixed_solver": "solver_base_restart_stage1_merged",
+  "seed_scope": "sample0_5_train_only",
+  "generated_count": 80,
+  "valid_count": 80,
+  "clean_count": 80,
+  "solver_exact_accuracy_k1": 0.575,
+  "solver_soft_accuracy_k5": 0.5475,
+  "soft_buckets": {
+    "0/5": 25,
+    "1/5": 6,
+    "2/5": 5,
+    "3/5": 7,
+    "4/5": 3,
+    "5/5": 34
+  },
+  "near_miss_count": 31,
+  "hard_correct_count": 0,
+  "true_too_hard_count": 2,
+  "bad_question_count": 10,
+  "shortcut_issue_count": 0,
+  "frontier_count": 21,
+  "frontier_yield": 0.2625,
+  "strict_frontier_count": 21,
+  "strict_frontier_yield": 0.2625,
+  "boundary_frontier_count": 21,
+  "boundary_frontier_yield": 0.2625,
+  "frontier_pool_count": 24,
+  "boundary_plus_near_miss_count": 24,
+  "exact_frontier_count": 21,
+  "primary_frontier_count": 12,
+  "secondary_frontier_count": 9,
+  "frontier_candidate_count": 21,
+  "weighted_frontier_candidate_score": 16.5,
+  "frontier_by_bucket": {
+    "5/5": 34,
+    "0/5": 25,
+    "3/5": 7,
+    "1/5": 6,
+    "2/5": 5,
+    "4/5": 3
+  },
+  "excluded_0of5_count": 25,
+  "excluded_5of5_count": 34,
+  "frontier_by_question_type": {
+    "single_choice": 14,
+    "multi_select": 7
+  },
+  "frontier_by_attack_skill": {
+    "conditional_plan": 10,
+    "delayed_activation": 10,
+    "permission_visibility_scope": 1
+  },
+  "hard_single_choice_count": 42,
+  "ordinary_single_choice_count": 6,
+  "hard_single_choice_bucket_distribution": {
+    "5/5": 20,
+    "0/5": 10,
+    "3/5": 6,
+    "2/5": 3,
+    "4/5": 2,
+    "1/5": 1
+  },
+  "ordinary_single_choice_bucket_distribution": {
+    "5/5": 4,
+    "4/5": 1,
+    "3/5": 1
+  },
+  "hard_single_choice_boundary_count": 12,
+  "hard_single_choice_strict_frontier_count": 12,
+  "hard_single_choice_near_miss_count": 0,
+  "hard_single_choice_partial_credit_mean": 0.633333,
+  "hard_single_choice_five_of_five_share": 0.47619,
+  "hard_single_choice_zero_of_five_share": 0.238095,
+  "ordinary_single_choice_five_of_five_share": 0.666667,
+  "ordinary_single_choice_zero_of_five_share": 0.0,
+  "qtype_zero_share": {
+    "multi_select": 0.428571,
+    "ordering": 0.75,
+    "single_choice": 0.208333
+  },
+  "hard_single_choice_by_template": {
+    "minimal_difference": 11,
+    "latest_valid_state": 8,
+    "sequence_as_single_choice": 8,
+    "override_sensitive": 8,
+    "guaranteed_vs_possible": 7
+  },
+  "hard_single_choice_by_template_bucket_distribution": {
+    "guaranteed_vs_possible": {
+      "5/5": 5,
+      "3/5": 1,
+      "0/5": 1
+    },
+    "latest_valid_state": {
+      "0/5": 3,
+      "5/5": 2,
+      "1/5": 1,
+      "3/5": 1,
+      "2/5": 1
+    },
+    "minimal_difference": {
+      "5/5": 5,
+      "0/5": 3,
+      "3/5": 2,
+      "2/5": 1
+    },
+    "override_sensitive": {
+      "5/5": 5,
+      "0/5": 2,
+      "4/5": 1
+    },
+    "sequence_as_single_choice": {
+      "5/5": 3,
+      "3/5": 2,
+      "0/5": 1,
+      "4/5": 1,
+      "2/5": 1
+    }
+  },
+  "hard_single_choice_by_template_frontier_count": {
+    "guaranteed_vs_possible": 1,
+    "latest_valid_state": 3,
+    "minimal_difference": 3,
+    "override_sensitive": 1,
+    "sequence_as_single_choice": 4
+  },
+  "hard_single_choice_by_template_boundary_count": {
+    "guaranteed_vs_possible": 1,
+    "latest_valid_state": 3,
+    "minimal_difference": 3,
+    "override_sensitive": 1,
+    "sequence_as_single_choice": 4
+  },
+  "hard_single_choice_by_template_strict_frontier_count": {
+    "guaranteed_vs_possible": 1,
+    "latest_valid_state": 3,
+    "minimal_difference": 3,
+    "override_sensitive": 1,
+    "sequence_as_single_choice": 4
+  },
+  "hard_single_choice_by_template_near_miss_count": {
+    "guaranteed_vs_possible": 0,
+    "latest_valid_state": 0,
+    "minimal_difference": 0,
+    "override_sensitive": 0,
+    "sequence_as_single_choice": 0
+  },
+  "largest_type_share": 0.666667,
+  "largest_skill_share": 0.47619,
+  "dev_or_heldout_frontier_count": 0,
+  "api_failure_count": 67,
+  "missing_refs": 0,
+  "rows_with_missing_refs": 0,
+  "missing_ref_total": 0,
+  "anchor_leakage_count": 0,
+  "solver_visible_meta_leak_count": 0,
+  "qa_meta_leak_count": 0,
+  "dialogue_meta_leak_count": 0,
+  "length_guard_target_delta": 4000,
+  "length_guard_parent_baseline_tokens": 7753,
+  "length_guard_baseline_mode": "max_actual_parent_and_configured_baseline",
+  "parent_dialogue_tokens_mean": 6905.45,
+  "final_dialogue_tokens_mean": 12158.975,
+  "length_delta_tokens_mean": 5253.525,
+  "length_guard_effective_parent_tokens_mean": 7753.0,
+  "length_guard_effective_delta_tokens_mean": 4405.975,
+  "length_guard_fallback_used": false,
+  "fallback_delta": 0,
+  "emergency_floor": 0,
+  "rows_below_4000_delta": 0,
+  "challenger_generation_sources": {
+    "current_method.native_challenger_generation.graph_conditioned_api_dialogue": 80
+  },
+  "policy_created_by": "native_current_method_graph_conditioned_api_dialogue",
+  "policy_source": "native_current_method_local_policy",
+  "policy_validation_pass": true,
+  "policy_retry_count": 0,
+  "policy_fallback_used": false,
+  "policy_attack_skill_weights": {
+    "belief_vs_reality": 0.13,
+    "who_knows_what": 0.13,
+    "permission_visibility_scope": 0.1,
+    "delayed_activation": 0.1,
+    "expired_memory": 0.1,
+    "cancel_restore": 0.1,
+    "conflicting_reports": 0.1,
+    "conditional_plan": 0.1,
+    "multi_object_dependency": 0.1,
+    "timeline_fork_merge": 0.04
+  },
+  "policy_question_type_weights": {
+    "ordering": 0.36,
+    "multi_select": 0.28,
+    "evidence_selection": 0.2,
+    "state_reconstruction": 0.16
+  },
+  "difficulty_plan_stage": null,
+  "difficulty_plan_manual_policy_correction": null,
+  "seed_source_audit_pass": true,
+  "failure_matrix": {
+    "by_frontier_category": {
+      "easy": 37,
+      "clean_near_miss": 31,
+      "bad_question": 10,
+      "true_too_hard": 2
+    },
+    "validation_failures": {},
+    "shortcut_failures": {}
+  },
+  "recommendation": "viable_gate"
+}

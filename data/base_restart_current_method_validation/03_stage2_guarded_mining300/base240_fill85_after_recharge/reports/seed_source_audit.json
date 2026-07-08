@@ -1,0 +1,70 @@
+{
+  "method": "current_method",
+  "run_name": "stage2_guarded_mining300_base240_fill85_after_recharge",
+  "round": "r4",
+  "parent_round": "base_restart_current_method_seed",
+  "seed_source": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/03_stage2_guarded_mining300/base240_fill85_after_recharge/reports/round_dataset_train_seed_rows.jsonl",
+  "seed_scope": "sample0_5_train_only",
+  "raw_seed_count": 16,
+  "raw_split_counts": {
+    "train": 16
+  },
+  "raw_training_use_counts": {
+    "train_candidate": 16
+  },
+  "raw_source_split_counts": {
+    "train": 16
+  },
+  "raw_sample_name_counts": {
+    "sample0": 2,
+    "sample1": 2,
+    "sample2": 3,
+    "sample3": 3,
+    "sample4": 3,
+    "sample5": 3
+  },
+  "train_seed_count": 16,
+  "dev_seed_count": 0,
+  "heldout_seed_count": 0,
+  "sample_name_counts": {
+    "sample0": 2,
+    "sample1": 2,
+    "sample2": 3,
+    "sample3": 3,
+    "sample4": 3,
+    "sample5": 3
+  },
+  "allowed_sample_names": [
+    "sample0",
+    "sample1",
+    "sample2",
+    "sample3",
+    "sample4",
+    "sample5"
+  ],
+  "forbidden_seed_count": 0,
+  "forbidden_reason_counts": {},
+  "schema_compatibility_mode": "current_method_generation",
+  "seed_parent_round_accepted": true,
+  "seed_parent_round_reason": "accepted parent round base_restart_current_method_seed",
+  "extracted_field_sources": {
+    "split": {
+      "row.split": 16
+    },
+    "training_use": {
+      "row.training_use": 16
+    },
+    "source_split": {
+      "row.source_split": 16
+    },
+    "sample_name": {
+      "row.sample_name": 16
+    },
+    "heldout_split": {
+      "unknown": 16
+    }
+  },
+  "unknown_split_count": 0,
+  "unknown_sample_name_count": 0,
+  "pass": true
+}

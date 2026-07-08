@@ -1,0 +1,200 @@
+{
+  "total": 80,
+  "by_frontier_category": {
+    "easy": 37,
+    "clean_near_miss": 31,
+    "bad_question": 10,
+    "true_too_hard": 2
+  },
+  "by_question_type": {
+    "single_choice": 48,
+    "multi_select": 28,
+    "ordering": 4
+  },
+  "by_attack_skill": {
+    "conditional_plan": 42,
+    "delayed_activation": 32,
+    "permission_visibility_scope": 3,
+    "timeline_fork_merge": 3
+  },
+  "validation_failures": {},
+  "shortcut_failures": {},
+  "soft_buckets_by_question_type": {
+    "multi_select": {
+      "2/5": 2,
+      "1/5": 5,
+      "0/5": 12,
+      "5/5": 9
+    },
+    "ordering": {
+      "0/5": 3,
+      "5/5": 1
+    },
+    "single_choice": {
+      "5/5": 24,
+      "0/5": 10,
+      "3/5": 7,
+      "1/5": 1,
+      "4/5": 3,
+      "2/5": 3
+    }
+  },
+  "soft_buckets_by_attack_skill": {
+    "conditional_plan": {
+      "5/5": 16,
+      "2/5": 2,
+      "1/5": 4,
+      "0/5": 16,
+      "3/5": 3,
+      "4/5": 1
+    },
+    "delayed_activation": {
+      "5/5": 16,
+      "3/5": 4,
+      "1/5": 1,
+      "0/5": 6,
+      "2/5": 3,
+      "4/5": 2
+    },
+    "permission_visibility_scope": {
+      "5/5": 1,
+      "1/5": 1,
+      "0/5": 1
+    },
+    "timeline_fork_merge": {
+      "0/5": 2,
+      "5/5": 1
+    }
+  },
+  "method": "current_method",
+  "labels": [
+    "clean_near_miss",
+    "hard_correct",
+    "true_too_hard",
+    "bad_question",
+    "shortcut_issue",
+    "easy"
+  ],
+  "by_seed_split": {
+    "train": 80
+  },
+  "by_seed_sample_name": {
+    "sample3": 22,
+    "sample4": 17,
+    "sample1": 13,
+    "sample2": 12,
+    "sample0": 9,
+    "sample5": 7
+  },
+  "frontier_by_seed_sample_name": {
+    "sample3": 7,
+    "sample1": 4,
+    "sample0": 3,
+    "sample5": 3,
+    "sample2": 2,
+    "sample4": 2
+  },
+  "bad_question_reasons": {
+    "0/5 with insufficient partial credit": 10
+  },
+  "shortcut_warnings": {},
+  "by_difficulty_cell": {
+    "multi_select|conditional_plan": {
+      "n": 25,
+      "mean_soft_accuracy": 0.384,
+      "soft_buckets": {
+        "0/5": 11,
+        "1/5": 4,
+        "2/5": 2,
+        "5/5": 8
+      },
+      "by_frontier_category": {
+        "clean_near_miss": 16,
+        "easy": 8,
+        "true_too_hard": 1
+      },
+      "frontier_count": 6
+    },
+    "multi_select|permission_visibility_scope": {
+      "n": 3,
+      "mean_soft_accuracy": 0.4,
+      "soft_buckets": {
+        "0/5": 1,
+        "1/5": 1,
+        "5/5": 1
+      },
+      "by_frontier_category": {
+        "clean_near_miss": 2,
+        "easy": 1
+      },
+      "frontier_count": 1
+    },
+    "ordering|conditional_plan": {
+      "n": 1,
+      "mean_soft_accuracy": 0.0,
+      "soft_buckets": {
+        "0/5": 1
+      },
+      "by_frontier_category": {
+        "clean_near_miss": 1
+      },
+      "frontier_count": 0
+    },
+    "ordering|timeline_fork_merge": {
+      "n": 3,
+      "mean_soft_accuracy": 0.333333,
+      "soft_buckets": {
+        "0/5": 2,
+        "5/5": 1
+      },
+      "by_frontier_category": {
+        "clean_near_miss": 2,
+        "easy": 1
+      },
+      "frontier_count": 0
+    },
+    "single_choice|conditional_plan": {
+      "n": 16,
+      "mean_soft_accuracy": 0.6625,
+      "soft_buckets": {
+        "0/5": 4,
+        "3/5": 3,
+        "4/5": 1,
+        "5/5": 8
+      },
+      "by_frontier_category": {
+        "bad_question": 4,
+        "clean_near_miss": 3,
+        "easy": 9
+      },
+      "frontier_count": 4
+    },
+    "single_choice|delayed_activation": {
+      "n": 32,
+      "mean_soft_accuracy": 0.66875,
+      "soft_buckets": {
+        "0/5": 6,
+        "1/5": 1,
+        "2/5": 3,
+        "3/5": 4,
+        "4/5": 2,
+        "5/5": 16
+      },
+      "by_frontier_category": {
+        "bad_question": 6,
+        "clean_near_miss": 7,
+        "easy": 18,
+        "true_too_hard": 1
+      },
+      "frontier_count": 10
+    }
+  },
+  "difficulty_cell_counts": {
+    "multi_select|conditional_plan": 25,
+    "multi_select|permission_visibility_scope": 3,
+    "ordering|conditional_plan": 1,
+    "ordering|timeline_fork_merge": 3,
+    "single_choice|conditional_plan": 16,
+    "single_choice|delayed_activation": 32
+  }
+}

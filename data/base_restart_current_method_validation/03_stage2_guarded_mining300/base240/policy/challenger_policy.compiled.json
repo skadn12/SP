@@ -1,0 +1,234 @@
+{
+  "policy_id": "stage2_guarded_mining300_base240_native_current_method_graph_conditioned_api_dialogue_v1_policy",
+  "created_by": "native_current_method_graph_conditioned_api_dialogue",
+  "method": "current_method",
+  "native_challenger_mode": "graph_conditioned_api_dialogue",
+  "parent_run": "base_restart_current_method_seed",
+  "target_round": "r4",
+  "fixed_solver": "solver_base_restart_stage1_merged",
+  "attack_hypotheses": [
+    "Graph-conditioned native mode expands a frozen current graph/event_plan with the API.",
+    "Dialogue is generated from current graph anchors and then verified before QA-last construction.",
+    "Final gold/evidence/options are rebuilt from current graph plus verified current alignment."
+  ],
+  "attack_skill_weights": {
+    "belief_vs_reality": 0.13,
+    "who_knows_what": 0.13,
+    "permission_visibility_scope": 0.1,
+    "delayed_activation": 0.1,
+    "expired_memory": 0.1,
+    "cancel_restore": 0.1,
+    "conflicting_reports": 0.1,
+    "conditional_plan": 0.1,
+    "multi_object_dependency": 0.1,
+    "timeline_fork_merge": 0.04
+  },
+  "question_type_weights": {
+    "ordering": 0.36,
+    "multi_select": 0.28,
+    "evidence_selection": 0.2,
+    "state_reconstruction": 0.16
+  },
+  "difficulty_targets": {
+    "target_soft_accuracy_range": [
+      0.2,
+      0.6
+    ],
+    "avoid_easy_threshold": 0.8,
+    "avoid_too_hard_threshold": 0.0
+  },
+  "anti_shortcut_rules": [
+    "do not expose answer labels in question text",
+    "do not place all evidence in only the first or last two turns",
+    "derive ordering gold from earliest visible support turns"
+  ],
+  "generation_instructions": [
+    "use native graph_conditioned_api_dialogue challenger mode",
+    "call API for graph/event_plan expansion",
+    "call API for graph-conditioned dialogue expansion with internal current anchors",
+    "strip anchors from solver-visible dialogue",
+    "verify current graph-dialogue alignment before QA generation",
+    "generate QA last from current graph and verified current alignment",
+    "do not route through old_gate.generate_samples"
+  ],
+  "expected_frontier_profile": {
+    "primary_label": "clean_near_miss",
+    "target_soft_accuracy_range": [
+      0.2,
+      0.6
+    ],
+    "minimum_partial_credit": 0.4,
+    "allow_hard_correct": true,
+    "dev_or_heldout_frontier_count": 0,
+    "max_largest_question_type_share": 0.35,
+    "max_largest_attack_skill_share": 0.25
+  },
+  "policy_source": "native_current_method_local_policy",
+  "policy_validation_pass": true,
+  "policy_fallback_used": false,
+  "policy_retry_count": 0,
+  "required_api_payload_keys": [],
+  "hard_validation_gates": [
+    "forbid_dev_heldout_seed",
+    "require_gold_graph_or_state_chain_derivable",
+    "require_anti_shortcut_pass",
+    "require_native_contract_validation"
+  ],
+  "disabled_question_types": [
+    "invalidated_statement_detection"
+  ],
+  "audit_only_question_types": [
+    "invalidated_statement_detection"
+  ],
+  "generation_backend": "native_current_method",
+  "native_generator_version": "graph_conditioned_api_dialogue_v1",
+  "difficulty_plan": {
+    "question_type_shares": {
+      "single_choice": 0.6,
+      "multi_select": 0.35,
+      "ordering": 0.05
+    },
+    "allowed_question_types": [
+      "single_choice",
+      "multi_select",
+      "ordering"
+    ],
+    "single_choice_subtype_shares": {
+      "ordinary_single_choice": 0.083333,
+      "hard_single_choice": 0.916667
+    },
+    "single_choice_subtype_hardness_mix": {
+      "ordinary_single_choice": {
+        "h0": 0.85,
+        "h1": 0.15,
+        "h2": 0.0
+      },
+      "hard_single_choice": {
+        "h0": 0.5,
+        "h1": 0.4,
+        "h2": 0.1
+      }
+    },
+    "hard_single_choice_template_shares": {
+      "minimal_difference": 0.22,
+      "latest_valid_state": 0.22,
+      "sequence_as_single_choice": 0.22,
+      "guaranteed_vs_possible": 0.17,
+      "override_sensitive": 0.17
+    },
+    "cell_weights": {
+      "single_choice|conditional_plan": 0.4,
+      "single_choice|delayed_activation": 0.6,
+      "multi_select|conditional_plan": 0.88,
+      "multi_select|permission_visibility_scope": 0.12,
+      "ordering|timeline_fork_merge": 0.9,
+      "ordering|conditional_plan": 0.1
+    },
+    "cell_hardness_mix": {
+      "single_choice|conditional_plan": {
+        "h0": 0.5,
+        "h1": 0.4,
+        "h2": 0.1
+      },
+      "single_choice|delayed_activation": {
+        "h0": 0.5,
+        "h1": 0.4,
+        "h2": 0.1
+      },
+      "multi_select|conditional_plan": {
+        "h0": 0.7,
+        "h1": 0.3,
+        "h2": 0.0
+      },
+      "multi_select|permission_visibility_scope": {
+        "h0": 0.9,
+        "h1": 0.1,
+        "h2": 0.0
+      },
+      "ordering|timeline_fork_merge": {
+        "h0": 0.85,
+        "h1": 0.15,
+        "h2": 0.0
+      },
+      "ordering|conditional_plan": {
+        "h0": 0.9,
+        "h1": 0.1,
+        "h2": 0.0
+      }
+    },
+    "qtype_curriculum": {
+      "stage": "stage2_guarded_mining300_base240",
+      "mode": "guarded_mining_base",
+      "ordinary_single_choice": 0.05,
+      "hard_single_choice": 0.55,
+      "multi_select": 0.35,
+      "ordering": 0.05,
+      "single_choice": 0.6,
+      "ordering_probe_only": true,
+      "ordering_bonus_allowed": false,
+      "manual_policy_correction": "stage2 guarded mining base: ordering capped at 5%, multi_select h0/h1 only, hard_single_choice h2 limited"
+    }
+  },
+  "qtype_curriculum": {
+    "stage": "stage2_guarded_mining300_base240",
+    "mode": "guarded_mining_base",
+    "ordinary_single_choice": 0.05,
+    "hard_single_choice": 0.55,
+    "multi_select": 0.35,
+    "ordering": 0.05,
+    "single_choice": 0.6,
+    "ordering_probe_only": true,
+    "ordering_bonus_allowed": false,
+    "manual_policy_correction": "stage2 guarded mining base: ordering capped at 5%, multi_select h0/h1 only, hard_single_choice h2 limited"
+  },
+  "question_type_shares": {
+    "single_choice": 0.6,
+    "multi_select": 0.35,
+    "ordering": 0.05
+  },
+  "allowed_question_types": [
+    "single_choice",
+    "multi_select",
+    "ordering"
+  ],
+  "single_choice_subtype_shares": {
+    "ordinary_single_choice": 0.083333,
+    "hard_single_choice": 0.916667
+  },
+  "single_choice_subtype_hardness_mix": {
+    "ordinary_single_choice": {
+      "h0": 0.85,
+      "h1": 0.15,
+      "h2": 0.0
+    },
+    "hard_single_choice": {
+      "h0": 0.5,
+      "h1": 0.4,
+      "h2": 0.1
+    }
+  },
+  "hard_single_choice_template_shares": {
+    "minimal_difference": 0.22,
+    "latest_valid_state": 0.22,
+    "sequence_as_single_choice": 0.22,
+    "guaranteed_vs_possible": 0.17,
+    "override_sensitive": 0.17
+  },
+  "difficulty_plan_stage": "stage2_guarded_mining300_base240",
+  "difficulty_plan_manual_policy_correction": "stage2 guarded mining base: ordering capped at 5%, multi_select h0/h1 only, hard_single_choice h2 limited",
+  "controller_state_path": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/states/stage2_guarded_mining300_base_state.json",
+  "controller_source_solver": {
+    "solver_name": "solver_base_restart_stage1_merged",
+    "solver_model": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/accepted_models/solver_base_restart_stage1_merged",
+    "solver_tokenizer": "/root/autodl-tmp/Qwen3-4B",
+    "source_run": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/03_stage2_guarded_mining300/base240",
+    "source_eval_file": null
+  },
+  "length_guard": {
+    "length_guard_enabled": true,
+    "round_number": 4,
+    "min_length_delta_tokens": 4000,
+    "length_guard_parent_baseline_tokens": 7753,
+    "length_guard_baseline_mode": "max_actual_parent_and_configured_baseline"
+  }
+}

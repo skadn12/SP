@@ -15,6 +15,10 @@ current_method_runs/
 *.nohup.log
 *.log
 
+# Curated reproducibility data included with this repository.
+!data/
+!data/**
+
 # Model/checkpoint artifacts
 checkpoints/
 models/
@@ -43,4 +47,3 @@ venv/
 .DS_Store
 .idea/
 .vscode/
-
