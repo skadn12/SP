@@ -1,0 +1,46 @@
+# Secrets
+config.json
+*.env
+.env
+
+# Generated runs and datasets
+runs/
+outputs/
+eval_sets/
+eval_reports/
+base_restart_current_method_validation/
+current_method_runs/
+*.jsonl
+*.partial.jsonl
+*.nohup.log
+*.log
+
+# Model/checkpoint artifacts
+checkpoints/
+models/
+*.safetensors
+*.bin
+*.pt
+*.pth
+adapter_model.*
+optimizer.pt
+scheduler.pt
+
+# Python/cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Local environments
+.venv/
+.venv-*/
+venv/
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
+

@@ -1,0 +1,23 @@
+{
+  "name": "current-method-api-selfplay",
+  "description": "Code-only package for graph-conditioned current-method self-play and Stage64 API QA diversification.",
+  "includes_data": false,
+  "includes_models": false,
+  "main_entrypoint": "scripts/run_auto_graph_expansion_round.py",
+  "core_modules": [
+    "scripts/current_method/native_api_graph_dialogue_expansion.py",
+    "scripts/current_method/native_challenger_generation.py",
+    "scripts/current_method/api_challenger_generation.py",
+    "scripts/current_method/frontier_selection.py",
+    "scripts/current_method/report_builder.py",
+    "scripts/current_method/seed_audit.py"
+  ],
+  "api_prompt_file": "scripts/current_method/native_api_graph_dialogue_expansion.py",
+  "stage64_flag": "--qa-operation-answer-type-diversification",
+  "docs": [
+    "README.md",
+    "docs/CODE_MAP.md",
+    "docs/GITHUB.md"
+  ],
+  "config_example": "configs/config.example.json"
+}

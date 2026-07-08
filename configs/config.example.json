@@ -1,0 +1,8 @@
+{
+  "api": {
+    "base_url": "https://api.siliconflow.cn/v1",
+    "model": "Qwen/Qwen3-14B",
+    "api_key": "REPLACE_WITH_YOUR_API_KEY"
+  }
+}
+

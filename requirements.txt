@@ -1,0 +1,14 @@
+# Generation / validation
+transformers>=4.40
+requests>=2.31
+
+# Optional solver evaluation
+vllm
+
+# Optional LoRA training / merge
+torch
+peft
+accelerate
+datasets
+safetensors
+
