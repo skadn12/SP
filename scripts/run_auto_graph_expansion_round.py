@@ -507,6 +507,86 @@ def parse_csv(value: str) -> list[str]:
     return [item.strip() for item in str(value or "").split(",") if item.strip()]
 
 
+def options_as_map(sample: dict[str, Any]) -> dict[str, str]:
+    qa = sample.get("qa") if isinstance(sample.get("qa"), dict) else {}
+    raw_options = sample.get("options")
+    if raw_options is None:
+        raw_options = qa.get("options")
+    if isinstance(raw_options, dict):
+        return {str(key): str(value) for key, value in raw_options.items()}
+    if isinstance(raw_options, list):
+        options: dict[str, str] = {}
+        for item in raw_options:
+            if not isinstance(item, dict):
+                continue
+            option_id = item.get("id") or item.get("option_id")
+            if option_id is None:
+                continue
+            options[str(option_id)] = str(item.get("text") or "")
+        return options
+    return {}
+
+
+def gold_letters_for_chat(sample: dict[str, Any]) -> list[str]:
+    qa = sample.get("qa") if isinstance(sample.get("qa"), dict) else {}
+    candidates = (
+        sample.get("gold_options"),
+        qa.get("gold"),
+        sample.get("gold_answer"),
+        sample.get("gold_answers"),
+        sample.get("gold_order"),
+    )
+    for value in candidates:
+        if isinstance(value, list) and value:
+            return [str(item) for item in value]
+        if isinstance(value, str) and value.strip():
+            return [value.strip()]
+    return []
+
+
+def sft_compatible_sample(sample: dict[str, Any]) -> dict[str, Any]:
+    out = copy.deepcopy(sample)
+    qa = out.get("qa") if isinstance(out.get("qa"), dict) else {}
+    question_type = str(out.get("question_type") or qa.get("question_type") or "single_choice")
+    options = options_as_map(out)
+    gold_letters = gold_letters_for_chat(out)
+
+    out["question_type"] = question_type
+    out["question"] = out.get("question") or qa.get("question") or qa.get("question_text") or out.get("question_text") or ""
+    out["options"] = options
+    if question_type == "single_choice":
+        gold_option = str(out.get("gold_option") or qa.get("gold_option") or (gold_letters[0] if gold_letters else ""))
+        out["gold_option"] = gold_option
+        out["gold_options"] = [gold_option] if gold_option else []
+        out["gold_answer"] = options.get(gold_option) or str(out.get("gold_answer_text") or qa.get("gold_answer_text") or gold_option)
+    elif question_type == "ordering":
+        order = gold_letters
+        out["gold_order"] = order
+        out["gold_options"] = order
+        out["gold_answer"] = order
+    elif question_type == "multi_select":
+        out["gold_options"] = gold_letters
+        out["gold_answer"] = gold_letters
+    else:
+        out["gold_answer"] = str(out.get("gold_answer_text") or (gold_letters[0] if gold_letters else out.get("gold_answer") or ""))
+
+    if not out.get("expanded_dialogue_text"):
+        turns = out.get("dialogue", {}).get("turns") if isinstance(out.get("dialogue"), dict) else []
+        out["expanded_dialogue_text"] = "\n".join(
+            f"[{turn.get('turn_id')}] {turn.get('speaker')}: {turn.get('text')}"
+            for turn in turns
+            if isinstance(turn, dict)
+        )
+    out.setdefault("expanded_graph_id", out.get("sample_id") or out.get("expanded_dialogue_id") or "unknown_graph")
+    out.setdefault("expanded_dialogue_id", f"{out.get('expanded_graph_id')}_dialogue")
+    return out
+
+
+def write_current_method_sft_train(output_dir: str | Path, samples: list[dict[str, Any]]) -> None:
+    out_dir = Path(output_dir)
+    write_jsonl(out_dir / "sft_train.jsonl", (v13.build_chat_record(sft_compatible_sample(sample)) for sample in samples))
+
+
 def ratio_weights(raw: dict[str, float], *, floor: float = 0.03, smoothing: float = 0.20) -> dict[str, float]:
     keys = list(raw)
     if not keys:
@@ -2148,6 +2228,7 @@ def run_current_method(args: argparse.Namespace) -> int:
     )
     current_generation.write_jsonl(Path(args.output_dir) / "samples.jsonl", samples)
     current_generation.write_jsonl(Path(args.output_dir) / "valid_samples.jsonl", [sample for sample in samples if current_reports.base.base_valid(sample)])
+    write_current_method_sft_train(args.output_dir, samples)
 
     report = current_reports.write_reports(
         args=args,
