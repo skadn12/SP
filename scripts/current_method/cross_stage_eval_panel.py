@@ -180,7 +180,7 @@ def markdown_report(original: dict[str, dict[str, Any]], chat: dict[str, Any]) -
             "",
             "1. Stage1 的阶段收益成立：Stage1 在 Stage1 heldout 上是 77.27%，base 是 45.45%。",
             "2. Stage2 的阶段收益成立，但幅度较小：Stage2 在 Stage2 heldout 上是 56.67%，Stage1 是 53.33%。",
-            "3. Stage64 当前 heldout 不能作为能力增长证据：shuffle 后没有重新按 solver 评估重选 frontier，base/Stage1/Stage2 在该 heldout 上都达到 97.59%，说明它已经不是 Stage2-calibrated frontier。",
+            "3. Stage64 当前 heldout 不能作为能力增长证据：shuffle 后做过选项重排、标签重平衡和基于旧 `frontier_label` 的重新切分，但没有用固定 solver 重新评估 shuffle 后样本并重选 frontier；base/Stage1/Stage2 在该 heldout 上都达到 97.59%，说明它已经不是 Stage2-calibrated frontier。",
             "4. Stage64 当前模型对旧阶段 heldout 有明显遗忘：在 Stage1 heldout 上降到 36.36%，在 Stage2 heldout 上降到 16.67%。这和外部合并评估下降是一致的。",
             "",
             "## Original-format Verifier: K1 Accuracy",
@@ -251,7 +251,7 @@ def markdown_report(original: dict[str, dict[str, Any]], chat: dict[str, Any]) -
             "6. 训练 Stage64 solver；",
             "7. 用这个新 heldout 证明 Stage64 solver > Stage2 solver，同时用 Stage1/Stage2 heldout 和外部集做遗忘检查。",
             "",
-            "因此，目前可以在论文里使用 Stage1 和 Stage2 的递进结果；Stage64 需要先完成 shuffle 后的 frontier 重新校准，才能作为严格的第三阶段能力增长证据。",
+            "因此，目前可以在论文里使用 Stage1 和 Stage2 的递进结果；Stage64 需要先完成 shuffle 后的 solver 重新评估和 frontier 重新校准，才能作为严格的第三阶段能力增长证据。",
             "",
         ]
     )

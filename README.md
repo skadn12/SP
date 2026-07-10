@@ -365,7 +365,7 @@ python scripts/current_method/cross_stage_eval_panel.py \
 
 默认只汇总已有评测 JSON 并写 `cross_stage_eval_report.md`，不会重新跑 GPU。需要重跑时再加 `--run-original` 或 `--run-chat`。
 
-当前面板结论是：Stage1 和 Stage2 的逐阶段收益已经成立；Stage64 因为 option shuffle 后没有重新按固定 Stage2 solver 校准 frontier，当前 heldout 不能作为严格能力增长证据。详细解释见 `docs/CROSS_STAGE_EVAL_PANEL.md`。
+当前面板结论是：Stage1 和 Stage2 的逐阶段收益已经成立；Stage64 虽然在 option shuffle 后做过标签重平衡和基于旧 frontier 标记的重新切分，但没有重新用固定 Stage2 solver 评估并重选 frontier，所以当前 heldout 不能作为严格能力增长证据。详细解释见 `docs/CROSS_STAGE_EVAL_PANEL.md`。
 
 ## 质量门
 

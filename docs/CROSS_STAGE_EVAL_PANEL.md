@@ -73,14 +73,16 @@ python scripts/current_method/cross_stage_eval_panel.py \
 
 ## Stage64 当前问题
 
-Stage64 这轮做了 option shuffle，用来避免 gold label 分布偏置。但 shuffle 之后，如果继续沿用 shuffle 前的 `solver_eval` 和 frontier 标记，就会出现一个问题：
+Stage64 这轮确实做了 option shuffle，也做了 gold label 重平衡和基于旧 `frontier_label` 的 train/heldout 重新切分，用来避免 gold label 分布偏置。但这不是“重新用 solver 评估后再筛 frontier”。
+
+shuffle 之后，如果继续沿用 shuffle 前的 `solver_eval` 和 frontier 标记，就会出现一个问题：
 
 ```text
 样本的选项位置变了，
 但 frontier/heldout 难度标签没有重新用固定 solver 评估。
 ```
 
-因此当前 Stage64 heldout 已经不是严格的 Stage2-calibrated frontier。它可以用于检查格式、泄漏和 clean retention，但不能用于证明 Stage64 solver 超过 Stage2 solver。
+因此当前 Stage64 heldout 已经不是严格的 Stage2-calibrated frontier。它可以用于检查格式、泄漏、gold label 是否平衡和 clean retention，但不能用于证明 Stage64 solver 超过 Stage2 solver。
 
 ## 正确闭环
 
