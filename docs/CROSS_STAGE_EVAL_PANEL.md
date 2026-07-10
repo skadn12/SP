@@ -84,6 +84,39 @@ shuffle 之后，如果继续沿用 shuffle 前的 `solver_eval` 和 frontier �
 
 因此当前 Stage64 heldout 已经不是严格的 Stage2-calibrated frontier。它可以用于检查格式、泄漏、gold label 是否平衡和 clean retention，但不能用于证明 Stage64 solver 超过 Stage2 solver。
 
+## 已执行的重校准结果
+
+我们已经对 shuffled 492 条 clean samples 执行了固定 Stage2 solver 的重新评估和 frontier 重筛。输出目录：
+
+```text
+base_restart_current_method_validation/71_stage64_shuffled_recalibrated_stage2
+```
+
+重校准结果：
+
+| bucket | count |
+| --- | ---: |
+| 0/5 | 49 |
+| 1/5 | 4 |
+| 2/5 | 5 |
+| 3/5 | 3 |
+| 4/5 | 3 |
+| 5/5 | 428 |
+
+按新的 bucket 重筛后：
+
+```text
+frontier_total: 15
+frontier_train: 12
+frontier_heldout: 3
+hard0_diagnostic: 49
+easy5_diagnostic: 428
+```
+
+这说明原来的 408 frontier 在 label shuffle 后大部分变成了 Stage2 solver 已经稳定会做的 easy5。也就是说，旧 frontier 里确实存在很强的选项标签/位置偏置污染。
+
+因此不建议把这 12 条 recalibrated frontier_train 当作正式 Stage64 训练集。它只能用于 smoke test；若要做论文里的 Stage64 能力增长，需要继续生成或挖掘更多 shuffle 后仍处于 1/5-4/5 区间的 frontier。
+
 ## 正确闭环
 
 Stage64 后续应按这个流程重做：

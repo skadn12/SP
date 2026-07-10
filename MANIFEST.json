@@ -10,6 +10,7 @@
     "scripts/current_method/api_challenger_generation.py",
     "scripts/current_method/frontier_selection.py",
     "scripts/current_method/cross_stage_eval_panel.py",
+    "scripts/current_method/recalibrate_stage64_shuffled_frontier.py",
     "scripts/current_method/report_builder.py",
     "scripts/current_method/seed_audit.py"
   ],

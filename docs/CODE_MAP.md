@@ -90,6 +90,12 @@ development and review.
   - can rerun original-format verifier evals or summarize existing JSON into
     `cross_stage_eval_report.md`.
 
+- `scripts/current_method/recalibrate_stage64_shuffled_frontier.py`
+  - Stage64 post-shuffle recalibration driver;
+  - clears stale `solver_eval` / `frontier_label` fields;
+  - reruns a fixed Stage2 solver on shuffled clean samples;
+  - rebuilds frontier, hard0, easy5, and grouped train/heldout split files.
+
 - `scripts/current_method/seed_audit.py`
   - provenance checks for train/dev/heldout seed rows.
 

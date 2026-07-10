@@ -140,6 +140,7 @@ python scripts/run_auto_graph_expansion_round.py \
 | `scripts/current_method/frontier_selection.py` | frontier selection | 根据 solver 评测结果筛 frontier、strict frontier、boundary frontier 等。 |
 | `scripts/current_method/report_builder.py` | 报告生成 | 汇总生成质量、frontier yield、题型分布、solver 表现、长度统计等。 |
 | `scripts/current_method/cross_stage_eval_panel.py` | 跨阶段能力验证 | 汇总或复跑 Stage1/Stage2/Stage64 heldout 上的 solver 对比，验证 self-play 是否真的逐阶段提升。 |
+| `scripts/current_method/recalibrate_stage64_shuffled_frontier.py` | Stage64 shuffle 后重校准 | 清空旧 solver/frontier 字段，用固定 Stage2 solver 重评估 shuffled clean samples，并重新筛 frontier / hard0 / easy5 / grouped heldout。 |
 | `scripts/current_method/write_base_restart_validation_summary.py` | 验证汇总 | 为 base restart / current-method validation 运行写总览 summary。 |
 | `scripts/current_method/diagnostics_context_ablation.py` | 诊断实验 | 做 context ablation，分析 solver 对 parent context / evidence window 的依赖。 |
 | `scripts/current_method/eval_api_14b_samples.py` | API solver 评测 | 用 API 模型评测样本，可用于快速 sanity check 或外部 judge。 |
@@ -366,6 +367,18 @@ python scripts/current_method/cross_stage_eval_panel.py \
 默认只汇总已有评测 JSON 并写 `cross_stage_eval_report.md`，不会重新跑 GPU。需要重跑时再加 `--run-original` 或 `--run-chat`。
 
 当前面板结论是：Stage1 和 Stage2 的逐阶段收益已经成立；Stage64 虽然在 option shuffle 后做过标签重平衡和基于旧 frontier 标记的重新切分，但没有重新用固定 Stage2 solver 评估并重选 frontier，所以当前 heldout 不能作为严格能力增长证据。详细解释见 `docs/CROSS_STAGE_EVAL_PANEL.md`。
+
+Stage64 shuffle 后重校准入口：
+
+```bash
+python scripts/current_method/recalibrate_stage64_shuffled_frontier.py \
+  --input base_restart_current_method_validation/69_stage64_api_selfplay500_ctx32768/option_shuffled_seed20260710/clean_samples.jsonl \
+  --output-dir base_restart_current_method_validation/71_stage64_shuffled_recalibrated_stage2 \
+  --solver-model base_restart_current_method_validation/accepted_models/solver_base_restart_stage2_merged \
+  --max-model-len 32768
+```
+
+这一步不会重新调用 API，只会重新跑固定 solver 评估并重建 frontier split。
 
 ## 质量门
 
