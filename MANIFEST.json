@@ -9,6 +9,7 @@
     "scripts/current_method/native_challenger_generation.py",
     "scripts/current_method/api_challenger_generation.py",
     "scripts/current_method/frontier_selection.py",
+    "scripts/current_method/cross_stage_eval_panel.py",
     "scripts/current_method/report_builder.py",
     "scripts/current_method/seed_audit.py"
   ],
@@ -17,6 +18,7 @@
   "docs": [
     "README.md",
     "docs/CODE_MAP.md",
+    "docs/CROSS_STAGE_EVAL_PANEL.md",
     "docs/GITHUB.md"
   ],
   "config_example": "configs/config.example.json"

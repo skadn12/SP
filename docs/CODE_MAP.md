@@ -83,6 +83,13 @@ development and review.
 - `scripts/current_method/report_builder.py`
   - generation reports and solver evaluation summaries.
 
+- `scripts/current_method/cross_stage_eval_panel.py`
+  - cross-stage heldout comparison panel;
+  - verifies whether Stage1 beats base on Stage1 heldout, Stage2 beats
+    Stage1 on Stage2 heldout, and Stage64 beats Stage2 on Stage64 heldout;
+  - can rerun original-format verifier evals or summarize existing JSON into
+    `cross_stage_eval_report.md`.
+
 - `scripts/current_method/seed_audit.py`
   - provenance checks for train/dev/heldout seed rows.
 
@@ -116,4 +123,3 @@ This package does not include data or model files. Pass those paths explicitly:
 - `--solver-tokenizer`
 - `--output-dir`
 - `--report-dir`
-

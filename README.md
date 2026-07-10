@@ -33,6 +33,7 @@ Stage64 模式是当前方法中的题目类型扩展模块：它把原来比较
     config.example.json
   docs/
     CODE_MAP.md
+    CROSS_STAGE_EVAL_PANEL.md
     GITHUB.md
   scripts/
     run_auto_graph_expansion_round.py
@@ -138,6 +139,7 @@ python scripts/run_auto_graph_expansion_round.py \
 | --- | --- | --- |
 | `scripts/current_method/frontier_selection.py` | frontier selection | 根据 solver 评测结果筛 frontier、strict frontier、boundary frontier 等。 |
 | `scripts/current_method/report_builder.py` | 报告生成 | 汇总生成质量、frontier yield、题型分布、solver 表现、长度统计等。 |
+| `scripts/current_method/cross_stage_eval_panel.py` | 跨阶段能力验证 | 汇总或复跑 Stage1/Stage2/Stage64 heldout 上的 solver 对比，验证 self-play 是否真的逐阶段提升。 |
 | `scripts/current_method/write_base_restart_validation_summary.py` | 验证汇总 | 为 base restart / current-method validation 运行写总览 summary。 |
 | `scripts/current_method/diagnostics_context_ablation.py` | 诊断实验 | 做 context ablation，分析 solver 对 parent context / evidence window 的依赖。 |
 | `scripts/current_method/eval_api_14b_samples.py` | API solver 评测 | 用 API 模型评测样本，可用于快速 sanity check 或外部 judge。 |
@@ -343,6 +345,27 @@ Stage64 当前**不做本地最终 QA 派生**。也就是说，本地代码不�
 - reject / retry / 落盘。
 
 本地不会在 Stage64 模式里重新派生最终 QA。这样可以保证 challenger 由更强 API 模型生成，同时用本地质量门兜底。
+
+## 跨阶段能力增长评估
+
+为了证明 self-play 不是只在训练集上变好，需要用跨阶段 heldout 面板验证：
+
+```text
+Stage1 solver 在 Stage1 heldout frontier 上 > base
+Stage2 solver 在 Stage2 heldout frontier 上 > Stage1
+Stage64 solver 在 Stage64 heldout frontier 上 > Stage2
+```
+
+对应脚本：
+
+```bash
+python scripts/current_method/cross_stage_eval_panel.py \
+  --panel-dir base_restart_current_method_validation/70_cross_stage_eval_panel
+```
+
+默认只汇总已有评测 JSON 并写 `cross_stage_eval_report.md`，不会重新跑 GPU。需要重跑时再加 `--run-original` 或 `--run-chat`。
+
+当前面板结论是：Stage1 和 Stage2 的逐阶段收益已经成立；Stage64 因为 option shuffle 后没有重新按固定 Stage2 solver 校准 frontier，当前 heldout 不能作为严格能力增长证据。详细解释见 `docs/CROSS_STAGE_EVAL_PANEL.md`。
 
 ## 质量门
 
