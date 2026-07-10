@@ -291,9 +291,79 @@ def source_label_from_frontier(frontier_path: Path) -> str:
     return parent or frontier_path.stem
 
 
-def load_r2_frontier(frontier_path: Path, r2_sft_path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def is_native_frontier_row(row: dict[str, Any]) -> bool:
+    return bool(row.get("sample_id")) and not isinstance(row.get("reward"), dict) and not isinstance(row.get("eval"), dict)
+
+
+def load_native_frontier(frontier_path: Path, r2_sft_path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     sft_by_record_id = {str(row.get("record_id") or metadata(row).get("record_id")): row for row in read_jsonl(r2_sft_path)}
     frontier_rows = read_jsonl(frontier_path)
+    output: list[dict[str, Any]] = []
+    skipped: Counter[str] = Counter()
+    wrong = 0
+    hard_correct = 0
+    source_label = source_label_from_frontier(frontier_path)
+    for row in frontier_rows:
+        rid = str(row.get("sample_id") or "")
+        if not rid:
+            skipped["missing_native_sample_id"] += 1
+            continue
+        record = sft_by_record_id.get(rid)
+        if not record:
+            skipped["missing_native_sft_record"] += 1
+            continue
+        solver_eval = row.get("solver_eval") if isinstance(row.get("solver_eval"), dict) else {}
+        correct_count = as_int(solver_eval.get("exact_correct_count"))
+        if correct_count is None:
+            correct_count = as_int(solver_eval.get("correct_count")) or 0
+        successful_count = as_int(solver_eval.get("k")) or len(solver_eval.get("predictions") or []) or None
+        first_correct = correct_count > 0
+        source_tag = f"{source_label}_native_partial_frontier" if first_correct else f"{source_label}_native_zero_frontier"
+        wrong += 0 if first_correct else 1
+        hard_correct += 1 if first_correct else 0
+        frontier_label = row.get("frontier_label") if isinstance(row.get("frontier_label"), dict) else {}
+        output.append(
+            add_mix_metadata(
+                record,
+                source_tag=source_tag,
+                source_path=str(frontier_path),
+                extra={
+                    "mix_source": f"{source_label}_native_frontier",
+                    "frontier_source_label": source_label,
+                    "r2_frontier_record_id": rid,
+                    "r2_frontier_bucket": solver_eval.get("bucket"),
+                    "r2_frontier_reward": row.get("frontier_pool_priority"),
+                    "r2_frontier_soft_accuracy": solver_eval.get("soft_accuracy"),
+                    "r2_frontier_correct_count": correct_count,
+                    "r2_frontier_successful_count": successful_count,
+                    "r2_frontier_first_sample_correct": first_correct,
+                    "r2_frontier_subset": "native_partial_frontier" if first_correct else "native_zero_frontier",
+                    "native_frontier_category": frontier_label.get("category"),
+                    "native_frontier_tier": frontier_label.get("frontier_tier"),
+                    "qa_operation": row.get("qa_operation") or metadata(row).get("qa_operation"),
+                    "qa_subtype": row.get("qa_subtype") or metadata(row).get("qa_subtype"),
+                    "answer_type": row.get("answer_type") or metadata(row).get("answer_type"),
+                    "answer_format": row.get("answer_format") or metadata(row).get("answer_format"),
+                    "source_split": "train",
+                },
+            )
+        )
+    stats = {
+        "input_frontier_rows": len(frontier_rows),
+        "selected": len(output),
+        "wrong_frontier": wrong,
+        "hard_correct": hard_correct,
+        "skipped": dict(skipped),
+        "frontier_format": "native_current_method",
+    }
+    return output, stats
+
+
+def load_r2_frontier(frontier_path: Path, r2_sft_path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    frontier_rows = read_jsonl(frontier_path)
+    if frontier_rows and all(is_native_frontier_row(row) for row in frontier_rows):
+        return load_native_frontier(frontier_path, r2_sft_path)
+    sft_by_record_id = {str(row.get("record_id") or metadata(row).get("record_id")): row for row in read_jsonl(r2_sft_path)}
     output: list[dict[str, Any]] = []
     skipped: Counter[str] = Counter()
     wrong = 0
