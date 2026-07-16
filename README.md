@@ -1,5 +1,18 @@
 # Current Method Self-Play 代码包
 
+## 当前分支：Stage3 run234 checkpoint
+
+> 本节只描述 GitHub 分支 `checkpoint/stage3-run234-20260716`。它是一次可恢复的开发快照，不代表已经通过 Stage3 数据生产门槛。
+
+- 基线 `main` 保持在 `130674c34b16455e634d7e1406e1000358e602b9`，没有被合并、覆盖或 force-push。
+- 固定恢复标签为 `stage3-run234-checkpoint-20260716`，指向包含 run233/run234 runner 和 run234 原始审计产物的快照。
+- run234 的最终状态是 **FAIL**，不是“接近通过”：5 次物理 scene API 调用全部低于固定的 150-token 下限；人工审计为 core-semantic clean `2/5`、natural dialogue `0/5`、protected-fact violation `3/5`、QA shortcut `1/5`。
+- 本次调用没有 retry、repair、continuation、QA API、graph extraction、训练写入或正式 Stage3 接纳。
+- `data/run234_safe_pool_scene_canary_n5/` 只用于保存原始响应、冻结 truth plans、机器审计、人工审计和失败报告，**不得作为 clean 数据集或训练输入**。
+- 大型 parent 数据、模型权重、API 配置和 `.codex` 凭据未提交；可复现性依靠已归档 runner、输入 provenance 和 SHA-256 记录。
+
+详细结果与文件哈希见 [`docs/STAGE3_RUN234_CHECKPOINT.md`](docs/STAGE3_RUN234_CHECKPOINT.md)。隔离 runner 位于 [`stage3-data-fix/run_233_temporal_incremental_pilot.py`](stage3-data-fix/run_233_temporal_incremental_pilot.py) 和 [`stage3-data-fix/run_234_safe_pool_scene_canary.py`](stage3-data-fix/run_234_safe_pool_scene_canary.py)。在形成新的、单独验收的生成方案前，不应从本分支自动启动扩量或训练。
+
 这是“当前方法”的干净 GitHub 代码包，包含从 parent pool 生成 self-play 样本、API challenger 扩展对话、Stage3 API QA 多样化、质量验证、可靠 frontier 累积、train mix 构建、solver 训练与评测所需的主线代码。
 
 注意：这里整理的是**当前方法主线代码**，不是整个工作区的 r1-r5 历史归档。模型权重、运行缓存、API key 和 149G 工作区内容都没有放进来。
