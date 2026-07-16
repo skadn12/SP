@@ -12,6 +12,7 @@ instead of reimplementing their inner logic.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -29,7 +30,6 @@ SCRIPTS = ROOT / "scripts"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 DEFAULT_BASE_MODEL = Path("/root/autodl-tmp/Qwen3-4B")
-DEFAULT_R2_ADAPTER = ROOT / "outputs/qwen3_4b_lora_r2_frontier_plus_clean_replay_s0_s2_from_r1_e1_ctx9216_full"
 DEFAULT_CLEAN_RETENTION = ROOT / "sft_data/clean_v1_solver_r1_valid_chat.jsonl"
 LEGACY_TRAIN_FILE_NAME = "r2_frontier_plus_clean_replay_sft_train.jsonl"
 
@@ -44,10 +44,31 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--frontier-report-dir", default=None, help="Report dir containing <solver-prefix>_frontier_candidates.jsonl.")
     parser.add_argument("--frontier", action="append", default=None, help="Frontier JSONL. May be passed multiple times.")
     parser.add_argument("--round-sft-train", action="append", default=None, help="Matching round sft_train JSONL. May be passed multiple times.")
+    parser.add_argument(
+        "--prepared-train-file",
+        default=None,
+        help=(
+            "Already-built, leakage-audited SFT JSONL (for example the Stage3 train-mix builder output). "
+            "When set, the legacy frontier/replay builder is not called."
+        ),
+    )
+    parser.add_argument(
+        "--prepared-train-summary",
+        default=None,
+        help="Audit summary for --prepared-train-file; Stage3 uses train_mix_summary.json.",
+    )
     parser.add_argument("--train-output-dir", default=None)
     parser.add_argument("--report-dir", default=None)
     parser.add_argument("--base-model", default=str(DEFAULT_BASE_MODEL))
-    parser.add_argument("--init-adapter-dir", default=str(DEFAULT_R2_ADAPTER))
+    parser.add_argument(
+        "--init-adapter-dir",
+        default=None,
+        help=(
+            "Optional adapter used to initialize the new LoRA. Omit this when --base-model is an "
+            "accepted merged solver checkpoint so the new LoRA starts from zero. The adapter's "
+            "adapter_config.json must name the same base model passed via --base-model."
+        ),
+    )
     parser.add_argument("--adapter-output-dir", default=None)
     parser.add_argument("--merged-output-dir", default=None)
     parser.add_argument("--target-replay", type=int, default=80)
@@ -68,7 +89,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-steps", type=int, default=5)
     parser.add_argument("--save-steps", type=int, default=9999)
     parser.add_argument("--max-valid-samples", type=int, default=64)
-    parser.add_argument("--valid-file", default=None, help="Defaults to the built train file, matching the r2 retrain pattern.")
+    validation = parser.add_mutually_exclusive_group()
+    validation.add_argument("--valid-file", default=None, help="Independent validation JSONL; must not be the train file.")
+    validation.add_argument(
+        "--no-valid",
+        action="store_true",
+        help="Explicitly train without validation. This is safer than reusing the train file as validation.",
+    )
     parser.add_argument("--max-model-len", type=int, default=16384)
     parser.add_argument("--max-new-tokens", type=int, default=80)
     parser.add_argument("--chunk-size", type=int, default=32)
@@ -153,6 +180,125 @@ def ensure_exists(path: str | Path, label: str) -> Path:
     return target
 
 
+def resolved_path(path: str | Path) -> Path:
+    return Path(path).expanduser().resolve(strict=False)
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def validate_prepared_train_audit(args: argparse.Namespace, train_file: Path) -> dict[str, Any] | None:
+    if not args.prepared_train_file:
+        return None
+    summary_path = Path(args.prepared_train_summary) if args.prepared_train_summary else train_file.parent / "train_mix_summary.json"
+    if not summary_path.is_file():
+        raise FileNotFoundError(
+            "Prepared Stage3 train data requires its audit summary; pass --prepared-train-summary: "
+            f"{summary_path}"
+        )
+    summary = read_json(summary_path)
+    criteria = summary.get("pass_criteria") if isinstance(summary.get("pass_criteria"), dict) else {}
+    if summary.get("status") != "audit_passed" or not criteria or any(value is not True for value in criteria.values()):
+        raise RuntimeError(f"Prepared train audit did not pass: {summary_path}")
+    artifact_paths = summary.get("artifact_paths") if isinstance(summary.get("artifact_paths"), dict) else {}
+    recorded_path = artifact_paths.get("sft_train")
+    if not recorded_path or resolved_path(recorded_path) != resolved_path(train_file):
+        raise RuntimeError(
+            "Prepared train file does not match the audited sft_train artifact: "
+            f"requested={train_file} recorded={recorded_path}"
+        )
+    outputs = summary.get("output_artifacts") if isinstance(summary.get("output_artifacts"), dict) else {}
+    sft_record = outputs.get("sft_train") if isinstance(outputs.get("sft_train"), dict) else {}
+    recorded_sha = str(sft_record.get("sha256") or "")
+    actual_sha = file_sha256(train_file)
+    if recorded_sha and recorded_sha != actual_sha:
+        raise RuntimeError(
+            f"Prepared train SHA256 mismatch: requested={actual_sha} recorded={recorded_sha}"
+        )
+    return {
+        "summary_path": str(summary_path.resolve()),
+        "summary_status": summary.get("status"),
+        "schema_version": summary.get("schema_version"),
+        "recorded_sft_train": str(resolved_path(recorded_path)),
+        "sft_train_sha256": actual_sha,
+        "pass_criteria": criteria,
+    }
+
+
+def validate_training_provenance(args: argparse.Namespace) -> dict[str, Any]:
+    """Validate the checkpoint chain before constructing a training command."""
+    base_model = ensure_exists(args.base_model, "base model")
+    provenance: dict[str, Any] = {
+        "base_model": str(base_model),
+        "resolved_base_model": str(resolved_path(base_model)),
+        "initialization": "zero_initialized_new_lora",
+        "init_adapter_dir": None,
+        "init_adapter_config": None,
+    }
+    if not args.init_adapter_dir:
+        return provenance
+
+    adapter_dir = ensure_exists(args.init_adapter_dir, "init adapter")
+    config_path = ensure_exists(adapter_dir / "adapter_config.json", "init adapter config")
+    ensure_exists(adapter_dir / "adapter_model.pt", "init adapter weights")
+    config = read_json(config_path)
+    configured_base = next(
+        (
+            config.get(key)
+            for key in ("model", "base_model", "base_model_name_or_path")
+            if isinstance(config.get(key), str) and str(config.get(key)).strip()
+        ),
+        None,
+    )
+    if configured_base is None:
+        raise ValueError(
+            f"Initial adapter config does not declare its base model in model/base_model/"
+            f"base_model_name_or_path: {config_path}"
+        )
+    resolved_configured_base = resolved_path(configured_base)
+    resolved_requested_base = resolved_path(base_model)
+    if resolved_configured_base != resolved_requested_base:
+        raise ValueError(
+            "Initial adapter base mismatch: "
+            f"adapter_config={configured_base} (resolved={resolved_configured_base}), "
+            f"--base-model={base_model} (resolved={resolved_requested_base}). "
+            "Use the adapter's actual base, or omit --init-adapter-dir and train a zero-initialized "
+            "LoRA on the accepted merged solver checkpoint."
+        )
+    provenance.update(
+        {
+            "initialization": "continued_from_compatible_adapter",
+            "init_adapter_dir": str(adapter_dir),
+            "resolved_init_adapter_dir": str(resolved_path(adapter_dir)),
+            "init_adapter_config": str(config_path),
+            "adapter_declared_base_model": configured_base,
+            "resolved_adapter_declared_base_model": str(resolved_configured_base),
+        }
+    )
+    return provenance
+
+
+def resolve_validation_file(args: argparse.Namespace, train_file: Path) -> Path | None:
+    if args.valid_file:
+        valid_file = Path(args.valid_file)
+        if resolved_path(valid_file) == resolved_path(train_file):
+            raise ValueError(
+                "Validation data must be independent from training data; --valid-file resolves to "
+                f"the train file: {train_file}"
+            )
+        if not args.dry_run:
+            ensure_exists(valid_file, "valid file")
+        return valid_file
+    if getattr(args, "no_valid", False) or args.skip_train:
+        return None
+    raise ValueError("Choose an independent --valid-file or explicitly pass --no-valid.")
+
+
 def ensure_output_available(path: str | Path, *, overwrite: bool, dry_run: bool, label: str) -> None:
     target = Path(path)
     if not target.exists():
@@ -201,6 +347,12 @@ def built_train_file(train_output_dir: Path) -> Path:
 
 
 def build_train_data(args: argparse.Namespace, frontiers: list[Path], sft_files: list[Path], report_dir: Path) -> Path:
+    if args.prepared_train_file:
+        if args.frontier or args.round_sft_train or args.frontier_report_dir:
+            raise ValueError(
+                "--prepared-train-file cannot be combined with frontier inputs that would invoke the legacy builder"
+            )
+        return ensure_exists(args.prepared_train_file, "prepared train file")
     output_dir = Path(args.train_output_dir)
     if args.skip_build_train:
         train_file = built_train_file(output_dir)
@@ -299,8 +451,6 @@ def train_solver(args: argparse.Namespace, train_file: Path, valid_file: Path | 
         str(train_file),
         "--output-dir",
         str(args.adapter_output_dir),
-        "--init-adapter-dir",
-        str(args.init_adapter_dir),
         "--max-length",
         str(args.max_length),
         "--epochs",
@@ -334,6 +484,8 @@ def train_solver(args: argparse.Namespace, train_file: Path, valid_file: Path | 
         "--seed",
         str(args.seed),
     ]
+    if args.init_adapter_dir:
+        cmd.extend(["--init-adapter-dir", str(args.init_adapter_dir)])
     if valid_file is not None:
         cmd.extend(["--valid-file", str(valid_file)])
     run_command(cmd, log_path=report_dir / "train.log", dry_run=args.dry_run)
@@ -426,6 +578,7 @@ def write_status(
     train_file: Path,
     valid_file: Path | None,
     token_summary: dict[str, Any],
+    training_provenance: dict[str, Any],
 ) -> None:
     train_summary = read_optional_json(Path(args.train_output_dir) / "train_summary.json")
     adapter_config = read_optional_json(Path(args.adapter_output_dir) / "adapter_config.json")
@@ -442,10 +595,12 @@ def write_status(
         f"- new solver name: `{args.solver_name}`",
         f"- dry_run: {args.dry_run}",
         f"- base model: `{args.base_model}`",
-        f"- init adapter: `{args.init_adapter_dir}`",
-        f"- train builder: `scripts/build_r2_frontier_plus_clean_replay_train.py`",
+        f"- initialization: `{training_provenance.get('initialization')}`",
+        f"- init adapter: `{args.init_adapter_dir or 'none (zero-initialized new LoRA)'}`",
+        f"- train builder: `{'prepared leakage-audited train file' if args.prepared_train_file else 'scripts/build_r2_frontier_plus_clean_replay_train.py'}`",
         f"- train file: `{train_file}`",
-        f"- valid file: `{valid_file}`",
+        f"- valid file: `{valid_file or 'none (explicit --no-valid)'}`",
+        f"- checkpoint provenance: `{report_dir / 'training_provenance.json'}`",
         f"- output adapter: `{args.adapter_output_dir}`",
         f"- merged model: `{args.merged_output_dir}`",
         f"- frontier files: `{json.dumps([str(path) for path in frontiers], ensure_ascii=False)}`",
@@ -488,16 +643,33 @@ def main() -> int:
     args = default_paths(parse_args())
     report_dir = Path(args.report_dir)
     report_dir.mkdir(parents=True, exist_ok=True)
-    frontiers, sft_files = infer_frontiers(args)
+    if args.prepared_train_file:
+        frontiers, sft_files = [], []
+    else:
+        frontiers, sft_files = infer_frontiers(args)
 
-    ensure_exists(args.base_model, "base model")
-    ensure_exists(args.init_adapter_dir, "init adapter")
+    training_provenance = validate_training_provenance(args)
     train_file = build_train_data(args, frontiers, sft_files, report_dir)
+    prepared_train_audit = validate_prepared_train_audit(args, train_file)
+    training_provenance["train_data"] = {
+        "mode": "prepared_leakage_audited_file" if args.prepared_train_file else "legacy_frontier_replay_builder",
+        "prepared_train_file": str(train_file) if args.prepared_train_file else None,
+        "resolved_prepared_train_file": (
+            str(resolved_path(train_file)) if args.prepared_train_file else None
+        ),
+        "prepared_train_audit": prepared_train_audit,
+    }
     if not args.dry_run:
         ensure_exists(train_file, "train file")
-    valid_file = Path(args.valid_file) if args.valid_file else train_file
-    if valid_file and not args.dry_run:
-        ensure_exists(valid_file, "valid file")
+    valid_file = resolve_validation_file(args, train_file)
+    training_provenance["validation"] = {
+        "mode": "independent_file" if valid_file is not None else "none",
+        "valid_file": str(valid_file) if valid_file is not None else None,
+        "resolved_valid_file": str(resolved_path(valid_file)) if valid_file is not None else None,
+        "train_file": str(train_file),
+        "resolved_train_file": str(resolved_path(train_file)),
+    }
+    write_json(report_dir / "training_provenance.json", training_provenance)
 
     token_summary = token_length_check(args, train_file, valid_file, report_dir)
     train_solver(args, train_file, valid_file, report_dir)
@@ -524,6 +696,7 @@ def main() -> int:
         train_file=train_file,
         valid_file=valid_file,
         token_summary=token_summary,
+        training_provenance=training_provenance,
     )
     print((report_dir / "status.md").read_text(encoding="utf-8"))
     return 0

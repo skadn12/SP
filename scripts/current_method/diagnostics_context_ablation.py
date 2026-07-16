@@ -31,12 +31,26 @@ from pathlib import Path
 os.environ.setdefault("VLLM_USE_FLASHINFER_SAMPLER", "0")
 if os.environ.get("VLLM_USE_FLASHINFER_SAMPLER") != "0":
     os.environ["VLLM_USE_FLASHINFER_SAMPLER"] = "0"
+for _thread_env_key in (
+    "OMP_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+    "BLIS_NUM_THREADS",
+):
+    try:
+        _thread_env_valid = int(str(os.environ.get(_thread_env_key, "")).strip()) > 0
+    except ValueError:
+        _thread_env_valid = False
+    if not _thread_env_valid:
+        os.environ[_thread_env_key] = "1"
 from typing import Any
 
-ROOT = Path("/root/autodl-tmp/gxy-selfplay")
+ROOT = Path(__file__).resolve().parents[2]
 BASE_SCRIPT = ROOT / "scripts/old_method/run_old_improved_gate200.py"
 DEFAULT_BASE_MODEL = "/root/autodl-tmp/Qwen3-4B"
-DEFAULT_SOLVER_CKPT = ROOT / "outputs/qwen3_4b_lora_r2_frontier_plus_clean_replay_s0_s2_from_r1_e1_ctx9216_full"
+DEFAULT_SOLVER_CKPT = ROOT / "base_restart_current_method_validation/accepted_models/solver_base_restart_stage2_merged"
 R2_SAMPLES = ROOT / "eval_sets/graph_expansion_challenger_v1/r2_auto_full_sample0_5_complete/samples.jsonl"
 GATE20 = ROOT / "current_method_runs/current_method_r3_long_append_from_r2_gate20_det_align_fastpath_provfix"
 DIAG_DIR = ROOT / "current_method_runs/diagnostics_r3_long_ablation"
@@ -103,6 +117,7 @@ def eval_args(
     k_eval: int,
     debug_dir: Path | None = None,
     *,
+    seed: int = SEED,
     tokenizer_path: str = DEFAULT_BASE_MODEL,
     max_model_len: int = MAX_MODEL_LEN,
     max_new_tokens: int = MAX_NEW_TOKENS,
@@ -112,7 +127,7 @@ def eval_args(
 ) -> argparse.Namespace:
     return argparse.Namespace(
         k_eval=k_eval,
-        seed=SEED,
+        seed=int(seed),
         eval_backend="vllm",
         base_model=tokenizer_path,
         max_model_len=max_model_len,
@@ -135,6 +150,7 @@ class SharedSolver:
         base_model: str | Path = DEFAULT_BASE_MODEL,
         max_model_len: int = MAX_MODEL_LEN,
         gpu_memory_utilization: float = GPU_MEM,
+        seed: int = SEED,
     ) -> None:
         from transformers import AutoTokenizer
         from vllm import LLM
@@ -143,6 +159,7 @@ class SharedSolver:
         self.model_path, self.adapter_path = base.resolve_solver_checkpoint(str(solver_model))
         self.max_model_len = int(max_model_len)
         self.gpu_memory_utilization = float(gpu_memory_utilization)
+        self.seed = int(seed)
         self.tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_path, trust_remote_code=True)
         self.llm = LLM(
             model=self.model_path,
@@ -181,19 +198,34 @@ class SharedSolver:
                 top_p=args.top_p if args.k_eval > 1 else 1.0,
                 max_tokens=max_tokens,
                 stop=list(base.SOLVER_STOP_SEQUENCES),
+                seed=int(args.seed),
             )
             outputs = self.llm.generate([p for _, p in items], params)
             for (sample_index, _), request_output in zip(items, outputs):
                 raw_predictions[sample_index] = [base.stop_at_solver_sequence(o.text) for o in request_output.outputs]
         return raw_predictions, diagnostics
 
-    def evaluate(self, samples: list[dict[str, Any]], k_eval: int, debug_dir: Path | None = None) -> list[dict[str, Any]]:
+    def evaluate(
+        self,
+        samples: list[dict[str, Any]],
+        k_eval: int,
+        debug_dir: Path | None = None,
+        *,
+        strict_health: bool = False,
+        max_new_tokens: int = MAX_NEW_TOKENS,
+        temperature: float = TEMPERATURE,
+        top_p: float = TOP_P,
+    ) -> list[dict[str, Any]]:
         """Mirror of base.run_solver_eval scoring on shared-LLM predictions."""
         args = eval_args(
             k_eval,
             debug_dir,
+            seed=self.seed,
             tokenizer_path=self.tokenizer_path,
             max_model_len=self.max_model_len,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
             gpu_memory_utilization=self.gpu_memory_utilization,
         )
         if debug_dir:
@@ -239,7 +271,86 @@ class SharedSolver:
                     "solver_eval": sample["solver_eval"],
                 }
             )
+        if strict_health:
+            assert_solver_eval_health(samples, k_eval=k_eval)
         return eval_rows
+
+
+def solver_eval_health(samples: list[dict[str, Any]], *, k_eval: int) -> dict[str, Any]:
+    """Return auditable decoding-health counts for freshly evaluated rows."""
+
+    counts = {
+        "sample_count": len(samples),
+        "expected_prediction_count": len(samples) * int(k_eval),
+        "prediction_count": 0,
+        "missing_prediction_count": 0,
+        "empty_prediction_count": 0,
+        "replacement_character_count": 0,
+        "single_choice_bad_prefix_count": 0,
+        "single_choice_parsed_mismatch_count": 0,
+        "structured_empty_parsed_count": 0,
+        "eval_context_overflow_count": 0,
+    }
+    examples: list[dict[str, Any]] = []
+    structured_types = {"single_choice", "multi_select", "ordering", "evidence_selection", "invalidated_statement_detection"}
+    for sample in samples:
+        qa = sample.get("qa") if isinstance(sample.get("qa"), dict) else {}
+        qtype = str(qa.get("question_type") or "")
+        options = qa.get("options") if isinstance(qa.get("options"), list) else []
+        allowed = {str(item.get("id")) for item in options if isinstance(item, dict) and item.get("id") is not None}
+        se = sample.get("solver_eval") if isinstance(sample.get("solver_eval"), dict) else {}
+        diagnostics = se.get("diagnostics") if isinstance(se.get("diagnostics"), dict) else {}
+        if diagnostics.get("eval_context_overflow") is True:
+            counts["eval_context_overflow_count"] += 1
+        predictions = se.get("predictions") if isinstance(se.get("predictions"), list) else []
+        counts["prediction_count"] += len(predictions)
+        if len(predictions) != k_eval:
+            counts["missing_prediction_count"] += abs(int(k_eval) - len(predictions))
+        for item in predictions:
+            raw = str(item.get("prediction") or "") if isinstance(item, dict) else ""
+            parsed = item.get("parsed") if isinstance(item, dict) else None
+            reason = ""
+            if not raw.strip():
+                counts["empty_prediction_count"] += 1
+                reason = "empty_prediction"
+            if "\ufffd" in raw:
+                counts["replacement_character_count"] += 1
+                reason = reason or "replacement_character"
+            if qtype == "single_choice":
+                parsed_value = str(parsed or "")
+                prefix_match = re.match(r"^\s*([A-Z])(?=$|\s|[.\):;>,/|\-])", raw.upper())
+                leading = prefix_match.group(1) if prefix_match else ""
+                if leading not in allowed:
+                    counts["single_choice_bad_prefix_count"] += 1
+                    reason = reason or "single_choice_bad_prefix"
+                if parsed_value not in allowed or (leading in allowed and parsed_value != leading):
+                    counts["single_choice_parsed_mismatch_count"] += 1
+                    reason = reason or "single_choice_parsed_mismatch"
+            elif qtype in structured_types and not parsed:
+                counts["structured_empty_parsed_count"] += 1
+                reason = reason or "structured_empty_parsed"
+            if reason and len(examples) < 20:
+                examples.append({"sample_id": sample.get("sample_id"), "question_type": qtype, "reason": reason, "prediction": raw[:160], "parsed": parsed})
+    counts["healthy"] = not any(
+        counts[key]
+        for key in (
+            "missing_prediction_count",
+            "empty_prediction_count",
+            "replacement_character_count",
+            "single_choice_bad_prefix_count",
+            "single_choice_parsed_mismatch_count",
+            "structured_empty_parsed_count",
+            "eval_context_overflow_count",
+        )
+    )
+    return {**counts, "examples": examples}
+
+
+def assert_solver_eval_health(samples: list[dict[str, Any]], *, k_eval: int) -> dict[str, Any]:
+    health = solver_eval_health(samples, k_eval=k_eval)
+    if not health["healthy"]:
+        raise RuntimeError(f"Solver evaluation failed decoding health gate: {json.dumps(health, ensure_ascii=False)}")
+    return health
 
 
 def summarize(samples: list[dict[str, Any]], k_eval: int, n_preds: int = 5) -> dict[str, Any]:
@@ -260,9 +371,7 @@ def summarize(samples: list[dict[str, Any]], k_eval: int, n_preds: int = 5) -> d
         if preds and preds[0].get("exact_correct"):
             exact_k1 += 1
         # frontier-style coarse categorisation (diagnostic, mirrors gate200 bands)
-        if soft == 0.0 and partial < 0.4:
-            cat["bad_question"] += 1
-        elif soft == 0.0 and partial >= 0.4:
+        if soft == 0.0:
             cat["true_too_hard"] += 1
         elif 0.2 <= soft <= 0.6:
             cat["near_miss"] += 1
@@ -456,6 +565,7 @@ def parse_cli() -> argparse.Namespace:
     parser.add_argument("--solver-tokenizer", default=None)
     parser.add_argument("--max-model-len", type=int, default=MAX_MODEL_LEN)
     parser.add_argument("--gpu-memory-utilization", type=float, default=GPU_MEM)
+    parser.add_argument("--seed", type=int, default=SEED)
     return parser.parse_args()
 
 
@@ -480,6 +590,7 @@ def main() -> int:
             base_model=cli.base_model,
             max_model_len=cli.max_model_len,
             gpu_memory_utilization=cli.gpu_memory_utilization,
+            seed=cli.seed,
         )
         rows = solver.evaluate(eval_samples, k_eval=cli.k_eval, debug_dir=rep_dir / "verify_prompt_debug")
         write_jsonl(gen_dir / "verify_k5_eval.jsonl", rows)
@@ -511,6 +622,7 @@ def main() -> int:
         base_model=cli.base_model,
         max_model_len=cli.max_model_len,
         gpu_memory_utilization=cli.gpu_memory_utilization,
+        seed=cli.seed,
     )
     summary: dict[str, Any] = {
         "solver_model_path": solver.model_path,

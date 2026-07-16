@@ -18,6 +18,7 @@ FRONTIER_LABELS = (
     "true_too_hard",
     "bad_question",
     "shortcut_issue",
+    "position_sensitive",
     "easy",
 )
 
@@ -151,17 +152,20 @@ def assign_frontier_labels(samples: list[dict[str, Any]]) -> None:
             category, reason = "shortcut_issue", "anti-shortcut validation failed"
         elif not clean_validation(sample):
             category, reason = "bad_question", "validation warnings present"
+        elif (sample.get("stage64_permutation_eval") or {}).get("status") == "position_sensitive":
+            category, reason = (
+                "position_sensitive",
+                "difficulty bucket changed across cyclic answer positions; excluded from reliable frontier",
+            )
         elif 0.2 <= soft <= 0.6 and partial >= 0.4:
             category, reason = "clean_near_miss", "soft accuracy in frontier band with sufficient partial credit"
         elif abs(soft - 0.8) < 1e-9 and partial >= 0.4 and base.rare_mechanism(sample, samples):
             category, reason = "hard_correct", "soft accuracy 0.8 with rare reasoning mechanism"
         elif soft == 0.0:
-            if partial >= 0.4:
-                category, reason = "clean_near_miss", "0/5 retained only because partial credit and validation are clean"
-            elif partial >= 0.2:
-                category, reason = "true_too_hard", "0/5 with limited partial credit"
-            else:
-                category, reason = "bad_question", "0/5 with insufficient partial credit"
+            # Structural/gold/shortcut validation above decides whether a question is bad.
+            # Solver failure alone is not evidence of an invalid item; for single-choice
+            # tasks partial credit is necessarily zero whenever exact accuracy is zero.
+            category, reason = "true_too_hard", "validated sample scored 0/5 with the fixed solver"
         elif soft > 0.6:
             category, reason = "easy", "solver soft accuracy above frontier band"
         else:
@@ -350,6 +354,9 @@ def build_frontier_summary(samples: list[dict[str, Any]], frontier: list[dict[st
         "true_too_hard_count": sum(1 for sample in samples if sample.get("frontier_label", {}).get("category") == "true_too_hard"),
         "bad_question_count": sum(1 for sample in samples if sample.get("frontier_label", {}).get("category") == "bad_question"),
         "shortcut_issue_count": sum(1 for sample in samples if sample.get("frontier_label", {}).get("category") == "shortcut_issue"),
+        "position_sensitive_count": sum(
+            1 for sample in samples if sample.get("frontier_label", {}).get("category") == "position_sensitive"
+        ),
         "easy_count": sum(1 for sample in samples if sample.get("frontier_label", {}).get("category") == "easy"),
         "label_counts": base.count_map([sample.get("frontier_label", {}).get("category") for sample in samples]),
         "frontier_by_question_type": frontier_by_question_type,

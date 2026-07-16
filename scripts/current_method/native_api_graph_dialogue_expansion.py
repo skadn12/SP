@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import difflib
 import hashlib
 import json
 import logging
@@ -13,7 +14,7 @@ import time
 import urllib.error
 import urllib.request
 from functools import lru_cache
-from collections import Counter
+from collections import Counter, deque
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -24,8 +25,12 @@ if str(ROOT) not in sys.path:
 
 try:
     from scripts.current_method import api_challenger_generation as adapter
+    from scripts.current_method import semantic_graph_v2
+    from scripts.current_method import stage64_quality
 except ModuleNotFoundError:
     from current_method import api_challenger_generation as adapter
+    from current_method import semantic_graph_v2
+    from current_method import stage64_quality
 
 
 base = adapter.base
@@ -41,6 +46,138 @@ DEFAULT_LENGTH_MIN_ADDED_TOKENS = 1024
 DEFAULT_PARENT_CONTEXT_TAIL_TURNS = 12
 DEFAULT_PARENT_CONTEXT_RELEVANT_TURNS = 24
 DEFAULT_DIALOGUE_API_PARENT_TOKEN_BUDGET = 2048
+STAGE64_EVIDENCE_MIN_SPAN_PERCENT = 35
+STAGE64_EVIDENCE_TAIL_PERCENT = 25
+STAGE64_EVIDENCE_MAX_TAIL_PERCENT = 50
+STAGE64_EVIDENCE_MIN_DISTINCT_TURN_PERCENT = 75
+STAGE64_EVIDENCE_MAX_REQUIRED_EVENTS_PER_TURN = 2
+FORMAL_DIALOGUE_SEGMENT_TARGET_TOKENS = 1400
+FORMAL_DIALOGUE_SEGMENT_MAX_OUTPUT_TOKENS = 4096
+FORMAL_DIALOGUE_MAX_SEGMENTS = 12
+FORMAL_DIALOGUE_SEGMENT_MIN_TURNS = 12
+FORMAL_DIALOGUE_SEGMENT_MAX_TURNS = 16
+FORMAL_DIALOGUE_SEGMENT_TARGET_TOKENS_PER_TURN = 70
+FORMAL_DIALOGUE_MAX_MARKERS_PER_SEGMENT = 2
+FORMAL_DIALOGUE_TOKEN_MARGIN = 384
+FORMAL_DIALOGUE_PREFIX_TAIL_TURNS = 4
+FORMAL_DIALOGUE_MIN_SEGMENT_VALIDATION_ATTEMPTS = 3
+FORMAL_DIALOGUE_LATE_RETRY_START_SEGMENT_INDEX = 2
+FORMAL_DIALOGUE_LATE_SEGMENT_VALIDATION_ATTEMPTS = 4
+FORMAL_DIALOGUE_DIVERSITY_RETRY_TEMPERATURE = 0.55
+FORMAL_DIALOGUE_FORBIDDEN_OPENING_PREFIX_LIMIT = 12
+FORMAL_DIALOGUE_MIDDLE_START_PERCENT = 20
+FORMAL_DIALOGUE_LATER_START_PERCENT = 52
+FORMAL_SEGMENT_EXACT_CLAIM_PREFLIGHT_VERSION = (
+    "formal_segment_exact_claim_preflight_v1"
+)
+FORMAL_SEGMENT_SIDECAR_QUOTE_NORMALIZER_VERSION = (
+    "formal_segment_sidecar_exact_turn_quote_v1"
+)
+FORMAL_SEGMENT_NEUTRAL_SIDECAR_NORMALIZER_VERSION = (
+    "formal_segment_neutral_sidecar_absent_key_completion_v1"
+)
+FORMAL_DIALOGUE_MARKER_SCHEDULER_VERSION = "formal_segment_difficulty_band_scheduler_v3"
+FORMAL_SEGMENT_TURN_DUPLICATE_AUDIT_VERSION = (
+    "formal_segment_turn_duplicate_audit_v1"
+)
+FORMAL_SEGMENT_OPENING_DIVERSITY_AUDIT_VERSION = (
+    "formal_segment_opening_diversity_audit_v1"
+)
+FORMAL_SEGMENT_GRAPH_FACT_ISOLATION_AUDIT_VERSION = (
+    "formal_segment_graph_fact_isolation_audit_v2"
+)
+FORMAL_PARENT_CONTEXT_SCHEMA_VERSION = "formal_parent_nonverbatim_context_v1"
+FORMAL_PARENT_PROMPT_AUDIT_VERSION = "formal_parent_prompt_substring_audit_v2"
+FORMAL_ACCEPTED_PREFIX_CONTEXT_SCHEMA_VERSION = (
+    "formal_accepted_prefix_nonverbatim_context_v1"
+)
+FORMAL_ACCEPTED_PREFIX_PROMPT_AUDIT_VERSION = (
+    "formal_accepted_prefix_prompt_substring_audit_v1"
+)
+FORMAL_CURRENT_EXACT_CLAIM_EXEMPTION_VERSION = (
+    "formal_current_exact_claim_path_exemption_v1"
+)
+FORMAL_DIALOGUE_RETRY_VARIATION_VERSION = "formal_dialogue_retry_variation_v1"
+FORMAL_DIALOGUE_COMPACT_RETRY_CONTEXT_VERSION = (
+    "formal_dialogue_compact_retry_context_v1"
+)
+FORMAL_PARENT_PROMPT_MIN_SUBSTRING_CHARS = 32
+FORMAL_LOCAL_SPAN_PROVENANCE_VERSION = "formal_local_claim_span_provenance_v1"
+FORMAL_STATUS_MEANING_VERSION = "formal_stage3_status_meaning_v1"
+GRAPH_PARENT_CONTEXT_SCHEMA_VERSION = "stage64_graph_parent_entity_anchor_v3"
+GRAPH_PARENT_PROMPT_AUDIT_VERSION = "stage64_graph_parent_prompt_audit_v3"
+GRAPH_PARENT_NOVELTY_GATE_VERSION = "stage64_graph_parent_novelty_gate_v1"
+GRAPH_PARENT_PROMPT_MIN_SUBSTRING_CHARS = 32
+FORMAL_SEGMENT_OPENING_PREFIX_TOKEN_LENGTHS = (3, 4)
+FORMAL_SEGMENT_OPENING_MIN_PREFIX_TOKENS = min(
+    FORMAL_SEGMENT_OPENING_PREFIX_TOKEN_LENGTHS
+)
+FORMAL_SEGMENT_OPENING_SEGMENT_MIN_COUNT = 4
+FORMAL_SEGMENT_OPENING_CUMULATIVE_MIN_COUNT = 8
+FORMAL_SEGMENT_OPENING_MAX_SHARE = 0.25
+FORMAL_SEGMENT_NEAR_DUPLICATE_MIN_CHARS = 160
+FORMAL_SEGMENT_NEAR_DUPLICATE_MIN_TOKENS = 24
+FORMAL_SEGMENT_NEAR_DUPLICATE_SEQUENCE_THRESHOLD = 0.90
+FORMAL_SEGMENT_NEAR_DUPLICATE_JACCARD_THRESHOLD = 0.80
+FORMAL_SEGMENT_PHRASE_NGRAM_SIZE = 5
+FORMAL_SEGMENT_PHRASE_MIN_SHORTER_TOKENS = 18
+FORMAL_SEGMENT_PHRASE_MIN_SHARED_NGRAMS = 12
+FORMAL_SEGMENT_PHRASE_CONTAINMENT_THRESHOLD = 0.90
+FORMAL_DIALOGUE_MARKER_BANDS = ("early", "middle", "later")
+FORMAL_DIALOGUE_DIVERSITY_RETRY_REASONS = frozenset(
+    {
+        "frozen_prefix_turn_repeated",
+        "segment_exact_duplicate_turn",
+        "segment_near_duplicate_turn",
+        "segment_phrase_containment_duplicate_turn",
+        "segment_opening_prefix_concentration",
+        "cumulative_opening_prefix_concentration",
+    }
+)
+FORMAL_DIALOGUE_STRUCTURAL_RETRY_REASONS = frozenset(
+    {
+        "segment_payload_missing",
+        "empty_dialogue_segment",
+        "segment_turn_count_mismatch",
+        "segment_token_shortfall",
+        "invalid_segment_anchor",
+        "unexpected_segment_anchor",
+    }
+)
+FORMAL_DIALOGUE_TEMPERATURE_RETRY_REASONS = (
+    FORMAL_DIALOGUE_DIVERSITY_RETRY_REASONS
+    | FORMAL_DIALOGUE_STRUCTURAL_RETRY_REASONS
+)
+STAGE64_COUNT_NUMBER_DUPLICATE_OPTION_NORMALIZER_VERSION = (
+    "stage64_count_number_duplicate_option_v1"
+)
+STAGE64_COUNT_GRAPH_CONTRACT_VERSION = "stage64_count_graph_contract_v1"
+STAGE64_COMPARISON_GRAPH_CONTRACT_VERSION = "stage64_comparison_graph_contract_v2"
+STAGE64_TEMPORAL_STATE_UPDATE_GRAPH_CONTRACT_VERSION = (
+    "stage64_temporal_state_update_graph_contract_v2"
+)
+STAGE64_COMPARISON_NUMBER_DUPLICATE_OPTION_NORMALIZER_VERSION = (
+    "stage64_comparison_number_duplicate_option_v1"
+)
+STAGE64_TEMPORAL_STATE_UPDATE_OPTION_REFERENCE_NORMALIZER_VERSION = (
+    "stage64_temporal_state_update_option_reference_v4"
+)
+STAGE64_TARGET_IDENTITY_VERSION = "stage64_target_identity_v2"
+STAGE64_REASONING_IDENTITY_COMPLETION_NORMALIZER_VERSION = (
+    "stage64_reasoning_identity_completion_v1"
+)
+STAGE64_QA_SCHEMA_COMPLETION_NORMALIZER_VERSION = (
+    "stage64_qa_schema_completion_v2"
+)
+STAGE64_QUERY_PLAN_COMPLETION_NORMALIZER_VERSION = (
+    "stage64_query_plan_completion_v2"
+)
+STAGE64_QA_LOCAL_REPAIR_AUDIT_VERSION = "stage64_qa_local_repair_v1"
+STAGE64_TEMPORAL_CURRENT_QUESTION_RE = re.compile(
+    r"\b(?:current(?:ly)?|latest|most\s+recent|now|final|eventually|ended\s+up|"
+    r"after\s+(?:the\s+)?(?:latest|last|final)\s+update)\b",
+    re.IGNORECASE,
+)
 
 SUPPORTED_QUESTION_TYPES = ("ordering", "multi_select", "evidence_selection", "state_reconstruction")
 DEFAULT_QUESTION_TYPE_WEIGHTS = {
@@ -79,6 +216,10 @@ EASY_ATTACK_SKILLS_BY_QUESTION_TYPE = {
 EASY_MIN_ADDED_TURNS = 14
 EASY_MIN_ADDED_TOKENS = 512
 EASY_GRAPH_EVENT_INSTRUCTION = "Include 3-5 events, enough active and non-active facts for the requested QA type."
+SEMANTIC_GRAPH_V2_EVENT_INSTRUCTION = (
+    "Include exactly 6-8 concrete semantic events. Every event must be useful to the requested Stage3 operation; "
+    "do not emit placeholder, generic, or QA-wrapper events."
+)
 
 # ---------------------------------------------------------------------------
 # r3_long_easy_v2: deterministic quota curriculum (foundation for closed-loop).
@@ -139,37 +280,464 @@ STAGE64_ANSWER_TYPES = (
     "AttributeValue",
     "ProperNounOrNamedEntity",
 )
-STAGE64_PREFERRED_ANSWER_TYPE_CYCLE = (
-    "Event",
-    "ObjectOrCommonNoun",
-    "YesNo",
-    "Number",
-    "Event",
-    "ObjectOrCommonNoun",
-    "DateOrTime",
-    "Person",
-)
 STAGE64_OPERATION_REQUIRED_ANSWER_TYPES = {
+    "comparison": {"Number"},
     "count": {"Number"},
+}
+STAGE64_OPERATION_ANSWER_TYPE_CANDIDATES = {
+    "temporal_state_update": (
+        "LocationOrScope",
+        "DateOrTime",
+        "Event",
+        "ObjectOrCommonNoun",
+        "AttributeValue",
+    ),
+    "bridge": (
+        "Person",
+        "GroupOrOrg",
+        "LocationOrScope",
+        "Event",
+        "ObjectOrCommonNoun",
+        "ProperNounOrNamedEntity",
+    ),
+    "comparison": ("Number",),
+    "visibility": ("Person", "GroupOrOrg", "LocationOrScope", "YesNo"),
+    "count": ("Number",),
+    "cause_consequence": (
+        "Person",
+        "GroupOrOrg",
+        "YesNo",
+        "Event",
+        "ObjectOrCommonNoun",
+        "AttributeValue",
+    ),
+    "relation_lookup": (
+        "Person",
+        "GroupOrOrg",
+        "LocationOrScope",
+        "DateOrTime",
+        "Event",
+        "ObjectOrCommonNoun",
+        "AttributeValue",
+        "ProperNounOrNamedEntity",
+    ),
+}
+STAGE64_REASONING_TARGET_FIELDS = (
+    "reasoning_subtype",
+    "reasoning_template",
+    "hop_count",
+    "hard_negative_strategy",
+)
+STAGE64_ANSWER_PROJECTION_BY_OPERATION = {
+    "temporal_state_update": "current_value",
+    "bridge": "terminal_dependency_value",
+    "comparison": "absolute_difference",
+    "visibility": "visible_value_under_scope",
+    "count": "included_member_count",
+    "cause_consequence": "consequence_value",
+    "relation_lookup": "bound_relation_value",
+}
+STAGE64_TEMPORAL_HARD_NEGATIVE_STATUSES = {
+    "same_slot_canceled_value": frozenset({"canceled"}),
+    "same_slot_outdated_value": frozenset({"outdated"}),
+    "same_slot_report_or_belief_value": frozenset({"report", "belief"}),
+}
+# These signatures are target identities, not post-hoc descriptive labels.  A
+# formal target chooses one signature before generation and the API must echo it
+# unchanged in both qa_proposal and query_plan.  Multiple signatures per
+# operation keep the target ledger diverse even when every item is an MCQ.
+STAGE64_REASONING_TARGET_SPECS: dict[str, tuple[dict[str, Any], ...]] = {
+    "temporal_state_update": (
+        {
+            "reasoning_subtype": "status_gated_canceled_update",
+            "reasoning_template": "reject_canceled_value_then_resolve_update",
+            "hop_count": 4,
+            "hard_negative_strategy": "same_slot_canceled_value",
+            "forbid_max_time_shortcut": True,
+        },
+        {
+            "reasoning_subtype": "status_gated_outdated_update",
+            "reasoning_template": "reject_outdated_value_then_resolve_update",
+            "hop_count": 4,
+            "hard_negative_strategy": "same_slot_outdated_value",
+            "forbid_max_time_shortcut": True,
+        },
+        {
+            "reasoning_subtype": "epistemic_report_vs_current_update",
+            "reasoning_template": "reject_report_or_belief_then_resolve_update",
+            "hop_count": 4,
+            "hard_negative_strategy": "same_slot_report_or_belief_value",
+            "forbid_max_time_shortcut": True,
+        },
+    ),
+    "bridge": (
+        {
+            "reasoning_subtype": "conjunctive_two_support_bridge",
+            "reasoning_template": "join_two_support_facts",
+            "hop_count": 2,
+            "hard_negative_strategy": "one_hop_preserving_alternative",
+        },
+        {
+            "reasoning_subtype": "dependency_chain_bridge",
+            "reasoning_template": "follow_intermediate_dependency",
+            "hop_count": 2,
+            "hard_negative_strategy": "intermediate_entity_swap",
+        },
+        {
+            "reasoning_subtype": "scope_constrained_bridge",
+            "reasoning_template": "join_support_under_scope_constraint",
+            "hop_count": 2,
+            "hard_negative_strategy": "correct_hop_wrong_scope",
+        },
+    ),
+    "comparison": (
+        {
+            "reasoning_subtype": "same_slot_absolute_difference",
+            "reasoning_template": "bind_pair_then_compute_difference",
+            "hop_count": 2,
+            "hard_negative_strategy": "near_numeric_off_by_one",
+        },
+        {
+            "reasoning_subtype": "time_qualified_comparison",
+            "reasoning_template": "select_time_matched_pair_then_compare",
+            "hop_count": 2,
+            "hard_negative_strategy": "wrong_time_same_slot_pair",
+        },
+        {
+            "reasoning_subtype": "entity_bound_comparison",
+            "reasoning_template": "bind_entities_then_compare_values",
+            "hop_count": 2,
+            "hard_negative_strategy": "swapped_entity_close_value",
+        },
+    ),
+    "visibility": (
+        {
+            "reasoning_subtype": "observer_permission_scope",
+            "reasoning_template": "resolve_observer_permission_and_scope",
+            "hop_count": 2,
+            "hard_negative_strategy": "correct_fact_wrong_observer",
+        },
+        {
+            "reasoning_subtype": "scope_intersection_visibility",
+            "reasoning_template": "intersect_resource_and_group_scope",
+            "hop_count": 2,
+            "hard_negative_strategy": "active_but_wrong_scope",
+        },
+        {
+            "reasoning_subtype": "conditional_access_visibility",
+            "reasoning_template": "check_condition_then_permission",
+            "hop_count": 2,
+            "hard_negative_strategy": "right_observer_wrong_condition",
+        },
+    ),
+    "count": (
+        {
+            "reasoning_subtype": "filtered_membership_count",
+            "reasoning_template": "filter_members_then_count",
+            "hop_count": 2,
+            "hard_negative_strategy": "include_exclude_boundary_count",
+        },
+        {
+            "reasoning_subtype": "exception_aware_count",
+            "reasoning_template": "apply_exclusions_then_count",
+            "hop_count": 2,
+            "hard_negative_strategy": "off_by_one_excluded_member",
+        },
+        {
+            "reasoning_subtype": "scope_filtered_count",
+            "reasoning_template": "select_scope_then_filter_and_count",
+            "hop_count": 2,
+            "hard_negative_strategy": "wrong_scope_near_count",
+        },
+    ),
+    "cause_consequence": (
+        {
+            "reasoning_subtype": "direct_causal_dependency",
+            "reasoning_template": "trace_cause_to_effect",
+            "hop_count": 2,
+            "hard_negative_strategy": "temporally_adjacent_non_cause",
+        },
+        {
+            "reasoning_subtype": "causal_vs_temporal_sequence",
+            "reasoning_template": "disambiguate_dependency_from_sequence",
+            "hop_count": 2,
+            "hard_negative_strategy": "earlier_but_noncausal_event",
+        },
+        {
+            "reasoning_subtype": "consequence_attribution",
+            "reasoning_template": "trace_dependency_to_unique_effect",
+            "hop_count": 2,
+            "hard_negative_strategy": "right_cause_wrong_effect",
+        },
+    ),
+    "relation_lookup": (
+        {
+            "reasoning_subtype": "entity_constrained_relation",
+            "reasoning_template": "bind_entity_then_relation",
+            "hop_count": 2,
+            "hard_negative_strategy": "same_relation_wrong_entity",
+        },
+        {
+            "reasoning_subtype": "dual_constraint_relation",
+            "reasoning_template": "intersect_entity_and_relation_constraints",
+            "hop_count": 2,
+            "hard_negative_strategy": "same_entity_wrong_slot",
+        },
+        {
+            "reasoning_subtype": "same_slot_relation_disambiguation",
+            "reasoning_template": "resolve_same_slot_competitors",
+            "hop_count": 2,
+            "hard_negative_strategy": "same_slot_wrong_value",
+        },
+    ),
+}
+STAGE64_NON_ACTIVE_STATUS_LITERALS = (
+    "belief",
+    "canceled",
+    "delayed_not_active",
+    "expired",
+    "false",
+    "outdated",
+    "report",
+    "scope_limited",
+)
+STAGE64_NON_ACTIVE_STATUS_LITERAL_TEXT = ", ".join(
+    STAGE64_NON_ACTIVE_STATUS_LITERALS
+)
+STAGE64_GRAPH_OBJECTIVE_HINTS = {
+    "temporal_state_update": (
+        "Create exactly eight events. events[0:4] are the only answer-bearing update chain and share one exact concrete "
+        "entity string and one exact semantic slot string. Their four values must be semantically distinct and must never "
+        "cycle back to an earlier value. The exact primary-chain status roles must follow the supplied "
+        "temporal_generation_layout_contract: legacy targets end in one active event, while a "
+        "forbid_max_time_shortcut target uses an earlier unique active/current event followed by its named invalid update. "
+        "The category label 'non-active' is forbidden as a status value. events[4:8] are four context singletons whose "
+        "entity+slot pairs are mutually distinct and also differ from the answer chain; context events must omit "
+        "previous_value. Each primary successor must also depend on its immediate predecessor; the first primary event "
+        "and all context singletons must omit dependencies."
+    ),
+    "bridge": (
+        "Create a two-hop dependency whose answer requires combining two distinct graph events. Use a terminal bridge "
+        "event whose dependency path names the complete local support closure; include distractors that preserve one "
+        "hop but change the other."
+    ),
+    "comparison": (
+        "Create exactly eight events in fixed role order. events[0:2] are the only machine-verifiable integer comparison "
+        "pair: two different entities with the same concrete slot and integer time_index, status exactly active, and "
+        "distinct JSON integer values. events[2:4] are a 2+2 contrast: one non-active same-slot historical value for "
+        "each primary entity, together at one shared non-primary time. events[4:8] are four natural context facts. Other "
+        "non-primary normalized (slot, time_index) keys remain pairwise distinct. The answer is the primary pair's "
+        "absolute difference."
+    ),
+    "visibility": (
+        "Create one concrete resource fact plus an explicit permission event that uniquely composes observer, permission, "
+        "and condition. Include plausible wrong-observer, wrong-permission, and wrong-condition alternatives."
+    ),
+    "count": (
+        "Create a clearly defined candidate set containing all 6-8 graph events, sharing one exact set_id, concrete "
+        "entity, semantic slot, and non-empty membership condition. Give those events distinct member values and "
+        "explicit boolean included flags so the final answer requires applying the shared condition before counting."
+    ),
+    "cause_consequence": (
+        "Create exactly one directed causal edge from an explicit earlier cause event to a distinct later consequence "
+        "event, plus a temporally adjacent but non-causal alternative and a wrong-effect alternative."
+    ),
+    "relation_lookup": (
+        "Create an explicit entity binder event followed by a relation event whose dependency cites that binder. Also "
+        "include a same-entity relation hard negative and a same-relation different-entity hard negative."
+    ),
+}
+STAGE3_OPERATION_GRAPH_CONTRACTS = {
+    "temporal_state_update": (
+        "Return exactly 8 events in role order. events[0], events[1], events[2], and events[3] MUST form the only "
+        "answer-bearing update chain and share byte-for-byte identical entity and slot strings. Their four values MUST be "
+        "semantically distinct. events[0] MUST omit previous_value; events[1].previous_value MUST equal events[0].value; "
+        "events[2].previous_value MUST equal events[1].value; events[3].previous_value MUST equal events[2].value. "
+        "The exact status role at each primary-chain index MUST match temporal_generation_layout_contract. Legacy "
+        "targets place active at events[3]; forbid_max_time_shortcut targets place current/gold earlier and require a later "
+        "same-slot invalid event matching hard_negative_strategy. The category label 'non-active' MUST NOT be emitted as a status. "
+        "events[4:8] MUST be context singletons: their four entity+slot pairs must be pairwise distinct and different from "
+        "the chain entity+slot, and each MUST omit previous_value. Each primary successor MUST depend_on exactly its "
+        "immediate predecessor event_id; the first primary event and all context singletons omit depends_on."
+    ),
+    "bridge": (
+        "Return 6-8 events total. E1 and E2 MUST be independent support facts. E3 MUST contain depends_on exactly "
+        "['E1','E2']; this terminal dependency is the complete bridge closure. Do not omit either edge. "
+        "E1 and E2 and every event after E3 MUST omit depends_on. The entire graph MUST contain exactly one sink "
+        "endpoint whose dependency closure contains at least two events; do not create a second bridge chain."
+    ),
+    "comparison": (
+        "Return exactly 8 events in fixed role order. events[0] and events[1] MUST have different entity strings, the "
+        "exact same slot string, the exact same integer time_index, status='active', and distinct JSON integer values. "
+        "They are the primary answer pair. events[2] and events[3] MUST reuse that slot, use the two primary entities one "
+        "each, be non-active, and use one shared non-primary integer time_index. They form the sole allowed 2+2 historical "
+        "contrast. Every event in events[4:8] MUST have a normalized (slot, integer time_index) key that differs from the "
+        "primary key, the contrast key, and every other context key. Do not form a second active same-slot, same-time "
+        "group beyond the primary pair. Context support_claim text must state the underlying fact naturally and must not "
+        "mention graph roles, keys, validators, or comparison-layout instructions. The QA answer is "
+        "abs(events[0].value-events[1].value). For the pair, each alignment_hints.support_claim MUST "
+        "explicitly include that event's own decimal integer value, and the shared slot MUST use one common unit or "
+        "scale in both claims; qualitative substitutes such as perfect/lower and mixed units such as years/seasons are forbidden."
+    ),
+    "visibility": (
+        "Return exactly 8 events in fixed role order. E1 MUST be a novel child resource fact that does not copy any "
+        "complete parent entity+slot+value+status signature; E1 MUST omit scope and depends_on. E2 MUST depend_on "
+        "exactly ['E1'] and include a non-empty scope object with concrete observer, permission, and condition keys. "
+        "E3 MUST differ from E2 only in observer, E4 only in permission, and E5 only in condition. E6-E8 are additional "
+        "scoped hard negatives and each MUST differ from E2 in at least one scope field. E2 is the only event with a "
+        "dependency: E3-E8 MUST omit depends_on. Exactly one event (E2) may match all three scope fields; changing "
+        "status does not make an otherwise identical scope distinct."
+    ),
+    "count": (
+        "Return exactly 8 candidate-member events in fixed role order. Every event MUST include set_membership with the "
+        "same byte-for-byte non-empty set_id, the same byte-for-byte non-empty condition string, the same byte-for-byte "
+        "non-empty concrete entity string, and the same "
+        "byte-for-byte non-empty semantic slot string. All eight normalized value fields MUST be pairwise distinct. "
+        "events[0:4] MUST use included=true and events[4:8] MUST use included=false. Never mix entities, relations, "
+        "slots, or duplicate member values inside one set_id. Statuses and any optional fields must remain valid under "
+        "semantic_graph_v2."
+    ),
+    "cause_consequence": (
+        "Return 6-8 events total. E1 MUST be an earlier cause. E2 MUST be a later consequence with integer time_index "
+        "greater than E1 and depends_on exactly ['E1']. Every other event MUST omit depends_on, leaving one unique "
+        "directed cause-to-consequence edge."
+    ),
+    "relation_lookup": (
+        "Return exactly 8 events in fixed role order and give every event an integer time_index. E1 is a novel entity "
+        "binder: E1.value MUST equal E2.entity byte-for-byte and E1 MUST omit depends_on. E2 MUST depend_on exactly "
+        "['E1'] and state the target relation value for that bound entity. E3 MUST copy E2.entity and E2.slot exactly, "
+        "use a value distinct from E2.value, and omit depends_on. E4 MUST use an entity different from E2.entity, "
+        "copy E2.slot exactly, and omit depends_on. E5-E8 are independent context facts and MUST omit depends_on. "
+        "The entire graph MUST contain exactly one dependency edge, E2 -> E1. No child event may copy a complete "
+        "parent entity+slot+value+status fact or a parent support sentence."
+    ),
+}
+STAGE64_ITEM_DIFFICULTY_CONTRACTS = {
+    "boundary": {
+        "graph": (
+            "Build close graph-grounded competitors rather than unrelated negatives. Include at least two answer-relevant "
+            "anchors whenever the operation supports composition, while keeping one decisive distinction recoverable."
+        ),
+        "qa": (
+            "Target a Stage2 decision boundary: require a concrete distinction between close graph candidates and avoid "
+            "questions whose answer is a direct copy of one isolated support sentence."
+        ),
+    },
+    "harder_boundary": {
+        "graph": (
+            "Build same-slot or same-relation minimal-pair competitors that differ in exactly one decisive entity, value, "
+            "time, scope, membership, or dependency. Provide at least three answer-relevant anchors when the operation permits."
+        ),
+        "qa": (
+            "Target a harder Stage2 boundary using close same-slot/minimal-pair distractors and multiple anchors. The gold "
+            "must require resolving a time, scope, membership, relation, or dependency distinction rather than direct copying."
+        ),
+    },
+    "hard": {
+        "graph": (
+            "Build a genuinely compositional item with at least three answer-relevant anchors and multiple close competitors. "
+            "The decisive evidence must be distributed across graph events, while remaining uniquely derivable."
+        ),
+        "qa": (
+            "Target hard diagnostic reasoning: require three or more answer-relevant anchors and tightly matched distractors, "
+            "without ambiguity, metadata clues, or an answer copied from a single event sentence."
+        ),
+    },
+}
+STAGE64_OPERATION_QA_HARDNESS_GUIDANCE = {
+    "temporal_state_update": (
+        "Ask for a named entity's concrete updated value. Never ask for the latest/current event, a confirmed event, "
+        "or the status after all updates; use at least three same-entity same-slot update events with semantically distinct "
+        "values. The gold source must be the unique active/restored event. Legacy targets use the highest-time event; "
+        "a reasoning target with forbid_max_time_shortcut=true instead requires an earlier current event followed by a "
+        "same-slot canceled/outdated/report-or-belief invalid update selected by hard_negative_strategy. Option text must be "
+        "the answer value itself: never append parenthetical status notes to make a repeated value look different."
+    ),
+    "bridge": (
+        "Do not use YesNo for bridge. Ask for a concrete Person, Event, Object, place, or attribute that can be derived only "
+        "by combining both support hops, and cite both hops in every reasoning/required/supporting anchor list."
+    ),
+    "relation_lookup": (
+        "Do not ask a one-event direct lookup. Disambiguate among close same-relation or same-slot candidates with a second "
+        "constraint, and cite at least two distinct answer-relevant graph anchors."
+    ),
+    "count": (
+        "Ask for the exact numeric count of included=true members in one explicitly named set. The user-facing question "
+        "must name that set's concrete entity and semantic slot/membership condition. Cite every counted candidate, with at "
+        "least six distinct member events from the same set_id/entity/slot in reasoning_anchor_path, required_anchor_refs, "
+        "and supporting_anchor_refs. Gold must equal the included=true count and return four distinct numeric options "
+        "whose nearby values bracket the gold (at least one lower and one higher)."
+    ),
+}
+
+
+def _stage64_prompt_difficulty_contract(
+    source: dict[str, Any] | str | None,
+    operation: str | None,
+) -> tuple[str, dict[str, str]]:
+    raw = (
+        source.get("item_difficulty_target") or source.get("boundary_item_difficulty_target")
+        if isinstance(source, dict)
+        else source
+    )
+    normalized = str(raw or "boundary").strip().casefold().replace("-", "_")
+    aliases = {
+        "medium": "boundary",
+        "medium_hard": "boundary",
+        "boundary_target": "boundary",
+        "boundary_hard": "harder_boundary",
+        "medium_high": "harder_boundary",
+        "hard_diagnostic": "hard",
+    }
+    target = aliases.get(normalized, normalized)
+    if target not in STAGE64_ITEM_DIFFICULTY_CONTRACTS:
+        target = "boundary"
+    contract = dict(STAGE64_ITEM_DIFFICULTY_CONTRACTS[target])
+    operation_guidance = STAGE64_OPERATION_QA_HARDNESS_GUIDANCE.get(str(operation or "").strip())
+    if operation_guidance:
+        contract["operation_qa"] = operation_guidance
+    return target, contract
+
+
+STAGE64_CANONICAL_QA_SUBTYPES = {
+    "temporal_state_update": "latest_state_update",
+    "bridge": "multi_hop_dependency",
+    "comparison": "entity_comparison",
+    "visibility": "permission_scope",
+    "count": "filtered_count",
+    "cause_consequence": "causal_effect",
+    "relation_lookup": "attribute_lookup",
 }
 STAGE64_BAD_SOLVER_VISIBLE_RE = re.compile(
     r"\braw_qa\b|raw_qa_|event_instance|anchor_|graph_anchor|\bmarker\b|\banchor\b|"
-    r"final active state|latest confirmed detail|confirmed active state|current graph|\bQ:\s|\bA:\s|"
+    r"(?:comparison|count|temporal(?:[_\s]+state[_\s]+update)?)[_\s]+graph[_\s]+contract|"
+    r"final active state|latest confirmed detail|latest confirmed event|confirmed active state|current graph|\bQ:\s|\bA:\s|"
     r"\bconfirmed\s+details?\b|\bmost\s+recent\s+confirmed\s+details?\b|"
-    r"\b(?:currently\s+)?settled\s+as\s+true\b|\bstate\s+after\s+all\s+updates\b",
+    r"\b(?:currently\s+)?settled\s+as\s+true\b|\bafter\s+all\s+updates\b",
     re.IGNORECASE,
 )
 STAGE64_GENERIC_QUESTION_RE = re.compile(
-    r"^\s*which\s+event\s+(?:is|best|represents|reflects)\b|"
+    r"^\s*which\s+event\b|"
     r"\bconfirmed\s+as\s+settled\b|"
     r"\bin\s+the\s+conversation\b|"
-    r"\bbased\s+on\s+the\s+conversation\b",
+    r"\bbased\s+on\s+the\s+conversation\b|"
+    r"\baccording\s+to\s+(?:the\s+)?(?:conversation|information\s+(?:provided|given))\b|"
+    r"\bbased\s+on\s+(?:the\s+)?information\s+(?:provided|given)\b",
     re.IGNORECASE,
 )
 STAGE64_QA_REPAIRABLE_RE = re.compile(
     r"stage64 API QA|qa_proposal|query_plan|answer_type|qa_operation|gold|options|anchor_refs|graph reference",
     re.IGNORECASE,
 )
+STAGE64_NON_REPAIRABLE_GRAPH_QUALITY_RE = re.compile(
+    r"generic_raw_qa_slot|bridge_missing_two_hop_dependency|visibility_missing_scope|"
+    r"count_missing_candidate_set|cause_missing_ordered_dependency|count_reasoning_event_missing_membership|"
+    r"count_reasoning_events_not_one_candidate_set|count_set_id_has_mixed_semantic_dimensions|"
+    r"count_candidate_member_values_not_distinct",
+    re.IGNORECASE,
+)
+GRAPH_CACHE_SCHEMA_VERSION = "semantic_graph_v17"
+PURE_INTEGER_STRING_RE = re.compile(r"^[+-]?\d+$")
 # Hard cap (as a share of n_samples) for any single qtype/skill in the ACCEPTED set.
 EASY_V2_MAX_QUESTION_TYPE_SHARE = 0.40
 EASY_V2_MAX_ATTACK_SKILL_SHARE = 0.40
@@ -205,18 +773,11 @@ APPROVED_EVENT_TYPES = {
 }
 APPROVED_STATUSES = {
     "active",
-    "outdated",
-    "canceled",
     "restored",
-    "expired",
-    "delayed_not_active",
-    "false",
-    "belief",
-    "report",
-    "scope_limited",
+    *STAGE64_NON_ACTIVE_STATUS_LITERALS,
 }
 ACTIVE_STATUSES = {"active", "restored"}
-FALSE_STATUSES = {"outdated", "canceled", "expired", "delayed_not_active", "false", "belief", "report", "scope_limited"}
+FALSE_STATUSES = set(STAGE64_NON_ACTIVE_STATUS_LITERALS)
 DELAYED_ACTIVATION_PARENT_UNSATISFIED_STATUSES = {
     "delayed",
     "delayed_not_active",
@@ -240,14 +801,24 @@ DELAYED_ACTIVATION_SEMANTIC_FAILURE_REASONS = {
     "delayed_activation_hard_negative_not_semantic",
 }
 STATUS_ALIASES = {
-    "outdated": ("outdated", "old", "stale", "no longer current", "superseded", "may no longer apply", "corrected later"),
-    "canceled": ("canceled", "cancelled", "called off", "do not treat", "not current", "no longer happening"),
+    "outdated": ("outdated", "old", "stale", "no longer current", "superseded", "no longer applies", "corrected later"),
+    "canceled": ("canceled", "cancelled", "called off", "withdrawn", "did not take effect", "no longer happening"),
     "expired": ("expired", "lapsed", "no longer valid", "has expired"),
-    "delayed_not_active": ("delayed", "not active yet", "not yet active", "waiting", "planned for later", "still waiting"),
-    "false": ("false", "not true", "incorrect", "corrects this", "mistaken"),
-    "belief": ("believes", "belief", "thinks", "assumes", "unsure", "may be true", "not sure"),
+    "delayed_not_active": ("delayed", "not active yet", "not yet active", "not taken effect", "waiting", "planned for later", "still waiting"),
+    "false": ("false", "not true", "incorrect", "corrects this", "mistaken", "untrue"),
+    "belief": ("believes", "belief", "thinks", "assumes", "unsure", "uncertain", "may be true", "not sure"),
     "report": ("report", "reported", "claims", "claim", "someone said", "not fully settled", "needs confirmation"),
-    "scope_limited": ("only", "scope", "limited", "visible to", "permission", "allowed to know", "can know this"),
+    "scope_limited": ("only", "scope", "limited", "restricted", "visible to", "permission", "allowed to know", "can know this"),
+}
+STATUS_NATURAL_SUFFIXES = {
+    "belief": "The speaker is uncertain whether this value is true.",
+    "report": "This value remains an unconfirmed secondhand report.",
+    "outdated": "This value was superseded and no longer applies.",
+    "canceled": "This proposed value was withdrawn before it took effect.",
+    "expired": "This value is no longer valid because its validity window expired.",
+    "delayed_not_active": "This proposed value has not taken effect yet.",
+    "false": "This value was explicitly corrected as untrue.",
+    "scope_limited": "Access to this value is restricted to the stated audience.",
 }
 GRAPH_TURN_ID_FIELDS = (
     "turn_ids",
@@ -409,27 +980,38 @@ INTERNAL_TEXT_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\brequired_for_dialogue\b", re.IGNORECASE), "important for the conversation"),
     (
         re.compile(r"\bThis\s+is\s+a\s+belief,\s*not\s+an\s+active[^.]*\.?", re.IGNORECASE),
-        "The speaker is unsure whether this is still true.",
+        STATUS_NATURAL_SUFFIXES["belief"],
     ),
     (
         re.compile(r"\bThis\s+is\s+only\s+a\s+report,\s*not\s+an\s+active[^.]*\.?", re.IGNORECASE),
-        "Someone reported this, but the speakers have not settled whether it is true.",
+        STATUS_NATURAL_SUFFIXES["report"],
     ),
     (
         re.compile(r"\bThis\s+is\s+expired\s+and\s+not\s+an\s+active[^.]*\.?", re.IGNORECASE),
-        "That information has expired.",
+        STATUS_NATURAL_SUFFIXES["expired"],
     ),
     (
         re.compile(r"\bThis\s+is\s+canceled\s+and\s+not\s+an\s+active[^.]*\.?", re.IGNORECASE),
-        "That plan has been called off.",
+        STATUS_NATURAL_SUFFIXES["canceled"],
     ),
     (
         re.compile(r"\bThis\s+is\s+outdated\s+and\s+not\s+an\s+active[^.]*\.?", re.IGNORECASE),
-        "An old version of this detail may no longer apply.",
+        STATUS_NATURAL_SUFFIXES["outdated"],
     ),
     (
         re.compile(r"\bThis\s+is\s+false\s+and\s+not\s+an\s+active[^.]*\.?", re.IGNORECASE),
-        "The speaker corrects this as not true.",
+        STATUS_NATURAL_SUFFIXES["false"],
+    ),
+    (
+        re.compile(r"\bThis\s+is\s+delayed\s+and\s+not\s+active\s+yet\.?", re.IGNORECASE),
+        STATUS_NATURAL_SUFFIXES["delayed_not_active"],
+    ),
+    (
+        re.compile(
+            r"\bThis\s+is\s+scope\s+limited,\s*not\s+a\s+generally\s+visible\s+active\s+state\.?",
+            re.IGNORECASE,
+        ),
+        STATUS_NATURAL_SUFFIXES["scope_limited"],
     ),
     (re.compile(r"\btracked\s+current\s+graph\b", re.IGNORECASE), "conversation"),
     (re.compile(r"\bcurrent\s+graph\b", re.IGNORECASE), "conversation"),
@@ -511,6 +1093,33 @@ def normalize_text(value: Any) -> str:
 
 def token_set(value: Any) -> set[str]:
     return {token for token in normalize_text(value).split() if len(token) >= 3}
+
+
+def _event_lexical_token_set(value: Any) -> set[str]:
+    """Keep exact numeric facts while retaining the existing lexical noise floor."""
+
+    raw = "" if value is None else str(value)
+    normalized = re.sub(
+        r"[^a-z0-9]+",
+        " ",
+        re.sub(r"\s+", " ", raw).strip().lower(),
+    ).strip()
+    return {
+        token
+        for token in normalized.split()
+        if len(token) >= 3 or token.isdigit()
+    }
+
+
+def _exact_integer_surface_supported(value: int, turn_text: Any) -> bool:
+    """Require a signed, whole-token decimal surface for one JSON integer fact."""
+
+    surface = str(value)
+    pattern = re.compile(
+        rf"(?<![A-Za-z0-9_.+\-]){re.escape(surface)}"
+        rf"(?![A-Za-z0-9_])(?![.,]\d)"
+    )
+    return pattern.search(normalize_space(turn_text)) is not None
 
 
 def stable_hash(value: Any, *, length: int = 16) -> str:
@@ -675,23 +1284,27 @@ def _has_synthetic_surface_phrase(text: Any) -> bool:
 
 
 def _status_natural_suffix(status: str) -> str:
-    if status == "belief":
-        return "The speaker thinks this may be true, but they are unsure."
-    if status == "report":
-        return "Someone reported this, but the speakers have not fully settled it."
-    if status == "outdated":
-        return "An old version of this detail may no longer apply."
-    if status == "canceled":
-        return "That plan has been called off."
-    if status == "expired":
-        return "That information has expired."
-    if status == "delayed_not_active":
-        return "This is planned for later and is still waiting."
-    if status == "false":
-        return "The speaker corrects this as not true."
-    if status == "scope_limited":
-        return "Only some people are allowed to know this."
-    return ""
+    return STATUS_NATURAL_SUFFIXES.get(status, "")
+
+
+def _formal_status_suffix_surface(status: str) -> str:
+    suffix = _status_natural_suffix(status)
+    return sanitize_internal_text(suffix) if suffix else ""
+
+
+def _formal_status_meaning(status: str) -> str:
+    return {
+        "active": "current child fact",
+        "restored": "made current again by a later update",
+        "outdated": "superseded by a later child update",
+        "canceled": "withdrawn before taking effect",
+        "expired": "past its validity window",
+        "delayed_not_active": "scheduled but not yet in effect",
+        "false": "explicitly corrected as untrue",
+        "belief": "uncertain personal impression",
+        "report": "unconfirmed secondhand report",
+        "scope_limited": "restricted to an allowed audience",
+    }.get(status, "child conversation update")
 
 
 def _naturalize_claim_for_status(claim: str, status: str) -> str:
@@ -699,10 +1312,11 @@ def _naturalize_claim_for_status(claim: str, status: str) -> str:
     suffix = _status_natural_suffix(status)
     if not suffix:
         return natural
-    natural_norm = normalize_text(natural)
-    aliases = STATUS_ALIASES.get(status) or ()
-    has_status_language = any(normalize_text(alias) in natural_norm for alias in aliases)
-    if not has_status_language:
+    # Broad aliases such as "old", "only", or "report" can occur in entity
+    # names or values without expressing the event's status.  A non-active
+    # event is therefore considered status-bound only when the complete local
+    # canonical suffix is already present.
+    if normalize_text(suffix) not in normalize_text(natural):
         natural = normalize_space(f"{natural}. {suffix}")
     return sanitize_internal_text(natural)
 
@@ -889,6 +1503,7 @@ def _merge_local_summary(global_summary: dict[str, Any], local: dict[str, Any]) 
         "difficulty_plan_applied",
         "difficulty_plan_stage",
         "difficulty_plan_manual_policy_correction",
+        "stage64_qa_repair_max_attempts",
     }
     for key, value in local.items():
         if key in skip_keys:
@@ -965,6 +1580,111 @@ def _record_api_meta_retry_diagnostics(summary: dict[str, Any], meta: dict[str, 
             _bump_summary_counter(summary, "dialogue_json_normalizer_failure_count")
         if meta.get("used") and normalizer.get("dialogue_json_normalizer_used"):
             _bump_summary_counter(summary, "dialogue_reject_recovered_by_normalizer_count")
+    if meta.get("call_kind") == "api_formal_segmented_dialogue":
+        for record in meta.get("segment_records") or []:
+            record_meta = (
+                record.get("meta")
+                if isinstance(record, dict) and isinstance(record.get("meta"), dict)
+                else {}
+            )
+            if record_meta.get("temperature_override") is not None:
+                _bump_summary_counter(
+                    summary,
+                    "formal_dialogue_retry_temperature_override_count",
+                )
+                if normalize_space(record_meta.get("diversity_retry_reason")):
+                    _bump_summary_counter(
+                        summary,
+                        "formal_dialogue_diversity_temperature_override_count",
+                    )
+                structural_reason = normalize_space(
+                    record_meta.get("structural_retry_reason")
+                )
+                if structural_reason:
+                    _bump_summary_counter(
+                        summary,
+                        "formal_dialogue_structural_temperature_override_count",
+                    )
+                    structural_counts = summary.setdefault(
+                        "formal_dialogue_structural_retry_reason_counts", {}
+                    )
+                    structural_counts[structural_reason] = int(
+                        structural_counts.get(structural_reason) or 0
+                    ) + 1
+            if (
+                int(record.get("segment_index") or 0)
+                >= FORMAL_DIALOGUE_LATE_RETRY_START_SEGMENT_INDEX
+                and int(record.get("segment_attempt") or 0)
+                > FORMAL_DIALOGUE_MIN_SEGMENT_VALIDATION_ATTEMPTS
+            ):
+                _bump_summary_counter(
+                    summary,
+                    "formal_dialogue_late_local_retry_count",
+                )
+            summary["formal_dialogue_forbidden_opening_prefix_count_max"] = max(
+                int(
+                    summary.get(
+                        "formal_dialogue_forbidden_opening_prefix_count_max"
+                    )
+                    or 0
+                ),
+                len(record_meta.get("forbidden_opening_prefixes") or []),
+            )
+            validation = record.get("validation") if isinstance(record, dict) else None
+            if not isinstance(validation, dict) or validation.get("pass") is True:
+                continue
+            reason = normalize_space(validation.get("reason"))
+            counter_key = {
+                "segment_exact_duplicate_turn": "formal_segment_exact_duplicate_reject_count",
+                "frozen_prefix_turn_repeated": "formal_segment_exact_duplicate_reject_count",
+                "segment_near_duplicate_turn": "formal_segment_near_duplicate_reject_count",
+                "segment_phrase_containment_duplicate_turn": (
+                    "formal_segment_phrase_containment_reject_count"
+                ),
+                "segment_opening_prefix_concentration": (
+                    "formal_segment_opening_concentration_reject_count"
+                ),
+                "cumulative_opening_prefix_concentration": (
+                    "formal_segment_opening_concentration_reject_count"
+                ),
+            }.get(reason)
+            if counter_key:
+                _bump_summary_counter(summary, counter_key)
+            if reason == "segment_opening_prefix_concentration":
+                _bump_summary_counter(
+                    summary,
+                    "formal_segment_opening_segment_scope_reject_count",
+                )
+            elif reason == "cumulative_opening_prefix_concentration":
+                _bump_summary_counter(
+                    summary,
+                    "formal_segment_opening_cumulative_scope_reject_count",
+                )
+            opening_audit = validation.get("opening_diversity_audit")
+            if isinstance(opening_audit, dict):
+                rejected_prefixes = opening_audit.get("rejected_prefixes") or []
+                _bump_summary_counter(
+                    summary,
+                    "formal_segment_opening_rejected_prefix_count",
+                    len(rejected_prefixes),
+                )
+            audit = validation.get("turn_duplicate_audit")
+            if isinstance(audit, dict):
+                _bump_summary_counter(
+                    summary,
+                    "formal_segment_exact_duplicate_pair_reject_count",
+                    int(audit.get("exact_duplicate_pair_count") or 0),
+                )
+                _bump_summary_counter(
+                    summary,
+                    "formal_segment_near_duplicate_pair_reject_count",
+                    int(audit.get("near_duplicate_pair_count") or 0),
+                )
+                _bump_summary_counter(
+                    summary,
+                    "formal_segment_phrase_containment_pair_reject_count",
+                    int(audit.get("phrase_containment_pair_count") or 0),
+                )
     errors = [
         error
         for error in (meta.get("errors") or meta.get("previous_errors") or [])
@@ -1030,6 +1750,8 @@ def _failure_reason_from_exception(exc: Exception, raw_record: dict[str, Any] | 
         return "timeout"
     if "api graph expansion failed" in message:
         return "api_graph"
+    if "stage64 graph semantic quality failed" in message or "semantic_graph_v2 quality failed" in message:
+        return "stage64_graph_quality"
     if "anti_shortcut" in message:
         return "base_validation_anti_shortcut"
     if "base validation" in message:
@@ -1040,7 +1762,902 @@ def _failure_reason_from_exception(exc: Exception, raw_record: dict[str, Any] | 
 def _is_stage64_qa_repairable_error(exc: Exception) -> bool:
     if not isinstance(exc, NativeGraphDialogueReject):
         return False
-    return bool(STAGE64_QA_REPAIRABLE_RE.search(str(exc)))
+    message = str(exc)
+    if STAGE64_NON_REPAIRABLE_GRAPH_QUALITY_RE.search(message):
+        return False
+    return bool(STAGE64_QA_REPAIRABLE_RE.search(message))
+
+
+def semantic_graph_plan_quality_issues(
+    plan: dict[str, Any],
+    qa_operation: str,
+    stage64_target: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    for issue in semantic_graph_v2.validate_graph_delta(
+        plan,
+        operation=qa_operation,
+        reasoning_target=stage64_target,
+    ):
+        issues.append({"reason": str(issue.get("code") or "semantic_graph_v2"), **issue})
+    issues.extend(
+        stage64_quality.graph_plan_quality_issues(
+            plan,
+            qa_operation,
+            stage64_target,
+        )
+    )
+    issues.extend(_stage64_reasoning_graph_target_issues(plan, stage64_target))
+    deduplicated: dict[tuple[str, str], dict[str, Any]] = {}
+    for issue in issues:
+        key = (str(issue.get("reason") or "unknown"), str(issue.get("path") or ""))
+        deduplicated.setdefault(key, issue)
+    return list(deduplicated.values())
+
+
+def _temporal_generation_text_key(value: Any) -> str:
+    return re.sub(r"[\W_]+", " ", str(value).casefold(), flags=re.UNICODE).strip()
+
+
+def _temporal_generation_value_key(value: Any) -> str:
+    if isinstance(value, str):
+        return json.dumps(["string", _temporal_generation_text_key(value)], ensure_ascii=False)
+    try:
+        return json.dumps(
+            [type(value).__name__, value],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    except (TypeError, ValueError):
+        return f"<{type(value).__module__}.{type(value).__qualname__}>"
+
+
+def _temporal_generation_values_equal(left: Any, right: Any) -> bool:
+    if isinstance(left, str) and isinstance(right, str):
+        return _temporal_generation_text_key(left) == _temporal_generation_text_key(right)
+    return type(left) is type(right) and left == right
+
+
+def _temporal_event_ref(event: Any, index: int) -> str:
+    if isinstance(event, dict) and normalize_space(event.get("event_id")):
+        return normalize_space(event.get("event_id"))
+    return f"events[{index}]"
+
+
+def temporal_raw_generation_layout_issues(
+    candidate: dict[str, Any],
+    stage64_target: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Validate the stricter API-generation layout without mutating the graph.
+
+    ``semantic_graph_v2`` intentionally accepts general 6-8 event temporal
+    graphs.  The native challenger uses this narrower eight-role protocol to
+    keep one answer chain and four context singletons unambiguous.  This gate is
+    reject-only: it never chooses a chain, changes a status, or drops an event.
+    """
+
+    if not isinstance(candidate, dict) or candidate.get("operation") != "temporal_state_update":
+        return []
+    events = candidate.get("events")
+    if not isinstance(events, list):
+        return [
+            {
+                "code": "temporal_generation_layout_missing_events",
+                "path": "$.events",
+                "message": "Native temporal generation requires an eight-event array.",
+            }
+        ]
+
+    issues: list[dict[str, Any]] = []
+    if len(events) != 8:
+        issues.append(
+            {
+                "code": "temporal_generation_layout_event_count",
+                "path": "$.events",
+                "message": "Native temporal generation requires exactly eight events in role order.",
+                "details": {"expected": 8, "actual": len(events)},
+            }
+        )
+    if len(events) < 8 or not all(isinstance(event, dict) for event in events[:8]):
+        return issues
+
+    primary = events[:4]
+    context = events[4:8]
+    primary_ids = [_temporal_event_ref(event, index) for index, event in enumerate(primary)]
+    context_ids = [
+        _temporal_event_ref(event, index)
+        for index, event in enumerate(context, start=4)
+    ]
+
+    if len(set(primary_ids)) != 4:
+        issues.append(
+            {
+                "code": "temporal_generation_layout_primary_ids_not_unique",
+                "path": "$.events[0:4]",
+                "message": "The four primary temporal roles require four unique event_id values.",
+                "details": {"event_ids": primary_ids},
+            }
+        )
+
+    chain_entity = primary[0].get("entity")
+    chain_slot = primary[0].get("slot")
+    mismatched_primary_ids = [
+        primary_ids[index]
+        for index, event in enumerate(primary)
+        if event.get("entity") != chain_entity or event.get("slot") != chain_slot
+    ]
+    if mismatched_primary_ids:
+        issues.append(
+            {
+                "code": "temporal_generation_layout_primary_entity_slot_mismatch",
+                "path": "$.events[0:4]",
+                "message": "The first four events must use byte-for-byte identical entity and slot strings.",
+                "details": {
+                    "chain_entity": chain_entity,
+                    "chain_slot": chain_slot,
+                    "mismatched_event_ids": mismatched_primary_ids,
+                },
+            }
+        )
+
+    value_to_ids: dict[str, list[str]] = {}
+    for event_id, event in zip(primary_ids, primary):
+        value_to_ids.setdefault(
+            _temporal_generation_value_key(event.get("value")), []
+        ).append(event_id)
+    duplicate_value_event_ids = [
+        event_ids for event_ids in value_to_ids.values() if len(event_ids) > 1
+    ]
+    if duplicate_value_event_ids:
+        issues.append(
+            {
+                "code": "temporal_generation_layout_primary_value_cycle",
+                "path": "$.events[0:4]",
+                "message": "The four primary values must be semantically distinct; restore cycles are forbidden.",
+                "details": {"duplicate_value_event_ids": duplicate_value_event_ids},
+            }
+        )
+
+    anti_shortcut = bool(
+        isinstance(stage64_target, dict)
+        and all(field in stage64_target for field in STAGE64_REASONING_TARGET_FIELDS)
+        and stage64_target.get("forbid_max_time_shortcut") is True
+    )
+    strategy = (
+        str(stage64_target.get("hard_negative_strategy") or "")
+        if anti_shortcut
+        else ""
+    )
+    required_later_statuses = STAGE64_TEMPORAL_HARD_NEGATIVE_STATUSES.get(
+        strategy, frozenset()
+    )
+    if anti_shortcut:
+        active_indexes = [
+            index
+            for index, event in enumerate(primary)
+            if event.get("status") in ACTIVE_STATUSES
+        ]
+        if len(active_indexes) != 1:
+            issues.append(
+                {
+                    "code": "temporal_generation_layout_current_not_unique",
+                    "path": "$.events[0:4]",
+                    "message": "The anti-shortcut primary chain requires exactly one active/current event.",
+                    "details": {"active_array_indexes": active_indexes},
+                }
+            )
+        elif active_indexes[0] == 3:
+            issues.append(
+                {
+                    "code": "temporal_generation_layout_current_is_max_time",
+                    "path": "$.events[3].status",
+                    "message": "The anti-shortcut current/gold event must occur before the maximum-time update.",
+                    "details": {"event_id": primary_ids[3]},
+                }
+            )
+        else:
+            active_index = active_indexes[0]
+            later = primary[active_index + 1 :]
+            wrong_non_current_ids = [
+                primary_ids[index]
+                for index, event in enumerate(primary)
+                if index != active_index
+                and event.get("status") not in semantic_graph_v2.NON_ACTIVE_STATUSES
+            ]
+            if wrong_non_current_ids:
+                issues.append(
+                    {
+                        "code": "temporal_generation_layout_non_current_not_invalid",
+                        "path": "$.events[0:4]",
+                        "message": "Every non-current primary event must use an explicit non-active status.",
+                        "details": {"event_ids": wrong_non_current_ids},
+                    }
+                )
+            matching_later_ids = [
+                primary_ids[index]
+                for index in range(active_index + 1, 4)
+                if primary[index].get("status") in required_later_statuses
+            ]
+            if not required_later_statuses:
+                issues.append(
+                    {
+                        "code": "temporal_generation_layout_unknown_hard_negative_strategy",
+                        "path": "$.events[0:4]",
+                        "message": "The temporal anti-shortcut target uses an unsupported hard-negative strategy.",
+                        "details": {"hard_negative_strategy": strategy},
+                    }
+                )
+            elif not matching_later_ids:
+                issues.append(
+                    {
+                        "code": "temporal_generation_layout_missing_later_strategy_update",
+                        "path": "$.events[0:4]",
+                        "message": "A later same-slot invalid update must realize the target hard-negative strategy.",
+                        "details": {
+                            "hard_negative_strategy": strategy,
+                            "required_later_statuses": sorted(required_later_statuses),
+                        },
+                    }
+                )
+    else:
+        wrong_earlier_status_ids = [
+            primary_ids[index]
+            for index, event in enumerate(primary[:3])
+            if event.get("status") in ACTIVE_STATUSES
+        ]
+        if wrong_earlier_status_ids:
+            issues.append(
+                {
+                    "code": "temporal_generation_layout_earlier_primary_active",
+                    "path": "$.events[0:3]",
+                    "message": "The first three primary updates must be non-active.",
+                    "details": {"event_ids": wrong_earlier_status_ids},
+                }
+            )
+        if primary[3].get("status") != "active":
+            issues.append(
+                {
+                    "code": "temporal_generation_layout_terminal_not_active",
+                    "path": "$.events[3].status",
+                    "message": "The terminal primary update must have status exactly 'active', never 'restored'.",
+                    "details": {
+                        "event_id": primary_ids[3],
+                        "actual": primary[3].get("status"),
+                        "expected": "active",
+                    },
+                }
+            )
+
+    if "previous_value" in primary[0]:
+        issues.append(
+            {
+                "code": "temporal_generation_layout_initial_previous_value_present",
+                "path": "$.events[0].previous_value",
+                "message": "The initial primary update must omit previous_value, including null.",
+                "details": {"event_id": primary_ids[0]},
+            }
+        )
+    broken_links: list[dict[str, Any]] = []
+    for index in range(1, 4):
+        previous = primary[index - 1]
+        current = primary[index]
+        if "previous_value" not in current or not _temporal_generation_values_equal(
+            current.get("previous_value"), previous.get("value")
+        ):
+            broken_links.append(
+                {
+                    "event_id": primary_ids[index],
+                    "predecessor_event_id": primary_ids[index - 1],
+                    "expected_previous_value": previous.get("value"),
+                    "actual_previous_value": current.get("previous_value"),
+                }
+            )
+    if broken_links:
+        issues.append(
+            {
+                "code": "temporal_generation_layout_broken_previous_value",
+                "path": "$.events[1:4]",
+                "message": "Each primary update after the first must point to the immediately preceding value.",
+                "details": {"broken_links": broken_links},
+            }
+        )
+
+    wrong_time_roles = [
+        {
+            "event_id": _temporal_event_ref(event, index),
+            "expected_time_index": index + 1,
+            "actual_time_index": event.get("time_index"),
+        }
+        for index, event in enumerate(events[:8])
+        if isinstance(event.get("time_index"), bool)
+        or not isinstance(event.get("time_index"), int)
+        or event.get("time_index") != index + 1
+    ]
+    if wrong_time_roles:
+        issues.append(
+            {
+                "code": "temporal_generation_layout_time_index_role_mismatch",
+                "path": "$.events",
+                "message": "time_index must equal the event's one-based array role position from 1 through 8.",
+                "details": {"mismatches": wrong_time_roles},
+            }
+        )
+
+    chain_key = (
+        _temporal_generation_text_key(chain_entity),
+        _temporal_generation_text_key(chain_slot),
+    )
+    context_keys = [
+        (
+            _temporal_generation_text_key(event.get("entity")),
+            _temporal_generation_text_key(event.get("slot")),
+        )
+        for event in context
+    ]
+    repeated_context_ids: list[str] = []
+    seen_keys = {chain_key}
+    for event_id, key in zip(context_ids, context_keys):
+        if key in seen_keys:
+            repeated_context_ids.append(event_id)
+        seen_keys.add(key)
+    if repeated_context_ids:
+        issues.append(
+            {
+                "code": "temporal_generation_layout_context_not_singleton",
+                "path": "$.events[4:8]",
+                "message": "Every context event needs an entity+slot pair distinct from the chain and every other context event.",
+                "details": {"event_ids": repeated_context_ids},
+            }
+        )
+    context_previous_value_ids = [
+        context_ids[index]
+        for index, event in enumerate(context)
+        if "previous_value" in event
+    ]
+    if context_previous_value_ids:
+        issues.append(
+            {
+                "code": "temporal_generation_layout_context_previous_value_present",
+                "path": "$.events[4:8]",
+                "message": "Context singleton events must omit previous_value, including null.",
+                "details": {"event_ids": context_previous_value_ids},
+            }
+        )
+    return issues
+
+
+def _comparison_generation_key(event: dict[str, Any]) -> tuple[str, int] | None:
+    slot = event.get("slot")
+    time_index = event.get("time_index")
+    normalized_slot = _temporal_generation_text_key(slot)
+    if (
+        not normalized_slot
+        or isinstance(time_index, bool)
+        or not isinstance(time_index, int)
+    ):
+        return None
+    return normalized_slot, time_index
+
+
+def comparison_raw_generation_layout_issues(
+    candidate: dict[str, Any],
+    stage64_target: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Reject native comparison graphs that do not follow the fixed 2+6 roles.
+
+    The general ``semantic_graph_v2`` contract intentionally continues to
+    accept 6-8 event comparison graphs.  Native generation is narrower: the
+    first two events are the sole numeric pair and the remaining six events
+    use structurally unique slot/time keys.  This validator never rewrites an
+    event, status, value, or ordering.
+    """
+
+    if not isinstance(candidate, dict) or candidate.get("operation") != "comparison":
+        return []
+    events = candidate.get("events")
+    if not isinstance(events, list):
+        return [
+            {
+                "code": "comparison_generation_layout_missing_events",
+                "path": "$.events",
+                "message": "Native comparison generation requires an eight-event array.",
+            }
+        ]
+
+    issues: list[dict[str, Any]] = []
+    if len(events) != 8:
+        issues.append(
+            {
+                "code": "comparison_generation_layout_event_count",
+                "path": "$.events",
+                "message": "Native comparison generation requires exactly eight events in fixed role order.",
+                "details": {"expected": 8, "actual": len(events)},
+            }
+        )
+    if len(events) < 8:
+        return issues
+    non_object_indexes = [
+        index for index, event in enumerate(events[:8]) if not isinstance(event, dict)
+    ]
+    if non_object_indexes:
+        issues.append(
+            {
+                "code": "comparison_generation_layout_non_object_event",
+                "path": "$.events",
+                "message": "Every native comparison role must contain an event object.",
+                "details": {"array_indexes": non_object_indexes},
+            }
+        )
+        return issues
+
+    primary = events[:2]
+    context = events[2:8]
+    target_aware = bool(
+        isinstance(stage64_target, dict)
+        and normalize_space(stage64_target.get("qa_operation")) == "comparison"
+    )
+    primary_ids = [_temporal_event_ref(event, index) for index, event in enumerate(primary)]
+    context_ids = [
+        _temporal_event_ref(event, index)
+        for index, event in enumerate(context, start=2)
+    ]
+
+    primary_entities = [
+        _temporal_generation_text_key(event.get("entity")) for event in primary
+    ]
+    if not all(primary_entities) or primary_entities[0] == primary_entities[1]:
+        issues.append(
+            {
+                "code": "comparison_generation_layout_primary_entities",
+                "path": "$.events[0:2]",
+                "message": "The two primary roles require two different non-empty entities.",
+                "details": {
+                    "event_ids": primary_ids,
+                    "normalized_entities": primary_entities,
+                },
+            }
+        )
+
+    primary_slots = [event.get("slot") for event in primary]
+    primary_keys = [_comparison_generation_key(event) for event in primary]
+    primary_key = primary_keys[0]
+    if (
+        primary_key is None
+        or primary_keys[1] is None
+        or primary_key != primary_keys[1]
+        or not isinstance(primary_slots[0], str)
+        or not primary_slots[0].strip()
+        or primary_slots[0] != primary_slots[1]
+    ):
+        issues.append(
+            {
+                "code": "comparison_generation_layout_primary_key",
+                "path": "$.events[0:2]",
+                "message": "The primary roles require one byte-for-byte identical non-empty slot and integer time_index.",
+                "details": {
+                    "event_ids": primary_ids,
+                    "slots": primary_slots,
+                    "keys": [list(key) if key is not None else None for key in primary_keys],
+                },
+            }
+        )
+
+    wrong_primary_status_ids = [
+        primary_ids[index]
+        for index, event in enumerate(primary)
+        if event.get("status") != "active"
+    ]
+    if wrong_primary_status_ids:
+        issues.append(
+            {
+                "code": "comparison_generation_layout_primary_status",
+                "path": "$.events[0:2]",
+                "message": "Both primary comparison events must have status exactly 'active'.",
+                "details": {"event_ids": wrong_primary_status_ids},
+            }
+        )
+
+    primary_values = [event.get("value") for event in primary]
+    if (
+        not all(isinstance(value, int) and not isinstance(value, bool) for value in primary_values)
+        or primary_values[0] == primary_values[1]
+    ):
+        issues.append(
+            {
+                "code": "comparison_generation_layout_primary_values",
+                "path": "$.events[0:2]",
+                "message": "The primary comparison values must be two distinct JSON integers.",
+                "details": {"event_ids": primary_ids, "values": primary_values},
+            }
+        )
+
+    context_keys = [_comparison_generation_key(event) for event in context]
+    invalid_context_ids = [
+        context_ids[index] for index, key in enumerate(context_keys) if key is None
+    ]
+    if invalid_context_ids:
+        issues.append(
+            {
+                "code": "comparison_generation_layout_context_invalid_key",
+                "path": "$.events[2:8]",
+                "message": "Every context role requires a non-empty slot and integer time_index.",
+                "details": {"event_ids": invalid_context_ids},
+            }
+        )
+
+    primary_collision_ids = [
+        context_ids[index]
+        for index, key in enumerate(context_keys)
+        if key is not None and primary_key is not None and key == primary_key
+    ]
+    if primary_collision_ids:
+        issues.append(
+            {
+                "code": "comparison_generation_layout_context_primary_key_collision",
+                "path": "$.events[2:8]",
+                "message": "No context event may reuse the primary normalized slot/time_index key.",
+                "details": {
+                    "primary_event_ids": primary_ids,
+                    "primary_key": list(primary_key) if primary_key is not None else None,
+                    "context_event_ids": primary_collision_ids,
+                },
+            }
+        )
+
+    context_ids_by_key: dict[tuple[str, int], list[str]] = {}
+    for event_id, key in zip(context_ids, context_keys):
+        if key is not None:
+            context_ids_by_key.setdefault(key, []).append(event_id)
+    allowed_contrast_key = (
+        context_keys[0]
+        if target_aware
+        and len(context_keys) >= 2
+        and context_keys[0] is not None
+        and context_keys[0] == context_keys[1]
+        else None
+    )
+    duplicate_context_keys = [
+        {"key": list(key), "event_ids": event_ids}
+        for key, event_ids in context_ids_by_key.items()
+        if len(event_ids) > 1
+        and not (
+            key == allowed_contrast_key
+            and event_ids == context_ids[:2]
+            and len(event_ids) == 2
+        )
+    ]
+    if duplicate_context_keys:
+        issues.append(
+            {
+                "code": "comparison_generation_layout_context_key_collision",
+                "path": "$.events[2:8]",
+                "message": "The six context normalized slot/time_index keys must be pairwise distinct.",
+                "details": {"collisions": duplicate_context_keys},
+            }
+        )
+    return issues
+
+
+def count_raw_generation_layout_issues(
+    candidate: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Reject native count graphs that do not follow the fixed 4+4 roles.
+
+    The general ``semantic_graph_v2`` contract intentionally accepts balanced
+    six-to-eight-member sets. Native generation is narrower so retries have a
+    deterministic target: eight distinct members of one exact semantic set,
+    with four included roles followed by four excluded roles. This validator
+    is reject-only and never changes a member value or truth label.
+    """
+
+    if not isinstance(candidate, dict) or candidate.get("operation") != "count":
+        return []
+    events = candidate.get("events")
+    if not isinstance(events, list):
+        return [
+            {
+                "code": "count_generation_layout_missing_events",
+                "path": "$.events",
+                "message": "Native count generation requires an eight-event array.",
+            }
+        ]
+
+    issues: list[dict[str, Any]] = []
+    if len(events) != 8:
+        issues.append(
+            {
+                "code": "count_generation_layout_event_count",
+                "path": "$.events",
+                "message": "Native count generation requires exactly eight events in fixed role order.",
+                "details": {"expected": 8, "actual": len(events)},
+            }
+        )
+    if len(events) < 8:
+        return issues
+    non_object_indexes = [
+        index for index, event in enumerate(events[:8]) if not isinstance(event, dict)
+    ]
+    if non_object_indexes:
+        issues.append(
+            {
+                "code": "count_generation_layout_non_object_event",
+                "path": "$.events",
+                "message": "Every native count role must contain an event object.",
+                "details": {"array_indexes": non_object_indexes},
+            }
+        )
+        return issues
+
+    role_events = events[:8]
+    event_ids = [
+        _temporal_event_ref(event, index)
+        for index, event in enumerate(role_events)
+    ]
+    invalid_membership_ids: list[str] = []
+    memberships: list[dict[str, Any] | None] = []
+    for event_id, event in zip(event_ids, role_events):
+        membership = event.get("set_membership")
+        if (
+            not isinstance(membership, dict)
+            or not isinstance(membership.get("set_id"), str)
+            or not membership.get("set_id").strip()
+            or not isinstance(membership.get("included"), bool)
+        ):
+            invalid_membership_ids.append(event_id)
+            memberships.append(None)
+        else:
+            memberships.append(membership)
+    if invalid_membership_ids:
+        issues.append(
+            {
+                "code": "count_generation_layout_invalid_membership",
+                "path": "$.events",
+                "message": "Every count role requires set_membership with a non-empty string set_id and boolean included.",
+                "details": {"event_ids": invalid_membership_ids},
+            }
+        )
+
+    first_membership = memberships[0]
+    expected_set_id = first_membership.get("set_id") if first_membership else None
+    expected_entity = role_events[0].get("entity")
+    expected_slot = role_events[0].get("slot")
+    invalid_dimension_ids = [
+        event_ids[index]
+        for index, (event, membership) in enumerate(zip(role_events, memberships))
+        if (
+            membership is None
+            or not isinstance(event.get("entity"), str)
+            or not event.get("entity").strip()
+            or not isinstance(event.get("slot"), str)
+            or not event.get("slot").strip()
+            or membership.get("set_id") != expected_set_id
+            or event.get("entity") != expected_entity
+            or event.get("slot") != expected_slot
+        )
+    ]
+    if invalid_dimension_ids:
+        issues.append(
+            {
+                "code": "count_generation_layout_candidate_dimensions",
+                "path": "$.events",
+                "message": "All eight roles must use one byte-for-byte identical non-empty set_id, entity, and slot.",
+                "details": {
+                    "expected_set_id": expected_set_id,
+                    "expected_entity": expected_entity,
+                    "expected_slot": expected_slot,
+                    "mismatched_event_ids": invalid_dimension_ids,
+                },
+            }
+        )
+
+    value_to_ids: dict[str, list[str]] = {}
+    for event_id, event in zip(event_ids, role_events):
+        value_to_ids.setdefault(
+            _temporal_generation_value_key(event.get("value")), []
+        ).append(event_id)
+    duplicate_value_groups = [
+        {"normalized_value_key": value_key, "event_ids": duplicate_ids}
+        for value_key, duplicate_ids in value_to_ids.items()
+        if len(duplicate_ids) > 1
+    ]
+    if duplicate_value_groups:
+        issues.append(
+            {
+                "code": "count_generation_layout_duplicate_member_values",
+                "path": "$.events",
+                "message": "All eight count member values must be pairwise distinct after normalization.",
+                "details": {"duplicate_groups": duplicate_value_groups},
+            }
+        )
+
+    expected_included = [True, True, True, True, False, False, False, False]
+    inclusion_mismatches = [
+        {
+            "event_id": event_ids[index],
+            "array_index": index,
+            "expected_included": expected,
+            "actual_included": (
+                memberships[index].get("included")
+                if memberships[index] is not None
+                else None
+            ),
+        }
+        for index, expected in enumerate(expected_included)
+        if memberships[index] is None
+        or memberships[index].get("included") is not expected
+    ]
+    if inclusion_mismatches:
+        issues.append(
+            {
+                "code": "count_generation_layout_inclusion_roles",
+                "path": "$.events",
+                "message": "events[0:4] must be included=true and events[4:8] must be included=false.",
+                "details": {"mismatches": inclusion_mismatches},
+            }
+        )
+    return issues
+
+
+def _semantic_retry_canonical_sha256(value: Any) -> str:
+    try:
+        payload = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+    except (TypeError, ValueError):
+        payload = repr(value)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _semantic_retry_machine_payload(value: Any) -> Any:
+    """Remove response prose before comparing two invalid graph attempts."""
+
+    if isinstance(value, dict) and isinstance(value.get("events"), list):
+        return sanitize_invalid_graph_for_semantic_retry(value)
+    return value
+
+
+def _semantic_retry_repetition_diagnostic(
+    history: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Detect two machine-equivalent invalid results before another API call."""
+
+    if len(history) < 2:
+        return None
+    previous, current = history[-2:]
+    previous_raw_payload = previous.get("raw_payload")
+    current_raw_payload = current.get("raw_payload")
+    previous_payload_hash = _semantic_retry_canonical_sha256(
+        _semantic_retry_machine_payload(previous_raw_payload)
+    )
+    current_payload_hash = _semantic_retry_canonical_sha256(
+        _semantic_retry_machine_payload(current_raw_payload)
+    )
+    previous_issues_hash = _semantic_retry_canonical_sha256(previous.get("issues") or [])
+    current_issues_hash = _semantic_retry_canonical_sha256(current.get("issues") or [])
+    if (
+        previous_payload_hash != current_payload_hash
+        or previous_issues_hash != current_issues_hash
+    ):
+        return None
+    return {
+        "triggered": True,
+        "reason": "consecutive_machine_equivalent_invalid_semantic_payload",
+        "consecutive_repeat_count": 2,
+        "payload_sha256": current_payload_hash,
+        "payload_hash_basis": "sanitized_machine_fields",
+        "raw_payload_sha256": _semantic_retry_canonical_sha256(current_raw_payload),
+        "issues_sha256": current_issues_hash,
+        "observed_semantic_attempts": [
+            previous.get("semantic_attempt"),
+            current.get("semantic_attempt"),
+        ],
+        "prevented_next_semantic_attempt": int(current.get("semantic_attempt") or len(history)) + 1,
+    }
+
+
+def temporal_retry_candidate_chain_diagnostics(
+    events: Any,
+) -> list[dict[str, Any]]:
+    """Expose errors hidden by the core validator's multiple-chain short circuit."""
+
+    if not isinstance(events, list):
+        return []
+    grouped: dict[tuple[str, str], list[tuple[int, dict[str, Any]]]] = {}
+    for index, event in enumerate(events):
+        if not isinstance(event, dict):
+            continue
+        entity = _temporal_generation_text_key(event.get("entity"))
+        slot = _temporal_generation_text_key(event.get("slot"))
+        if entity and slot:
+            grouped.setdefault((entity, slot), []).append((index, event))
+
+    diagnostics: list[dict[str, Any]] = []
+    for (entity, slot), indexed_group in grouped.items():
+        if len(indexed_group) < 3:
+            continue
+        ordered = sorted(
+            indexed_group,
+            key=lambda item: (
+                item[1].get("time_index")
+                if isinstance(item[1].get("time_index"), int)
+                and not isinstance(item[1].get("time_index"), bool)
+                else 10**9,
+                item[0],
+            ),
+        )
+        event_ids = [_temporal_event_ref(event, index) for index, event in ordered]
+        value_to_ids: dict[str, list[str]] = {}
+        for event_id, (_index, event) in zip(event_ids, ordered):
+            value_to_ids.setdefault(
+                _temporal_generation_value_key(event.get("value")), []
+            ).append(event_id)
+        duplicate_value_event_ids = [
+            ids for ids in value_to_ids.values() if len(ids) > 1
+        ]
+        current_event_ids = [
+            event_id
+            for event_id, (_index, event) in zip(event_ids, ordered)
+            if event.get("status") in ACTIVE_STATUSES
+        ]
+        restored_event_ids = [
+            event_id
+            for event_id, (_index, event) in zip(event_ids, ordered)
+            if event.get("status") == "restored"
+        ]
+        earlier_active_event_ids = [
+            event_ids[index]
+            for index, (_event_index, event) in enumerate(ordered[:-1])
+            if event.get("status") in ACTIVE_STATUSES
+        ]
+        broken_links: list[dict[str, Any]] = []
+        for order_index in range(1, len(ordered)):
+            previous = ordered[order_index - 1][1]
+            current = ordered[order_index][1]
+            if "previous_value" not in current or not _temporal_generation_values_equal(
+                current.get("previous_value"), previous.get("value")
+            ):
+                broken_links.append(
+                    {
+                        "event_id": event_ids[order_index],
+                        "predecessor_event_id": event_ids[order_index - 1],
+                        "expected_previous_value": previous.get("value"),
+                        "actual_previous_value": current.get("previous_value"),
+                    }
+                )
+        machine_failures: list[str] = []
+        if duplicate_value_event_ids:
+            machine_failures.append("duplicate_or_cycle_value")
+        if len(current_event_ids) != 1:
+            machine_failures.append("current_state_count_not_one")
+        elif current_event_ids[0] != event_ids[-1]:
+            machine_failures.append("current_state_not_terminal")
+        if earlier_active_event_ids:
+            machine_failures.append("earlier_event_active")
+        if restored_event_ids:
+            machine_failures.append("restored_status_forbidden_by_native_layout")
+        if broken_links:
+            machine_failures.append("broken_previous_value_link")
+        diagnostics.append(
+            {
+                "entity": entity,
+                "slot": slot,
+                "event_ids": event_ids,
+                "event_count": len(event_ids),
+                "duplicate_value_event_ids": duplicate_value_event_ids,
+                "current_event_ids": current_event_ids,
+                "restored_event_ids": restored_event_ids,
+                "earlier_active_event_ids": earlier_active_event_ids,
+                "terminal_event_id": event_ids[-1],
+                "broken_previous_value_links": broken_links,
+                "machine_failures": machine_failures,
+            }
+        )
+    return diagnostics
 
 
 def _final_dialogue_reject_reason(
@@ -1080,7 +2697,7 @@ def write_jsonl(path: str | Path, rows: Iterable[dict[str, Any]]) -> None:
 
 
 def read_jsonl_if_exists(path: str | Path) -> list[dict[str, Any]]:
-    """Read a jsonl file, returning [] for missing/empty/corrupt files (resume-safe)."""
+    """Read valid JSONL rows, retaining a complete prefix after an interrupted append."""
     candidate = Path(path)
     if not candidate.exists() or candidate.stat().st_size == 0:
         return []
@@ -1091,12 +2708,156 @@ def read_jsonl_if_exists(path: str | Path) -> list[dict[str, Any]]:
                 line = line.strip()
                 if not line:
                     continue
-                payload = json.loads(line)
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
                 if isinstance(payload, dict):
                     rows.append(payload)
-    except (OSError, json.JSONDecodeError):
-        return []
+    except OSError:
+        return rows
     return rows
+
+
+def _audit_sample_id(row: dict[str, Any], artifact: str) -> str:
+    if artifact == "marked":
+        clean_sample = row.get("clean_sample") if isinstance(row.get("clean_sample"), dict) else {}
+        return normalize_space(clean_sample.get("sample_id"))
+    if artifact == "raw" and row.get("accepted") is True:
+        return normalize_space(row.get("sample_id"))
+    return ""
+
+
+def _audit_record_key(row: dict[str, Any], artifact: str) -> str:
+    """Return a stable resume key without conflating separate failed API attempts."""
+    sample_id = _audit_sample_id(row, artifact)
+    if sample_id:
+        return f"{artifact}:accepted:{sample_id}"
+    return f"{artifact}:payload:{stable_hash(row, length=40)}"
+
+
+def _dedupe_audit_rows(
+    rows: Iterable[dict[str, Any]],
+    artifact: str,
+) -> tuple[list[dict[str, Any]], set[str], int]:
+    unique: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    duplicate_count = 0
+    for row in rows:
+        key = _audit_record_key(row, artifact)
+        if key in seen:
+            duplicate_count += 1
+            continue
+        seen.add(key)
+        unique.append(row)
+    return unique, seen, duplicate_count
+
+
+def _append_unique_audit_row(
+    rows: list[dict[str, Any]],
+    seen: set[str],
+    row: dict[str, Any],
+    artifact: str,
+) -> bool:
+    key = _audit_record_key(row, artifact)
+    if key in seen:
+        return False
+    seen.add(key)
+    rows.append(row)
+    return True
+
+
+def _read_valid_audit_jsonl(path: Path) -> tuple[list[dict[str, Any]], int]:
+    """Keep valid JSONL rows when an interrupted full-file checkpoint leaves a partial line."""
+    if not path.exists() or path.stat().st_size == 0:
+        return [], 0
+    rows: list[dict[str, Any]] = []
+    invalid_row_count = 0
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    invalid_row_count += 1
+                    continue
+                if isinstance(payload, dict):
+                    rows.append(payload)
+                else:
+                    invalid_row_count += 1
+    except OSError:
+        return [], 1
+    return rows, invalid_row_count
+
+
+def _load_resume_audit_artifacts(
+    output: Path,
+    resumed_clean_samples: list[dict[str, Any]],
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    dict[str, Any],
+]:
+    """Load persisted generation audits only; missing records are reported, not reconstructed."""
+    marked_file_rows, marked_invalid_count = _read_valid_audit_jsonl(output / "marked_samples.jsonl")
+    validated_file_rows, validated_invalid_count = _read_valid_audit_jsonl(
+        output / "graph_conditioned_api_dialogue_validated.jsonl"
+    )
+    raw_file_rows, raw_invalid_count = _read_valid_audit_jsonl(
+        output / "graph_conditioned_api_dialogue_raw.jsonl"
+    )
+    reject_file_rows, reject_invalid_count = _read_valid_audit_jsonl(
+        output / "graph_conditioned_api_dialogue_rejects.jsonl"
+    )
+
+    marked_samples, _, marked_duplicate_count = _dedupe_audit_rows(
+        [*marked_file_rows, *validated_file_rows],
+        "marked",
+    )
+    raw_records, _, raw_duplicate_count = _dedupe_audit_rows(raw_file_rows, "raw")
+    rejects, _, reject_duplicate_count = _dedupe_audit_rows(reject_file_rows, "reject")
+
+    clean_ids = {
+        normalize_space(row.get("sample_id"))
+        for row in resumed_clean_samples
+        if normalize_space(row.get("sample_id"))
+    }
+    marked_ids = {
+        sample_id
+        for row in marked_samples
+        if (sample_id := _audit_sample_id(row, "marked"))
+    }
+    accepted_raw_ids = {
+        sample_id
+        for row in raw_records
+        if (sample_id := _audit_sample_id(row, "raw"))
+    }
+    diagnostics = {
+        "resume_marked_file_row_count": len(marked_file_rows),
+        "resume_marked_file_invalid_row_count": marked_invalid_count,
+        "resume_validated_file_row_count": len(validated_file_rows),
+        "resume_validated_file_invalid_row_count": validated_invalid_count,
+        "resume_marked_loaded_count": len(marked_samples),
+        "resume_marked_duplicate_row_count": marked_duplicate_count,
+        "resume_raw_file_row_count": len(raw_file_rows),
+        "resume_raw_file_invalid_row_count": raw_invalid_count,
+        "resume_raw_loaded_count": len(raw_records),
+        "resume_raw_duplicate_row_count": raw_duplicate_count,
+        "resume_reject_file_row_count": len(reject_file_rows),
+        "resume_reject_file_invalid_row_count": reject_invalid_count,
+        "resume_reject_loaded_count": len(rejects),
+        "resume_reject_duplicate_row_count": reject_duplicate_count,
+        "resume_clean_without_marked_count": len(clean_ids - marked_ids),
+        "resume_clean_without_accepted_raw_count": len(clean_ids - accepted_raw_ids),
+        "resume_marked_without_clean_count": len(marked_ids - clean_ids),
+        "resume_accepted_raw_without_clean_count": len(accepted_raw_ids - clean_ids),
+        "resume_audit_reconstructed_count": 0,
+    }
+    return marked_samples, raw_records, rejects, diagnostics
 
 
 def append_jsonl_line(path: str | Path, row: dict[str, Any]) -> None:
@@ -1314,6 +3075,17 @@ def _is_easy_curriculum(policy: dict[str, Any] | None) -> bool:
 
 def _is_easy_v2_curriculum(policy: dict[str, Any] | None) -> bool:
     return _curriculum_mode(policy) == EASY_V2_MODE
+
+
+def _semantic_graph_v2_enabled(policy: dict[str, Any] | None) -> bool:
+    if not isinstance(policy, dict):
+        return False
+    target = policy.get("stage64_target")
+    return bool(
+        policy.get("semantic_graph_v2")
+        or policy.get("stage3_semantic_graph_v2")
+        or (isinstance(target, dict) and normalize_space(target.get("qa_operation")))
+    )
 
 
 def _largest_remainder_quota(target_shares: dict[str, float], n: int) -> dict[str, int]:
@@ -1592,35 +3364,605 @@ def choose_difficulty_subtype(question_type: str, policy: dict[str, Any] | None,
     return "ordinary"
 
 
-def compact_seed_for_prompt(seed_row: dict[str, Any], *, max_turns: int = 12) -> dict[str, Any]:
-    turns = dialogue_turns_from_row(seed_row)
-    if len(turns) > max_turns:
-        head = turns[: max_turns // 2]
-        tail = turns[-(max_turns - len(head)) :]
-        turns = head + tail
+def _semantic_parent_events_for_prompt(seed_row: dict[str, Any], *, limit: int = 12) -> list[dict[str, Any]]:
+    semantic_parent = (
+        seed_row.get("semantic_parent_graph")
+        if isinstance(seed_row.get("semantic_parent_graph"), dict)
+        else {}
+    )
     graph_update = seed_row.get("graph_update") if isinstance(seed_row.get("graph_update"), dict) else {}
-    qa = seed_row.get("qa") if isinstance(seed_row.get("qa"), dict) else {}
+    source_events = semantic_parent.get("events") if isinstance(semantic_parent.get("events"), list) else None
+    if source_events is None:
+        source_events = graph_update.get("events") if isinstance(graph_update.get("events"), list) else []
+    clean: list[dict[str, Any]] = []
+    for event in source_events:
+        if not isinstance(event, dict):
+            continue
+        slot = normalize_text(event.get("slot") or event.get("role"))
+        raw_value = event.get("value")
+        if raw_value is None:
+            raw_value = event.get("to")
+        if raw_value is None:
+            raw_value = item_text(event)
+        value = normalize_space(raw_value)
+        combined = normalize_text((slot, value))
+        if not slot or slot.startswith("raw qa") or " raw qa " in f" {combined} ":
+            continue
+        if re.search(r"(?:^|\s)q\s*:\s|(?:^|\s)a\s*:\s", value, flags=re.IGNORECASE) or "?" in value:
+            continue
+        dependencies = event.get("depends_on")
+        prompt_event = {
+            "event_id": normalize_space(
+                event.get("event_id") or event.get("event_instance_id")
+            )
+            or f"parent_event_{len(clean)}",
+            "entity_anchor": _graph_parent_safe_structural_label(
+                event.get("entity"), prefix="entity"
+            ),
+            "status": normalize_space(event.get("status")) or "unknown",
+            "time_index": event.get("time_index"),
+            "depends_on_event_ids": (
+                [normalize_space(item) for item in dependencies if normalize_space(item)]
+                if isinstance(dependencies, list)
+                else []
+            ),
+            "has_scope": isinstance(event.get("scope"), dict),
+            "has_set_membership": isinstance(event.get("set_membership"), dict),
+            "fact_content_omitted": True,
+        }
+        clean.append(prompt_event)
+        if len(clean) >= limit:
+            break
+    return clean
+
+
+def _graph_parent_safe_structural_label(value: Any, *, prefix: str) -> str:
+    """Keep short structural labels while hashing unusually long lexical labels."""
+
+    label = normalize_space(value)
+    if not label:
+        return prefix
+    if len(label) < GRAPH_PARENT_PROMPT_MIN_SUBSTRING_CHARS:
+        return label
+    digest = hashlib.sha256(label.encode("utf-8")).hexdigest()[:12]
+    return f"{prefix}_{digest}"
+
+
+def _graph_parent_dialogue_content_sha256(turns: list[dict[str, Any]]) -> str:
+    canonical = [
+        {
+            "turn_id": normalize_space(turn.get("turn_id")),
+            "speaker": normalize_space(turn.get("speaker") or turn.get("role")),
+            "text": normalize_space(
+                turn.get("text") or turn.get("content") or turn.get("utterance")
+            ),
+        }
+        for turn in turns
+        if isinstance(turn, dict)
+    ]
+    return hashlib.sha256(
+        json.dumps(
+            canonical,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _graph_parent_dialogue_structure(turns: list[dict[str, Any]]) -> dict[str, Any]:
+    speakers = [
+        _graph_parent_safe_structural_label(
+            turn.get("speaker") or turn.get("role") or "Speaker",
+            prefix="speaker",
+        )
+        for turn in turns
+        if isinstance(turn, dict)
+    ]
+    speaker_counts = Counter(speakers)
+    speaker_allowlist = sorted(set(speakers))
     return {
-        "sample_id": seed_row.get("sample_id") or seed_row.get("source_id"),
-        "source_id": seed_row.get("source_id"),
-        "dialogue_turns": turns,
-        "graph_update": {
-            "events": graph_update.get("events") if isinstance(graph_update.get("events"), list) else [],
-            "state_changes": graph_update.get("state_changes") if isinstance(graph_update.get("state_changes"), list) else [],
-            "invalidations": graph_update.get("invalidations") if isinstance(graph_update.get("invalidations"), list) else [],
-            "cancellations": graph_update.get("cancellations") if isinstance(graph_update.get("cancellations"), list) else [],
-            "restorations": graph_update.get("restorations") if isinstance(graph_update.get("restorations"), list) else [],
-            "delayed_activations": graph_update.get("delayed_activations")
-            if isinstance(graph_update.get("delayed_activations"), list)
-            else [],
+        "turn_count": len(speakers),
+        "speaker_turn_counts": {
+            speaker: int(speaker_counts[speaker]) for speaker in speaker_allowlist
         },
-        "qa_question_type": qa.get("question_type"),
-        "qa_gold": qa.get("gold"),
-        "qa_evidence_turn_ids": qa.get("evidence_turn_ids"),
+        "recent_speaker_order": speakers[-16:],
+        "recent_speaker_order_limit": 16,
+        "speaker_label_allowlist": speaker_allowlist,
+        "parent_turn_utterances_included": False,
+        "speaker_labels_are_the_only_parent_dialogue_lexical_fields": True,
     }
 
 
-def build_json_request(args: argparse.Namespace, prompt_payload: dict[str, Any], system_prompt: str, previous_error: dict[str, Any] | None, max_tokens_override: int | None = None) -> dict[str, Any]:
+def compact_seed_for_prompt(
+    seed_row: dict[str, Any],
+    *,
+    max_turns: int = 12,
+    semantic_graph_v2: bool = False,
+) -> dict[str, Any]:
+    turns = dialogue_turns_from_row(seed_row)
+    graph_update = seed_row.get("graph_update") if isinstance(seed_row.get("graph_update"), dict) else {}
+    qa = seed_row.get("qa") if isinstance(seed_row.get("qa"), dict) else {}
+    payload = {
+        "sample_id": seed_row.get("sample_id") or seed_row.get("source_id"),
+        "source_id": seed_row.get("source_id"),
+    }
+    if semantic_graph_v2:
+        semantic_parent = (
+            seed_row.get("semantic_parent_graph")
+            if isinstance(seed_row.get("semantic_parent_graph"), dict)
+            else {}
+        )
+        parent_graph_id = normalize_space(
+            semantic_parent.get("graph_id")
+            or f"stage3_parent:{seed_row.get('sample_id') or seed_row.get('source_id') or 'unknown'}"
+        )
+        payload.update(
+            {
+                "schema_version": GRAPH_PARENT_CONTEXT_SCHEMA_VERSION,
+                "parent_dialogue_content": {
+                    "algorithm": "sha256",
+                    "content_sha256": _graph_parent_dialogue_content_sha256(turns),
+                    "turn_count": len(turns),
+                    "parent_turn_text_included": False,
+                },
+                "dialogue_structure": _graph_parent_dialogue_structure(turns),
+                "semantic_parent_graph": {
+                    "schema_version": "semantic_graph_v2",
+                    "graph_id": parent_graph_id,
+                    "parent_graph_id": normalize_space(
+                        semantic_parent.get("parent_graph_id") or "stage2_source_snapshot"
+                    ),
+                    "graph_role": "parent_snapshot",
+                    "events": _semantic_parent_events_for_prompt(seed_row),
+                },
+                "semantic_parent_event_text_fields_omitted": [
+                    "entity (long values are hashed into entity_anchor)",
+                    "slot",
+                    "value",
+                    "previous_value",
+                    "scope",
+                    "set_membership",
+                    "alignment_hints.support_claim",
+                    "raw_support_claim",
+                    "dialogue_support_claim",
+                    "evidence_text",
+                ],
+                "semantic_parent_event_atoms_readable": False,
+                "semantic_parent_entity_anchors_readable": True,
+                "parent_dialogue_text_omitted": True,
+                "legacy_graph_omitted": True,
+                "legacy_qa_omitted": True,
+            }
+        )
+    else:
+        if len(turns) > max_turns:
+            head = turns[: max_turns // 2]
+            tail = turns[-(max_turns - len(head)) :]
+            turns = head + tail
+        payload.update(
+            {
+                "dialogue_turns": turns,
+                "graph_update": {
+                    "events": graph_update.get("events") if isinstance(graph_update.get("events"), list) else [],
+                    "state_changes": graph_update.get("state_changes") if isinstance(graph_update.get("state_changes"), list) else [],
+                    "invalidations": graph_update.get("invalidations") if isinstance(graph_update.get("invalidations"), list) else [],
+                    "cancellations": graph_update.get("cancellations") if isinstance(graph_update.get("cancellations"), list) else [],
+                    "restorations": graph_update.get("restorations") if isinstance(graph_update.get("restorations"), list) else [],
+                    "delayed_activations": graph_update.get("delayed_activations")
+                    if isinstance(graph_update.get("delayed_activations"), list)
+                    else [],
+                },
+                "qa_question_type": qa.get("question_type"),
+                "qa_gold": qa.get("gold"),
+                "qa_evidence_turn_ids": qa.get("evidence_turn_ids"),
+            }
+        )
+    return payload
+
+
+def _graph_prompt_string_values(value: Any, path: str = "$") -> list[tuple[str, str]]:
+    rows: list[tuple[str, str]] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            rows.extend(_graph_prompt_string_values(child, f"{path}.{key}"))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            rows.extend(_graph_prompt_string_values(child, f"{path}[{index}]"))
+    elif isinstance(value, str):
+        rows.append((path, normalize_space(value).casefold()))
+    return rows
+
+
+def _graph_seed_forbidden_parent_text_paths(
+    value: Any,
+    path: str = "$.seed",
+) -> list[str]:
+    forbidden_keys = {
+        "dialogue_turns",
+        "text",
+        "content",
+        "utterance",
+        "support_claim",
+        "raw_support_claim",
+        "dialogue_support_claim",
+        "evidence_text",
+    }
+    paths: list[str] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_path = f"{path}.{key}"
+            if normalize_space(key).casefold() in forbidden_keys:
+                paths.append(child_path)
+            paths.extend(_graph_seed_forbidden_parent_text_paths(child, child_path))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            paths.extend(
+                _graph_seed_forbidden_parent_text_paths(child, f"{path}[{index}]")
+            )
+    return paths
+
+
+def _graph_prompt_atomic_parent_path(path: str) -> bool:
+    """Identify explicitly scoped structural/atomic parent fields exempt from text audit."""
+
+    if re.match(
+        r"^\$\.seed\.semantic_parent_graph\.events\[\d+\]\."
+        r"(?:event_id|entity_anchor|status|time_index|depends_on_event_ids|"
+        r"has_scope|has_set_membership|fact_content_omitted)(?:\.|\[|$)",
+        path,
+    ):
+        return True
+    if re.match(
+        r"^\$\.invalid_graph_to_correct\.events\[\d+\]\."
+        r"(?:event_id|round_id|time_index|event_type|entity|slot|value|previous_value|"
+        r"status|depends_on|scope|set_membership|required_for_dialogue|source)(?:\.|\[|$)",
+        path,
+    ):
+        return True
+    return bool(
+        path.startswith("$.seed.parent_dialogue_content.")
+        or path.startswith("$.seed.dialogue_structure.speaker_turn_counts.")
+        or path.startswith("$.seed.dialogue_structure.recent_speaker_order[")
+        or path.startswith("$.seed.dialogue_structure.speaker_label_allowlist[")
+        or path in {
+            "$.seed.sample_id",
+            "$.seed.source_id",
+            "$.seed.schema_version",
+            "$.seed.semantic_parent_graph.schema_version",
+            "$.seed.semantic_parent_graph.graph_id",
+            "$.seed.semantic_parent_graph.parent_graph_id",
+            "$.seed.semantic_parent_graph.graph_role",
+        }
+    )
+
+
+def audit_graph_parent_prompt_verbatim_exposure(
+    prompt: dict[str, Any],
+    seed_row: dict[str, Any],
+) -> dict[str, Any]:
+    """Fail closed when a graph API prompt exposes parent utterance text."""
+
+    width = GRAPH_PARENT_PROMPT_MIN_SUBSTRING_CHARS
+    parent_turns = dialogue_turns_from_row(seed_row)
+    parent_ngrams: dict[str, set[int]] = {}
+    for turn_index, turn in enumerate(parent_turns):
+        text = normalize_space(
+            turn.get("text") or turn.get("content") or turn.get("utterance")
+        ).casefold()
+        for index in range(max(0, len(text) - width + 1)):
+            ngram = text[index : index + width]
+            if ngram.strip():
+                parent_ngrams.setdefault(ngram, set()).add(turn_index)
+
+    forbidden_seed_paths = _graph_seed_forbidden_parent_text_paths(
+        prompt.get("seed") if isinstance(prompt.get("seed"), dict) else {}
+    )
+    exposure_keys: set[tuple[int, str, str]] = set()
+    exempt_atomic_paths: set[str] = set()
+    for path, prompt_text in _graph_prompt_string_values(prompt):
+        if _graph_prompt_atomic_parent_path(path):
+            exempt_atomic_paths.add(path)
+            continue
+        prompt_ngrams = {
+            prompt_text[index : index + width]
+            for index in range(max(0, len(prompt_text) - width + 1))
+            if prompt_text[index : index + width].strip()
+        }
+        for ngram in prompt_ngrams.intersection(parent_ngrams):
+            digest = hashlib.sha256(ngram.encode("utf-8")).hexdigest()
+            for turn_index in parent_ngrams[ngram]:
+                exposure_keys.add((turn_index, path, digest))
+
+    core = {
+        "schema_version": GRAPH_PARENT_PROMPT_AUDIT_VERSION,
+        "parent_context_schema_version": GRAPH_PARENT_CONTEXT_SCHEMA_VERSION,
+        "pass": not forbidden_seed_paths and not exposure_keys,
+        "minimum_substring_chars": width,
+        "parent_turn_count": len(parent_turns),
+        "parent_dialogue_sha256": _graph_parent_dialogue_content_sha256(parent_turns),
+        "forbidden_seed_lexical_field_count": len(forbidden_seed_paths),
+        "forbidden_seed_lexical_paths": sorted(forbidden_seed_paths),
+        "parent_verbatim_exposure_count": len(exposure_keys),
+        "exposed_parent_turn_indices": sorted({item[0] for item in exposure_keys}),
+        "exposed_prompt_paths": sorted({item[1] for item in exposure_keys}),
+        "exposed_substring_sha256": sorted({item[2] for item in exposure_keys}),
+        "atomic_structured_exemption_count": len(exempt_atomic_paths),
+        "atomic_structured_exemption_paths": sorted(exempt_atomic_paths),
+        "speaker_labels_explicitly_scoped": True,
+        "raw_parent_text_recorded": False,
+        "prompt_sha256": hashlib.sha256(
+            json.dumps(
+                prompt,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest(),
+    }
+    core["audit_sha256"] = hashlib.sha256(
+        json.dumps(
+            core,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return core
+
+
+def _graph_parent_source_events(seed_row: dict[str, Any]) -> list[dict[str, Any]]:
+    semantic_parent = (
+        seed_row.get("semantic_parent_graph")
+        if isinstance(seed_row.get("semantic_parent_graph"), dict)
+        else {}
+    )
+    graph_update = (
+        seed_row.get("graph_update")
+        if isinstance(seed_row.get("graph_update"), dict)
+        else {}
+    )
+    source = (
+        semantic_parent.get("events")
+        if isinstance(semantic_parent.get("events"), list)
+        else graph_update.get("events")
+        if isinstance(graph_update.get("events"), list)
+        else []
+    )
+    return [event for event in source if isinstance(event, dict)]
+
+
+def _graph_event_parent_novelty_signature(event: dict[str, Any]) -> tuple[str, str, str, str] | None:
+    entity = normalize_text(event.get("entity"))
+    slot = normalize_text(event.get("slot") or event.get("role"))
+    raw_value = event.get("value")
+    if raw_value is None:
+        raw_value = event.get("to")
+    value = normalize_text(raw_value)
+    status = normalize_text(event.get("status"))
+    if not entity or not slot or not value or not status:
+        return None
+    return entity, slot, value, status
+
+
+def _graph_event_support_claims(event: dict[str, Any]) -> list[str]:
+    alignment = (
+        event.get("alignment_hints")
+        if isinstance(event.get("alignment_hints"), dict)
+        else {}
+    )
+    claims = [
+        normalize_space(alignment.get("support_claim")),
+        normalize_space(event.get("raw_support_claim")),
+        normalize_space(event.get("dialogue_support_claim")),
+    ]
+    return list(dict.fromkeys(claim for claim in claims if claim))
+
+
+def graph_parent_novelty_issues(
+    candidate: dict[str, Any],
+    seed_row: dict[str, Any],
+    *,
+    operation: str,
+) -> list[dict[str, Any]]:
+    """Reject copied parent facts/claims before any dialogue-generation call."""
+
+    parent_events = _graph_parent_source_events(seed_row)
+    parent_signatures: dict[tuple[str, str, str, str], list[str]] = {}
+    for parent_index, event in enumerate(parent_events):
+        signature = _graph_event_parent_novelty_signature(event)
+        if signature is None:
+            continue
+        parent_signatures.setdefault(signature, []).append(
+            normalize_space(event.get("event_id")) or f"parent_event_{parent_index}"
+        )
+
+    width = GRAPH_PARENT_PROMPT_MIN_SUBSTRING_CHARS
+    parent_text_sources: list[str] = []
+    for turn in dialogue_turns_from_row(seed_row):
+        text = normalize_space(
+            turn.get("text") or turn.get("content") or turn.get("utterance")
+        ).casefold()
+        if text:
+            parent_text_sources.append(text)
+    for event in parent_events:
+        parent_text_sources.extend(claim.casefold() for claim in _graph_event_support_claims(event))
+    parent_ngrams: set[str] = set()
+    for text in parent_text_sources:
+        parent_ngrams.update(
+            text[index : index + width]
+            for index in range(max(0, len(text) - width + 1))
+            if text[index : index + width].strip()
+        )
+
+    issues: list[dict[str, Any]] = []
+    events = candidate.get("events") if isinstance(candidate.get("events"), list) else []
+    for event_index, event in enumerate(events):
+        if not isinstance(event, dict):
+            continue
+        signature = _graph_event_parent_novelty_signature(event)
+        if signature is not None and signature in parent_signatures:
+            issues.append(
+                {
+                    "code": "parent_event_exact_semantic_reuse",
+                    "path": f"$.events[{event_index}]",
+                    "message": (
+                        "A child graph event copied a complete parent "
+                        "entity-slot-value-status fact instead of adding a novel delta."
+                    ),
+                    "details": {
+                        "operation": operation,
+                        "child_event_id": normalize_space(event.get("event_id")),
+                        "parent_event_ids": parent_signatures[signature],
+                        "semantic_signature_sha256": hashlib.sha256(
+                            json.dumps(signature, separators=(",", ":")).encode("utf-8")
+                        ).hexdigest(),
+                        "temporal_parent_slot_reuse_allowed_only_with_new_value_status_transition": (
+                            operation == "temporal_state_update"
+                        ),
+                    },
+                }
+            )
+        for claim in _graph_event_support_claims(event):
+            normalized_claim = claim.casefold()
+            matching = sorted(
+                {
+                    hashlib.sha256(ngram.encode("utf-8")).hexdigest()
+                    for index in range(max(0, len(normalized_claim) - width + 1))
+                    for ngram in [normalized_claim[index : index + width]]
+                    if ngram.strip() and ngram in parent_ngrams
+                }
+            )
+            if matching:
+                issues.append(
+                    {
+                        "code": "parent_support_claim_verbatim_reuse",
+                        "path": f"$.events[{event_index}].alignment_hints.support_claim",
+                        "message": (
+                            "A child support claim contains a long verbatim parent-text "
+                            "substring and must be replaced with a novel child fact."
+                        ),
+                        "details": {
+                            "child_event_id": normalize_space(event.get("event_id")),
+                            "minimum_substring_chars": width,
+                            "matching_substring_sha256": matching,
+                            "claim_provenance": "raw_api_graph_alignment_hints",
+                            "post_normalization_status_boilerplate_not_audited_here": True,
+                            "raw_parent_text_recorded": False,
+                        },
+                    }
+                )
+                break
+    return issues
+
+
+def graph_parent_novelty_gate_summary(
+    candidate: dict[str, Any],
+    seed_row: dict[str, Any],
+    *,
+    operation: str,
+) -> dict[str, Any]:
+    issues = graph_parent_novelty_issues(candidate, seed_row, operation=operation)
+    summary = {
+        "schema_version": GRAPH_PARENT_NOVELTY_GATE_VERSION,
+        "pass": not issues,
+        "operation": operation,
+        "parent_event_count": len(_graph_parent_source_events(seed_row)),
+        "child_event_count": len(candidate.get("events") or [])
+        if isinstance(candidate.get("events"), list)
+        else 0,
+        "issue_count": len(issues),
+        "issues": copy.deepcopy(issues),
+        "audited_claim_provenance": "raw_api_graph_alignment_hints",
+        "post_naturalization_claims_excluded": True,
+        "raw_parent_text_recorded": False,
+    }
+    summary["audit_sha256"] = hashlib.sha256(
+        json.dumps(
+            summary,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return summary
+
+
+def sanitize_invalid_graph_for_semantic_retry(candidate: dict[str, Any]) -> dict[str, Any]:
+    """Retain machine-correctable fields without feeding copied support prose back to the API."""
+
+    allowed_top_level = (
+        "schema_version",
+        "graph_id",
+        "parent_graph_id",
+        "operation",
+        "question_type",
+        "attack_skill",
+    )
+    allowed_event_fields = (
+        "event_id",
+        "round_id",
+        "time_index",
+        "entity",
+        "slot",
+        "value",
+        "previous_value",
+        "status",
+        "depends_on",
+        "scope",
+        "set_membership",
+        "required_for_dialogue",
+        "source",
+    )
+    sanitized = {
+        key: copy.deepcopy(candidate.get(key))
+        for key in allowed_top_level
+        if candidate.get(key) is not None
+    }
+    events = candidate.get("events") if isinstance(candidate.get("events"), list) else []
+    sanitized["events"] = [
+        {
+            key: copy.deepcopy(event.get(key))
+            for key in allowed_event_fields
+            if event.get(key) is not None
+            and not (
+                key == "status"
+                and (
+                    not isinstance(event.get(key), str)
+                    or event.get(key) not in semantic_graph_v2.SUPPORTED_STATUSES
+                )
+            )
+        }
+        for event in events
+        if isinstance(event, dict)
+    ]
+    return sanitized
+
+
+def legacy_alignment_for_graph_prompt(
+    legacy_alignment_result: dict[str, Any],
+    *,
+    semantic_graph_v2: bool,
+) -> dict[str, Any]:
+    if not semantic_graph_v2:
+        return legacy_alignment_result
+    return {
+        "provenance_only": True,
+        "legacy_content_omitted": True,
+        "legacy_high_confidence_count": int(legacy_alignment_result.get("legacy_high_confidence_count") or 0),
+        "legacy_low_confidence_count": int(legacy_alignment_result.get("legacy_low_confidence_count") or 0),
+        "legacy_missing_ref_total": int(legacy_alignment_result.get("legacy_missing_ref_total") or 0),
+    }
+
+
+def build_json_request(
+    args: argparse.Namespace,
+    prompt_payload: dict[str, Any],
+    system_prompt: str,
+    previous_error: dict[str, Any] | None,
+    max_tokens_override: int | None = None,
+    temperature_override: float | None = None,
+) -> dict[str, Any]:
     payload = copy.deepcopy(prompt_payload)
     if previous_error:
         payload["previous_response_error"] = previous_error
@@ -1633,7 +3975,11 @@ def build_json_request(args: argparse.Namespace, prompt_payload: dict[str, Any],
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ],
-        "temperature": float(getattr(args, "challenger_temperature", 0.25)),
+        "temperature": float(
+            temperature_override
+            if temperature_override is not None
+            else getattr(args, "challenger_temperature", 0.25)
+        ),
         "max_tokens": int(max_tokens_override if max_tokens_override else getattr(args, "challenger_max_tokens", 4096)),
     }
 
@@ -1683,6 +4029,181 @@ def normalize_api_graph_payload(candidate: dict[str, Any]) -> tuple[dict[str, An
             return normalized, diagnostics
     diagnostics["graph_json_normalizer_failure"] = True
     return candidate, diagnostics
+
+
+def normalize_comparison_integer_strings(
+    candidate: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Coerce only lossless integer spellings in a comparison graph.
+
+    This is representation normalization, not semantic repair: ``"-12"`` can
+    become ``-12``, while decimals, units, words, missing values, and values for
+    non-comparison operations remain untouched.
+    """
+
+    diagnostics = {
+        "comparison_integer_string_normalizer_used": False,
+        "comparison_integer_string_normalized_count": 0,
+    }
+    if not isinstance(candidate, dict) or not isinstance(candidate.get("events"), list):
+        return candidate, diagnostics
+    normalized = copy.deepcopy(candidate)
+    normalized_count = 0
+    for event in normalized["events"]:
+        if not isinstance(event, dict) or not isinstance(event.get("value"), str):
+            continue
+        stripped = event["value"].strip()
+        if not PURE_INTEGER_STRING_RE.fullmatch(stripped):
+            continue
+        event["value"] = int(stripped)
+        normalized_count += 1
+    diagnostics["comparison_integer_string_normalizer_used"] = normalized_count > 0
+    diagnostics["comparison_integer_string_normalized_count"] = normalized_count
+    return normalized, diagnostics
+
+
+def normalize_comparison_exact_duplicate_events(
+    candidate: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Drop only byte-equivalent comparison events that differ by ``event_id``.
+
+    Challenger responses occasionally repeat an already complete comparison pair
+    under fresh identifiers.  Removing such a copy is representation cleanup, not
+    graph repair: every field other than ``event_id`` must be exactly equal, the
+    removable event must be dependency-free and unreferenced, and the graph must
+    retain at least six events.  The strict semantic validator still decides
+    whether the resulting graph contains one valid comparison pair.
+    """
+
+    diagnostics = {
+        "comparison_exact_duplicate_normalizer_used": False,
+        "comparison_exact_duplicate_removed_count": 0,
+        "comparison_exact_duplicate_removed_event_ids": [],
+        "comparison_exact_duplicate_retained_by_removed_id": {},
+        "comparison_exact_duplicate_original_event_count": None,
+        "comparison_exact_duplicate_result_event_count": None,
+        "comparison_exact_duplicate_original_sha256": None,
+        "comparison_exact_duplicate_result_sha256": None,
+        "comparison_exact_duplicate_noop_reason": None,
+    }
+    if not isinstance(candidate, dict) or not isinstance(candidate.get("events"), list):
+        diagnostics["comparison_exact_duplicate_noop_reason"] = "missing_events_array"
+        return candidate, diagnostics
+
+    events = candidate["events"]
+    diagnostics["comparison_exact_duplicate_original_event_count"] = len(events)
+    diagnostics["comparison_exact_duplicate_result_event_count"] = len(events)
+    try:
+        original_json = json.dumps(
+            candidate,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    except (TypeError, ValueError):
+        diagnostics["comparison_exact_duplicate_noop_reason"] = "non_json_payload"
+        return candidate, diagnostics
+    original_sha256 = hashlib.sha256(original_json.encode("utf-8")).hexdigest()
+    diagnostics["comparison_exact_duplicate_original_sha256"] = original_sha256
+    diagnostics["comparison_exact_duplicate_result_sha256"] = original_sha256
+
+    if candidate.get("operation") != "comparison":
+        diagnostics["comparison_exact_duplicate_noop_reason"] = "not_comparison_operation"
+        return candidate, diagnostics
+    minimum_events, maximum_events = semantic_graph_v2.OPERATION_EVENT_COUNT_RANGES["comparison"]
+    if not minimum_events <= len(events) <= maximum_events:
+        diagnostics["comparison_exact_duplicate_noop_reason"] = "raw_event_count_out_of_range"
+        return candidate, diagnostics
+    if not all(isinstance(event, dict) for event in events):
+        diagnostics["comparison_exact_duplicate_noop_reason"] = "non_object_event"
+        return candidate, diagnostics
+    event_ids = [event.get("event_id") for event in events]
+    if not all(isinstance(event_id, str) and event_id.strip() for event_id in event_ids):
+        diagnostics["comparison_exact_duplicate_noop_reason"] = "invalid_event_id"
+        return candidate, diagnostics
+    if len(set(event_ids)) != len(event_ids):
+        diagnostics["comparison_exact_duplicate_noop_reason"] = "duplicate_event_id"
+        return candidate, diagnostics
+
+    referenced_ids: set[str] = set()
+    for event in events:
+        if not isinstance(event, dict) or not isinstance(event.get("depends_on"), list):
+            continue
+        for dependency in event["depends_on"]:
+            if isinstance(dependency, str) and dependency.strip():
+                referenced_ids.add(dependency)
+                referenced_ids.add(dependency.strip())
+
+    normalized = copy.deepcopy(candidate)
+    kept_events: list[Any] = []
+    first_by_semantics: dict[str, dict[str, Any]] = {}
+    removed_ids: list[str] = []
+    retained_by_removed_id: dict[str, str] = {}
+
+    for event in normalized["events"]:
+        if not isinstance(event, dict):
+            kept_events.append(event)
+            continue
+        semantic_event = {key: value for key, value in event.items() if key != "event_id"}
+        try:
+            semantic_key = json.dumps(
+                semantic_event,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        except (TypeError, ValueError):
+            kept_events.append(event)
+            continue
+
+        event_id = event.get("event_id")
+        event_id_keys = (
+            {event_id, event_id.strip()}
+            if isinstance(event_id, str) and event_id.strip()
+            else set()
+        )
+        dependency_free = event.get("depends_on") in (None, [])
+        unreferenced = not event_id_keys.intersection(referenced_ids)
+        can_remove = (
+            semantic_key in first_by_semantics
+            and dependency_free
+            and unreferenced
+            and len(events) - len(removed_ids) > minimum_events
+        )
+        if can_remove:
+            removed_id = str(event_id)
+            removed_ids.append(removed_id)
+            retained_by_removed_id[removed_id] = str(first_by_semantics[semantic_key]["event_id"])
+            continue
+
+        kept_events.append(event)
+        first_by_semantics.setdefault(semantic_key, event)
+
+    if not removed_ids:
+        diagnostics["comparison_exact_duplicate_noop_reason"] = "no_safe_exact_duplicates"
+        return candidate, diagnostics
+
+    normalized["events"] = kept_events
+    result_json = json.dumps(
+        normalized,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    diagnostics.update(
+        {
+            "comparison_exact_duplicate_normalizer_used": True,
+            "comparison_exact_duplicate_removed_count": len(removed_ids),
+            "comparison_exact_duplicate_removed_event_ids": removed_ids,
+            "comparison_exact_duplicate_retained_by_removed_id": retained_by_removed_id,
+            "comparison_exact_duplicate_result_event_count": len(kept_events),
+            "comparison_exact_duplicate_result_sha256": hashlib.sha256(
+                result_json.encode("utf-8")
+            ).hexdigest(),
+            "comparison_exact_duplicate_noop_reason": None,
+        }
+    )
+    return normalized, diagnostics
 
 
 def _parse_dialogue_text_turns(text: Any) -> list[dict[str, Any]]:
@@ -1788,6 +4309,99 @@ def normalize_api_dialogue_payload(candidate: dict[str, Any]) -> tuple[dict[str,
     return normalized, diagnostics
 
 
+FORMAL_DIALOGUE_SEGMENT_BARE_LIST_NORMALIZER_SCHEMA_VERSION = (
+    "formal_dialogue_segment_bare_list_wrapper_v1"
+)
+
+
+def normalize_formal_dialogue_segment_bare_list_payload(
+    candidate: Any,
+) -> tuple[Any, dict[str, Any]]:
+    """Wrap a valid bare segment-turn list without editing any turn content."""
+
+    diagnostics: dict[str, Any] = {
+        "formal_dialogue_segment_bare_list_normalizer_schema_version": (
+            FORMAL_DIALOGUE_SEGMENT_BARE_LIST_NORMALIZER_SCHEMA_VERSION
+        ),
+        "formal_dialogue_segment_bare_list_normalizer_used": False,
+        "formal_dialogue_segment_bare_list_normalizer_failure": False,
+        "formal_dialogue_segment_bare_list_normalizer_source": "bare_json_list",
+        "formal_dialogue_segment_bare_list_item_count": (
+            len(candidate) if isinstance(candidate, list) else None
+        ),
+        "formal_dialogue_segment_bare_list_original_sha256": None,
+        "formal_dialogue_segment_bare_list_wrapped_value_sha256": None,
+        "formal_dialogue_segment_bare_list_content_preserved": False,
+        "formal_dialogue_segment_bare_list_reject_reason": None,
+    }
+
+    def reject(reason: str) -> tuple[Any, dict[str, Any]]:
+        diagnostics["formal_dialogue_segment_bare_list_normalizer_failure"] = True
+        diagnostics["formal_dialogue_segment_bare_list_reject_reason"] = reason
+        return candidate, diagnostics
+
+    if not isinstance(candidate, list):
+        return reject("payload_not_bare_list")
+    if not candidate:
+        return reject("empty_turn_list")
+    try:
+        original_json = json.dumps(
+            candidate,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    except (TypeError, ValueError):
+        return reject("turn_list_not_json_serializable")
+    original_sha256 = hashlib.sha256(original_json.encode("utf-8")).hexdigest()
+    diagnostics["formal_dialogue_segment_bare_list_original_sha256"] = original_sha256
+
+    for index, turn in enumerate(candidate):
+        if not isinstance(turn, dict):
+            return reject(f"turn_{index}_not_object")
+        speaker = turn.get("speaker")
+        text = turn.get("text")
+        if not isinstance(speaker, str) or not speaker.strip():
+            return reject(f"turn_{index}_invalid_speaker")
+        if not isinstance(text, str) or not text.strip():
+            return reject(f"turn_{index}_invalid_text")
+        if "alignment_anchors" in turn:
+            anchors = turn.get("alignment_anchors")
+            if not isinstance(anchors, list) or not all(
+                isinstance(marker, str) and marker.strip() for marker in anchors
+            ):
+                return reject(f"turn_{index}_invalid_alignment_anchors")
+        if "support_quotes" in turn:
+            support_quotes = turn.get("support_quotes")
+            if not isinstance(support_quotes, dict) or not all(
+                isinstance(marker, str)
+                and marker.strip()
+                and isinstance(quote, str)
+                and quote.strip()
+                for marker, quote in support_quotes.items()
+            ):
+                return reject(f"turn_{index}_invalid_support_quotes")
+
+    wrapped = {"appended_dialogue_turns_segment": copy.deepcopy(candidate)}
+    wrapped_value_json = json.dumps(
+        wrapped["appended_dialogue_turns_segment"],
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    wrapped_value_sha256 = hashlib.sha256(wrapped_value_json.encode("utf-8")).hexdigest()
+    diagnostics.update(
+        {
+            "formal_dialogue_segment_bare_list_normalizer_used": True,
+            "formal_dialogue_segment_bare_list_wrapped_value_sha256": wrapped_value_sha256,
+            "formal_dialogue_segment_bare_list_content_preserved": (
+                original_sha256 == wrapped_value_sha256
+            ),
+        }
+    )
+    return wrapped, diagnostics
+
+
 def normalize_api_payload_for_call_kind(
     candidate: dict[str, Any],
     call_kind: str,
@@ -1809,8 +4423,33 @@ def graph_cache_key_for_attempt(
     round_id: str,
 ) -> str:
     cell = planned_cell if isinstance(planned_cell, dict) else {}
+    stage64_target = (
+        policy.get("stage64_target")
+        if isinstance(policy, dict) and isinstance(policy.get("stage64_target"), dict)
+        else {}
+    )
+    parent_turns, _ = parent_dialogue_turns_from_row(seed_row)
+    parent_dialogue_fingerprint = stable_hash(
+        [
+            {
+                "turn_id": turn.get("turn_id"),
+                "speaker": turn.get("speaker") or turn.get("role"),
+                "text": turn.get("text") or turn.get("content") or turn.get("utterance"),
+            }
+            for turn in parent_turns
+            if isinstance(turn, dict)
+        ],
+        length=24,
+    )
+    semantic_parent_graph = (
+        seed_row.get("semantic_parent_graph")
+        if isinstance(seed_row.get("semantic_parent_graph"), dict)
+        else {}
+    )
     payload = {
         "parent_sample_id": seed_row.get("sample_id") or seed_row.get("source_id"),
+        "parent_dialogue_fingerprint": parent_dialogue_fingerprint,
+        "parent_semantic_graph_fingerprint": stable_hash(semantic_parent_graph, length=24),
         "round_id": round_id,
         "sample_index": sample_index,
         "target_delta_bucket": int(getattr(api_args, "min_length_delta_tokens", 0) or 0),
@@ -1822,6 +4461,20 @@ def graph_cache_key_for_attempt(
         "template": cell.get("hard_single_choice_template"),
         "planner_profile_version": "boundary_calibrated_item_planner_v1",
         "query_conditioned_graph_expansion": bool(getattr(api_args, "query_conditioned_graph_expansion", False)),
+        "stage64_qa_operation": stage64_target.get("qa_operation"),
+        "stage64_answer_type": stage64_target.get("answer_type"),
+        "stage64_reasoning_target": {
+            field: copy.deepcopy(stage64_target.get(field))
+            for field in (
+                *STAGE64_REASONING_TARGET_FIELDS,
+                "forbid_max_time_shortcut",
+            )
+            if field in stage64_target
+        },
+        "graph_parent_context_schema_version": GRAPH_PARENT_CONTEXT_SCHEMA_VERSION,
+        "graph_parent_prompt_audit_version": GRAPH_PARENT_PROMPT_AUDIT_VERSION,
+        "graph_parent_novelty_gate_version": GRAPH_PARENT_NOVELTY_GATE_VERSION,
+        "graph_cache_schema_version": GRAPH_CACHE_SCHEMA_VERSION,
     }
     return stable_hash(payload, length=24)
 
@@ -2173,9 +4826,20 @@ def load_graph_cache_entry(cache_dir: Path, cache_key: str) -> dict[str, Any] | 
         return None
     if not isinstance(payload, dict):
         return None
+    if payload.get("cache_schema_version") != GRAPH_CACHE_SCHEMA_VERSION:
+        return None
     if not isinstance(payload.get("current_event_plan"), dict):
         return None
     return payload
+
+
+def invalidate_graph_cache_entry(cache_dir: Path, cache_key: str) -> bool:
+    path = cache_dir / f"{cache_key}.json"
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        return False
+    return True
 
 
 def write_graph_cache_entry(
@@ -2190,6 +4854,7 @@ def write_graph_cache_entry(
         return
     payload = {
         "cache_key": cache_key,
+        "cache_schema_version": GRAPH_CACHE_SCHEMA_VERSION,
         "created_at": int(time.time()),
         "current_event_plan": current_event_plan,
         "graph_meta": graph_meta,
@@ -2206,6 +4871,8 @@ def call_raw_json_api(
     required_keys: tuple[str, ...],
     call_kind: str,
     max_tokens_override: int | None = None,
+    max_retries_override: int | None = None,
+    temperature_override: float | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     api_key = (
         getattr(args, "challenger_api_key", None)
@@ -2214,14 +4881,39 @@ def call_raw_json_api(
     )
     base_url = getattr(args, "challenger_base_url", None)
     model = getattr(args, "challenger_model", None)
+    effective_temperature = float(
+        temperature_override
+        if temperature_override is not None
+        else getattr(args, "challenger_temperature", 0.25)
+    )
     if not api_key or not base_url or not model:
-        return None, {"used": False, "call_kind": call_kind, "reason": "missing_api_config", "attempts": 0}
+        return None, {
+            "used": False,
+            "call_kind": call_kind,
+            "reason": "missing_api_config",
+            "attempts": 0,
+            "temperature_override": temperature_override,
+            "effective_temperature": effective_temperature,
+        }
     url = str(base_url).rstrip("/") + "/chat/completions"
-    max_retries = int(getattr(args, "max_llm_retries", 1))
+    max_retries = (
+        max(0, int(max_retries_override))
+        if max_retries_override is not None
+        else int(getattr(args, "max_llm_retries", 1))
+    )
     errors: list[dict[str, Any]] = []
     previous_error: dict[str, Any] | None = None
     for attempt in range(1, max_retries + 2):
-        request_payload = build_json_request(args, prompt_payload, system_prompt, previous_error, max_tokens_override)
+        request_payload = build_json_request(
+            args,
+            prompt_payload,
+            system_prompt,
+            previous_error,
+            max_tokens_override,
+            temperature_override,
+        )
+        if call_kind in {"api_graph_expansion", "api_formal_dialogue_segment"}:
+            request_payload["response_format"] = {"type": "json_object"}
         try:
             if hasattr(old_gate, "post_json_with_curl"):
                 data = old_gate.post_json_with_curl(url, request_payload, api_key, max(1, int(getattr(args, "llm_timeout", 60))))
@@ -2235,21 +4927,58 @@ def call_raw_json_api(
                 with urllib.request.urlopen(req, timeout=int(getattr(args, "llm_timeout", 60))) as response:
                     data = json.loads(response.read().decode("utf-8"))
             content = str(data["choices"][0]["message"]["content"])
+            finish_reason = data["choices"][0].get("finish_reason")
+            usage = copy.deepcopy(data.get("usage")) if isinstance(data.get("usage"), dict) else None
             candidate, parsed_json = old_gate.json_candidate_from_text(content)
+            normalizer_diag: dict[str, Any] = {}
+            if (
+                (not parsed_json or not isinstance(candidate, dict))
+                and call_kind == "api_formal_dialogue_segment"
+                and required_keys == ("appended_dialogue_turns_segment",)
+                and bool(getattr(args, "api_yield_normalizers", False))
+            ):
+                try:
+                    bare_candidate = json.loads(content.strip())
+                except json.JSONDecodeError:
+                    bare_candidate = None
+                if isinstance(bare_candidate, list):
+                    candidate, normalizer_diag = (
+                        normalize_formal_dialogue_segment_bare_list_payload(bare_candidate)
+                    )
+                    parsed_json = bool(
+                        isinstance(candidate, dict)
+                        and normalizer_diag.get(
+                            "formal_dialogue_segment_bare_list_normalizer_used"
+                        )
+                    )
             if not parsed_json or not isinstance(candidate, dict):
-                previous_error = {
+                retry_error = {
                     "attempt": attempt,
                     "error_type": "invalid_json",
                     "raw_response_preview": old_gate.raw_response_preview(content),
+                    "finish_reason": finish_reason,
                     "required_keys": list(required_keys),
                 }
-                errors.append(previous_error)
+                if normalizer_diag:
+                    retry_error["normalizer_diagnostics"] = normalizer_diag
+                errors.append(
+                    {
+                        **retry_error,
+                        "raw_response": content,
+                        "usage": usage,
+                        "json_response_format_requested": call_kind
+                        in {"api_graph_expansion", "api_formal_dialogue_segment"},
+                    }
+                )
+                previous_error = retry_error
             else:
-                normalizer_diag: dict[str, Any] = {}
                 stripped_content = content.strip()
                 json_block_extracted = not stripped_content.startswith("{") or not stripped_content.endswith("}")
                 if bool(getattr(args, "api_yield_normalizers", False)):
-                    candidate, normalizer_diag = normalize_api_payload_for_call_kind(candidate, call_kind)
+                    candidate, call_kind_normalizer_diag = normalize_api_payload_for_call_kind(
+                        candidate, call_kind
+                    )
+                    normalizer_diag.update(call_kind_normalizer_diag)
                 if call_kind == "api_dialogue_expansion" and json_block_extracted:
                     normalizer_diag["dialogue_json_block_extracted"] = True
                 missing = [key for key in required_keys if key not in candidate]
@@ -2261,20 +4990,33 @@ def call_raw_json_api(
                         "model": model,
                         "base_url": base_url,
                         "previous_errors": errors,
+                        "finish_reason": finish_reason,
+                        "usage": usage,
+                        "max_retries_override": max_retries_override,
+                        "temperature_override": temperature_override,
+                        "effective_temperature": effective_temperature,
                     }
                     if normalizer_diag:
                         meta["normalizer_diagnostics"] = normalizer_diag
                     return candidate, meta
-                previous_error = {
+                retry_error = {
                     "attempt": attempt,
                     "error_type": "missing_required_keys",
                     "missing_keys": missing,
                     "raw_response_preview": old_gate.raw_response_preview(content),
+                    "finish_reason": finish_reason,
                     "required_keys": list(required_keys),
                 }
                 if normalizer_diag:
-                    previous_error["normalizer_diagnostics"] = normalizer_diag
-                errors.append(previous_error)
+                    retry_error["normalizer_diagnostics"] = normalizer_diag
+                errors.append(
+                    {
+                        **retry_error,
+                        "raw_response": content,
+                        "usage": usage,
+                    }
+                )
+                previous_error = retry_error
         except (KeyError, json.JSONDecodeError, urllib.error.URLError, TimeoutError, ValueError) as exc:
             previous_error = {
                 "attempt": attempt,
@@ -2294,6 +5036,9 @@ def call_raw_json_api(
         "base_url": base_url,
         "error_type": last_error.get("error_type", "api_failed"),
         "errors": errors,
+        "max_retries_override": max_retries_override,
+        "temperature_override": temperature_override,
+        "effective_temperature": effective_temperature,
     }
 
 
@@ -2536,42 +5281,74 @@ def normalize_current_event_plan(
 ) -> dict[str, Any]:
     raw = raw_plan if isinstance(raw_plan, dict) else {}
     raw_events = raw.get("events") if isinstance(raw.get("events"), list) else []
-    if len(raw_events) < 4:
-        raw_events = _fallback_event_specs(seed_row, question_type, attack_skill)
-    fallback_events = _fallback_event_specs(seed_row, question_type, attack_skill)
-    if len(raw_events) < len(fallback_events):
-        raw_events = list(raw_events) + fallback_events[len(raw_events) :]
-    # qtype-aware prerequisite enforcement: re-label statuses so the planned question type's
-    # builder has the active/false event counts it needs (prevents QA-last structural rejects).
-    raw_events = _enforce_qtype_status_prerequisites(raw_events, question_type)
+    semantic_graph_v2 = _semantic_graph_v2_enabled(policy)
+    if not semantic_graph_v2:
+        if len(raw_events) < 4:
+            raw_events = _fallback_event_specs(seed_row, question_type, attack_skill)
+        fallback_events = _fallback_event_specs(seed_row, question_type, attack_skill)
+        if len(raw_events) < len(fallback_events):
+            raw_events = list(raw_events) + fallback_events[len(raw_events) :]
+        # Legacy builders rely on status coercion. Semantic graph v2 never rewrites API truth labels.
+        raw_events = _enforce_qtype_status_prerequisites(raw_events, question_type)
 
-    graph_snapshot_id = normalize_space(raw.get("graph_snapshot_id")) or f"{round_id}:S{sample_index:04d}:graph"
+    graph_snapshot_id = normalize_space(raw.get("graph_id") or raw.get("graph_snapshot_id")) or f"{round_id}:S{sample_index:04d}:graph"
+    semantic_parent = (
+        seed_row.get("semantic_parent_graph")
+        if isinstance(seed_row.get("semantic_parent_graph"), dict)
+        else {}
+    )
+    parent_graph_id = normalize_space(
+        raw.get("parent_graph_id")
+        or semantic_parent.get("graph_id")
+        or seed_row.get("sample_id")
+        or seed_row.get("source_id")
+    )
     normalized_events: list[dict[str, Any]] = []
     seen_values: set[str] = set()
+    raw_event_id_to_generated: dict[str, str] = {}
     for index, raw_event in enumerate(raw_events, start=1):
         if not isinstance(raw_event, dict):
             continue
-        status = _coerce_status(raw_event.get("status"))
+        status = (
+            normalize_text(raw_event.get("status")).replace(" ", "_")
+            if semantic_graph_v2
+            else _coerce_status(raw_event.get("status"))
+        )
         event_type = _coerce_event_type(raw_event.get("event_type") or raw_event.get("role"), status)
         entity = normalize_space(raw_event.get("entity") or raw_event.get("actor") or seed_row.get("source_id") or "conversation")
         slot = normalize_space(raw_event.get("slot") or raw_event.get("field") or "memory_state")
-        value = normalize_space(raw_event.get("value") or raw_event.get("state") or item_text(raw_event))
-        if len(value) < 8:
+        raw_value = raw_event.get("value")
+        if raw_value is None:
+            raw_value = raw_event.get("state")
+        if raw_value is None:
+            raw_value = item_text(raw_event)
+        if semantic_graph_v2 and isinstance(raw_value, (int, float, bool)):
+            value: Any = raw_value
+            value_text = str(raw_value)
+        else:
+            value = normalize_space(raw_value)
+            value_text = str(value)
+        if not value_text or (not semantic_graph_v2 and len(value_text) < 8):
             continue
-        value_key = normalize_text((entity, slot, value, status))
-        if value_key in seen_values:
-            continue
-        seen_values.add(value_key)
+        if not semantic_graph_v2:
+            value_key = normalize_text((entity, slot, value, status))
+            if value_key in seen_values:
+                continue
+            seen_values.add(value_key)
         try:
             time_index = int(raw_event.get("time_index"))
         except (TypeError, ValueError):
             time_index = len(normalized_events) + 1
         event_instance_id = f"{round_id}:S{sample_index:04d}:E{len(normalized_events) + 1:02d}"
+        for raw_id_key in ("event_id", "event_instance_id", "id", "node_id"):
+            raw_id = normalize_space(raw_event.get(raw_id_key))
+            if raw_id:
+                raw_event_id_to_generated[raw_id] = event_instance_id
         support_claim = normalize_space(
             ((raw_event.get("alignment_hints") or {}) if isinstance(raw_event.get("alignment_hints"), dict) else {}).get("support_claim")
         )
         if not support_claim:
-            support_claim = f"{entity} / {slot}: {value}."
+            support_claim = f"{entity} / {slot}: {value_text}."
             if status != "active":
                 support_claim += f" Mark this fact as {status.replace('_', ' ')}."
         if status in STATUS_ALIASES:
@@ -2588,43 +5365,81 @@ def normalize_current_event_plan(
                     support_claim += " This is delayed and not active yet."
                 else:
                     support_claim += f" This is {status.replace('_', ' ')} and not an active current state."
-        dialogue_value = sanitize_internal_text(value)
-        dialogue_support_claim = _naturalize_claim_for_status(support_claim or value, status)
+        dialogue_value = sanitize_internal_text(value_text)
+        dialogue_support_claim = _naturalize_claim_for_status(support_claim or value_text, status)
         must_mention_any = [entity, slot]
         must_mention_value_any = [value]
-        normalized_events.append(
-            {
-                "event_instance_id": event_instance_id,
-                "origin_event_id": normalize_space(raw_event.get("origin_event_id") or raw_event.get("event_id") or raw_event.get("node_id"))
-                or None,
-                "lineage_id": normalize_space(raw_event.get("lineage_id")) or None,
-                "round_id": round_id,
-                "time_index": time_index,
-                "event_type": event_type,
-                "entity": entity,
-                "slot": slot,
-                "raw_value": value,
-                "value": value,
-                "dialogue_value": dialogue_value,
-                "previous_value": normalize_space(raw_event.get("previous_value")) or None,
-                "status": status,
-                "required_for_dialogue": bool(raw_event.get("required_for_dialogue", True)),
-                "source": normalize_space(raw_event.get("source") or "api_graph_expansion"),
-                "raw_support_claim": support_claim,
-                "dialogue_support_claim": dialogue_support_claim,
-                "dialogue_fact_id": f"F{len(normalized_events) + 1:02d}",
-                "alignment_hints": {
-                    "must_mention_any": must_mention_any,
-                    "must_mention_value_any": [dialogue_value],
-                    "support_claim": dialogue_support_claim,
-                },
-            }
-        )
+        event_row: dict[str, Any] = {
+            "event_instance_id": event_instance_id,
+            "event_id": event_instance_id,
+            "origin_event_id": normalize_space(raw_event.get("origin_event_id") or raw_event.get("event_id") or raw_event.get("node_id"))
+            or None,
+            "lineage_id": normalize_space(raw_event.get("lineage_id")) or None,
+            "round_id": round_id,
+            "time_index": time_index,
+            "event_type": event_type,
+            "entity": entity,
+            "slot": slot,
+            "raw_value": value,
+            "value": value,
+            "dialogue_value": dialogue_value,
+            "previous_value": (
+                copy.deepcopy(raw_event.get("previous_value"))
+                if semantic_graph_v2 and raw_event.get("previous_value") is not None
+                else normalize_space(raw_event.get("previous_value")) or None
+            ),
+            "status": status,
+            "_raw_depends_on": copy.deepcopy(raw_event.get("depends_on") or []),
+            "required_for_dialogue": bool(raw_event.get("required_for_dialogue", True)),
+            "source": normalize_space(raw_event.get("source") or "api_graph_expansion"),
+            "raw_support_claim": support_claim,
+            "dialogue_support_claim": dialogue_support_claim,
+            "dialogue_fact_id": f"F{len(normalized_events) + 1:02d}",
+            "alignment_hints": {
+                "must_mention_any": must_mention_any,
+                "must_mention_value_any": [dialogue_value],
+                "support_claim": dialogue_support_claim,
+            },
+        }
+        if raw_event.get("scope") is not None:
+            event_row["scope"] = copy.deepcopy(raw_event.get("scope"))
+        if raw_event.get("set_membership") is not None:
+            event_row["set_membership"] = copy.deepcopy(raw_event.get("set_membership"))
+        if raw_event.get("evidence_turn_ids") is not None:
+            event_row["evidence_turn_ids"] = normalize_turn_ids(raw_event.get("evidence_turn_ids"))
+        if raw_event.get("provenance") is not None:
+            event_row["provenance"] = copy.deepcopy(raw_event.get("provenance"))
+        normalized_events.append(event_row)
     if len(normalized_events) < 4:
         raise NativeGraphDialogueReject("current event_plan did not contain enough graph events")
-    normalized_events.sort(key=lambda event: (int(event.get("time_index") or 0), str(event.get("event_instance_id"))))
+    # Stage3 semantic contracts assign operation roles by API array position
+    # (for example bridge E1/E2/E3). Reordering those events by time would
+    # silently change the contract. Legacy plans have no positional contract.
+    if not semantic_graph_v2:
+        normalized_events.sort(
+            key=lambda event: (
+                int(event.get("time_index") or 0),
+                str(event.get("event_instance_id")),
+            )
+        )
     for idx, event in enumerate(normalized_events, start=1):
-        event["time_index"] = idx
+        # Equal time_index values are part of the semantic comparison contract.
+        # The raw semantic_graph_v2 payload has already passed strict validation,
+        # so preserve its time coordinates instead of flattening ties to 1..N.
+        if not semantic_graph_v2:
+            event["time_index"] = idx
+        raw_dependencies = event.pop("_raw_depends_on", [])
+        if not isinstance(raw_dependencies, list):
+            raw_dependencies = [raw_dependencies]
+        normalized_dependency_ids = [
+            normalize_space(dependency)
+            for dependency in raw_dependencies
+            if normalize_space(dependency)
+        ]
+        event["depends_on"] = [
+            raw_event_id_to_generated.get(dependency, dependency)
+            for dependency in normalized_dependency_ids
+        ]
     false_candidates = raw.get("false_candidates") if isinstance(raw.get("false_candidates"), list) else []
     if not false_candidates:
         false_candidates = [
@@ -2637,7 +5452,16 @@ def normalize_current_event_plan(
             if event.get("status") in FALSE_STATUSES
         ]
     plan = {
+        "schema_version": "semantic_graph_v2" if semantic_graph_v2 else "legacy_current_event_plan_v1",
+        "graph_id": graph_snapshot_id,
         "graph_snapshot_id": graph_snapshot_id,
+        "parent_graph_id": parent_graph_id or "root",
+        "operation": normalize_space(
+            ((policy or {}).get("stage64_target") or {}).get("qa_operation")
+            if isinstance((policy or {}).get("stage64_target"), dict)
+            else ""
+        )
+        or None,
         "question_type": _normalize_plan_question_type(question_type, policy),
         "attack_skill": _normalize_plan_attack_skill(attack_skill, policy),
         "events": normalized_events,
@@ -2649,6 +5473,9 @@ def normalize_current_event_plan(
             "source_seed_id": seed_row.get("sample_id") or seed_row.get("source_id"),
             "frozen_graph": True,
             "graph_normalized_by_program": True,
+            "semantic_graph_v2": semantic_graph_v2,
+            "legacy_fallback_disabled": semantic_graph_v2,
+            "status_coercion_disabled": semantic_graph_v2,
         },
     }
     plan["graph_snapshot_hash"] = compute_graph_snapshot_hash(plan)
@@ -2697,30 +5524,123 @@ def call_api_graph_expansion(
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]:
     question_type = choose_question_type(policy, rng)
     attack_skill = choose_attack_skill(question_type, policy, rng)
+    stage64_target = policy.get("stage64_target") if isinstance(policy, dict) and isinstance(policy.get("stage64_target"), dict) else {}
+    stage64_operation = normalize_space(stage64_target.get("qa_operation"))
+    preferred_answer_type = normalize_space(stage64_target.get("preferred_answer_type"))
+    stage64_reasoning_contract = _stage64_reasoning_contract_from_target(
+        stage64_target
+    )
+    temporal_reasoning_required_statuses = (
+        {
+            "same_slot_canceled_value": ["canceled"],
+            "same_slot_outdated_value": ["outdated"],
+            "same_slot_report_or_belief_value": ["report", "belief"],
+        }.get(str(stage64_reasoning_contract.get("hard_negative_strategy")))
+        if stage64_reasoning_contract is not None
+        and stage64_reasoning_contract.get("forbid_max_time_shortcut")
+        else None
+    )
+    stage64_difficulty_target, stage64_difficulty_contract = _stage64_prompt_difficulty_contract(
+        policy,
+        stage64_operation,
+    )
+    status_literal_contract = (
+        {
+            "allowed_status_literals": sorted(APPROVED_STATUSES),
+            "non_active_status_literals": list(STAGE64_NON_ACTIVE_STATUS_LITERALS),
+            "forbidden_category_labels_as_status": ["non-active"],
+            "rule": (
+                "Every event.status must equal one exact allowed_status_literals entry. "
+                "The phrase 'non-active' names a category only and must never be emitted as a status value."
+            ),
+        }
+        if stage64_operation
+        else None
+    )
     event_count_instruction = (
-        EASY_GRAPH_EVENT_INSTRUCTION
+        "Include exactly 8 concrete semantic events in the fixed operation role layout specified below."
+        if stage64_operation
+        in {"temporal_state_update", "visibility", "relation_lookup"}
+        else SEMANTIC_GRAPH_V2_EVENT_INSTRUCTION
+        if stage64_operation
+        else EASY_GRAPH_EVENT_INSTRUCTION
         if _is_easy_curriculum(policy)
         else "Include 5-8 events, enough active and non-active facts for ordering/multi_select/state/evidence QA."
     )
-    # qtype-aware prerequisite hint so the API tends to emit the active/non-active mix the
-    # planned question type's builder requires (coercion in normalize_* is the safety net).
-    _qtype_req_hint = {
-        "single_choice": "For single_choice: include EXACTLY 1 active/current-true event and AT LEAST 3 non-active events (outdated/canceled/expired/belief/report/scope_limited) so three graph-validated distractors can be built.",
-        "multi_select": "For multi_select: include AT LEAST 2 active/current-true events and AT LEAST 2 non-active (false) events.",
-        "evidence_selection": "For evidence_selection: include at least 1 active event with a clear supporting turn.",
-        "state_reconstruction": "For state_reconstruction: include at least 1 active final state event.",
-        "ordering": "For ordering: include at least 4 events with distinct time_index values.",
-    }.get(question_type)
+    # qtype-aware prerequisite hint so the API emits the exact status literals required by
+    # the planned question type's builder; semantic_graph_v2 never coerces status values.
+    if stage64_operation:
+        _qtype_req_hint = (
+            "For Stage64 single_choice, use the exact status literals required by the requested qa_operation and "
+            "status_literal_contract. Never emit a category label in event.status. "
+            "Do not force exactly one active event: count, bridge, comparison, and cause/consequence may require "
+            "multiple active support events. Options are answer alternatives, not one option per truth-status event."
+        )
+    else:
+        _qtype_req_hint = {
+            "single_choice": "For single_choice: include EXACTLY 1 active/current-true event and AT LEAST 3 non-active events (outdated/canceled/expired/belief/report/scope_limited) so three graph-validated distractors can be built.",
+            "multi_select": "For multi_select: include AT LEAST 2 active/current-true events and AT LEAST 2 non-active (false) events.",
+            "evidence_selection": "For evidence_selection: include at least 1 active event with a clear supporting turn.",
+            "state_reconstruction": "For state_reconstruction: include at least 1 active final state event.",
+            "ordering": "For ordering: include at least 4 events with distinct time_index values.",
+        }.get(question_type)
     requirements = [
         "The graph/state-chain/event_plan is the source of truth.",
         "Return a self-contained current graph snapshot for this new round.",
         "Do not rely on old event ids as persistent ids; they are provenance only.",
         event_count_instruction,
-        "Every important event should be required_for_dialogue=true and have clear alignment_hints.support_claim.",
+        "Every event must set required_for_dialogue=true and have clear alignment_hints.support_claim; filler or optional events are forbidden.",
         "Use only approved attack skills and event/status values from the provided lists.",
     ]
     if _qtype_req_hint:
         requirements.append(_qtype_req_hint)
+    if stage64_operation:
+        operation_contract = STAGE3_OPERATION_GRAPH_CONTRACTS.get(stage64_operation, "")
+        requirements.extend(
+            [
+                f"This graph will support Stage64 qa_operation={stage64_operation!r}; design the graph around that operation before dialogue generation.",
+                "Use concrete semantic slot names such as destination, appointment_date, access_scope, membership_status, or causal_result. Never use raw_qa, raw_qa_*, generic fact, or generic state as a slot.",
+                "Hard negatives must be graph-grounded competitors for the same entity, relation, slot, condition, or reasoning chain. Unrelated facts are not valid distractors.",
+                "Keep answer-bearing values surface-compatible with their intended answer type; do not store a question string as an event value.",
+                "Every event.status must equal one exact entry in status_literal_contract.allowed_status_literals. The category label 'non-active' is forbidden as a status value; when the contract requires that category, choose one semantically accurate literal from status_literal_contract.non_active_status_literals.",
+                f"Stage64 item_difficulty_target is {stage64_difficulty_target!r}. Follow the supplied difficulty contract without invoking or imitating a legacy QA planner.",
+                stage64_difficulty_contract["graph"],
+                *(
+                    [
+                        "The Stage64 reasoning target is immutable. Design the graph for exactly the supplied reasoning_subtype, reasoning_template, hop_count, and hard_negative_strategy; do not replace any of them with an easier pattern.",
+                        f"Provide enough answer-relevant evidence to support at least {stage64_reasoning_contract['hop_count']} distinct reasoning anchors and make the named hard_negative_strategy={stage64_reasoning_contract['hard_negative_strategy']!r} graph-verifiable.",
+                        *(
+                            [
+                                "For this temporal target, selecting the greatest time_index alone is a forbidden shortcut. The same-slot competitors must force the QA to use validity/status semantics plus the update chain, and the final question must explicitly state the relevant cancellation, outdated-report, or belief/report condition in natural language."
+                            ]
+                            if stage64_reasoning_contract.get(
+                                "forbid_max_time_shortcut"
+                            )
+                            else []
+                        ),
+                        *(
+                            [
+                                f"At least one same-slot primary-chain negative must use one exact status from {temporal_reasoning_required_statuses!r}; context-only use does not satisfy the requested temporal hard-negative strategy."
+                            ]
+                            if temporal_reasoning_required_statuses
+                            else []
+                        ),
+                    ]
+                    if stage64_reasoning_contract is not None
+                    else []
+                ),
+                STAGE64_GRAPH_OBJECTIVE_HINTS.get(stage64_operation, "Create coherent graph-grounded hard negatives for the requested operation."),
+                "Every event must include event_id, entity, slot, value, status, and an integer time_index. Follow operation_contract literally; these are hard validator requirements, not suggestions.",
+                "The seed contains only a hash and compressed speaker structure for the parent dialogue; do not infer, reconstruct, or quote parent utterances from it.",
+                "Create a novel child graph delta. No child event may copy a complete parent entity+slot+value+status fact, and no child alignment_hints.support_claim may copy or reconstruct a parent support sentence.",
+                "seed.semantic_parent_graph.events is an entity-anchor-only provenance ledger: parent slots and values are intentionally omitted. You may reuse a short entity_anchor for continuity, but must introduce a new concrete slot and value; never try to reconstruct a hidden parent fact.",
+                "Treat seed.semantic_parent_graph.events as provenance/context only, not as events that count toward this child operation's required roles.",
+                "For temporal_state_update only, a parent slot may be reused to express a genuine update, but the child value/status combination must form a new transition; copying a complete parent fact is forbidden.",
+                operation_contract,
+            ]
+        )
+    else:
+        operation_contract = ""
     query_objective = (
         build_query_conditioned_graph_objective(
             seed_row,
@@ -2752,6 +5672,381 @@ def call_api_graph_expansion(
                     "Do not expose the final answer as a surface statement; only provide graph events and support claims that can later be verbalized naturally.",
                 ]
             )
+    semantic_seed_prompt = compact_seed_for_prompt(
+        seed_row,
+        semantic_graph_v2=bool(stage64_operation),
+    )
+    expected_child_graph_id = f"{round_id}:S{sample_index:04d}:semantic_graph_v2"
+    operation_event_fields: dict[str, Any] = {}
+    if stage64_operation in {
+        "bridge",
+        "cause_consequence",
+        "relation_lookup",
+        "temporal_state_update",
+    }:
+        operation_event_fields = {
+            "depends_on": ["required local event_id dependency path"],
+        }
+    elif stage64_operation == "visibility":
+        operation_event_fields = {
+            "depends_on": ["resource fact event_id for the permission composition"],
+            "scope": {
+                "observer": "concrete person/group",
+                "permission": "concrete visibility or access condition",
+                "condition": "concrete condition under which permission applies",
+            },
+        }
+    elif stage64_operation == "count":
+        operation_event_fields = {
+            "set_membership": {
+                "set_id": "shared non-empty candidate-set identifier",
+                "condition": "shared non-empty natural filter condition",
+                "included": True,
+            },
+        }
+    temporal_generation_layout_contract: dict[str, Any] | None = None
+    if stage64_operation == "temporal_state_update":
+        temporal_anti_shortcut = bool(
+            stage64_reasoning_contract is not None
+            and stage64_reasoning_contract.get("forbid_max_time_shortcut")
+        )
+        temporal_strategy = (
+            str(stage64_reasoning_contract.get("hard_negative_strategy") or "")
+            if temporal_anti_shortcut
+            else ""
+        )
+        temporal_strategy_statuses = sorted(
+            STAGE64_TEMPORAL_HARD_NEGATIVE_STATUSES.get(
+                temporal_strategy, frozenset()
+            )
+        )
+        temporal_status_by_index = (
+            {
+                "0": {"allowed_status_literals": list(STAGE64_NON_ACTIVE_STATUS_LITERALS)},
+                "1": {"allowed_status_literals": ["active"], "role": "current_gold"},
+                "2": {"allowed_status_literals": list(STAGE64_NON_ACTIVE_STATUS_LITERALS)},
+                "3": {
+                    "allowed_status_literals": temporal_strategy_statuses,
+                    "role": "later_target_strategy_invalid_update",
+                },
+            }
+            if temporal_anti_shortcut
+            else {
+                "0": {"allowed_status_literals": list(STAGE64_NON_ACTIVE_STATUS_LITERALS)},
+                "1": {"allowed_status_literals": list(STAGE64_NON_ACTIVE_STATUS_LITERALS)},
+                "2": {"allowed_status_literals": list(STAGE64_NON_ACTIVE_STATUS_LITERALS)},
+                "3": {"allowed_status_literals": ["active"]},
+            }
+        )
+        temporal_generation_layout_contract = {
+            "total_event_count": 8,
+            "array_role_order_is_mandatory": True,
+            "primary_chain_array_indexes": [0, 1, 2, 3],
+            "context_singleton_array_indexes": [4, 5, 6, 7],
+            "primary_chain": {
+                "entity_and_slot": "byte-for-byte identical across events[0:4]",
+                "value_rule": "four semantically distinct values; no repeated value and no restore cycle",
+                "status_by_array_index": temporal_status_by_index,
+                "max_time_shortcut_forbidden": temporal_anti_shortcut,
+                "current_gold_array_index": 1 if temporal_anti_shortcut else 3,
+                "later_invalid_array_indexes": [2, 3] if temporal_anti_shortcut else [],
+                "target_strategy_invalid_array_index": 3 if temporal_anti_shortcut else None,
+                "hard_negative_strategy": temporal_strategy or None,
+                "forbidden_category_labels_as_status": ["non-active"],
+                "previous_value_by_array_index": {
+                    "0": "OMIT THE KEY, including null",
+                    "1": "exactly events[0].value",
+                    "2": "exactly events[1].value",
+                    "3": "exactly events[2].value",
+                },
+                "depends_on_by_array_index": {
+                    "0": "OMIT THE KEY or use []",
+                    "1": "exactly [events[0].event_id]",
+                    "2": "exactly [events[1].event_id]",
+                    "3": "exactly [events[2].event_id]",
+                },
+            },
+            "context_singletons": {
+                "entity_slot_rule": (
+                    "all four pairs are mutually distinct and each differs from the primary chain pair"
+                ),
+                "previous_value_rule": "OMIT THE KEY on events[4:8], including null",
+                "second_update_chain_forbidden": True,
+            },
+            "time_index_by_array_index": [1, 2, 3, 4, 5, 6, 7, 8],
+        }
+    comparison_generation_layout_contract: dict[str, Any] | None = None
+    if stage64_operation == "comparison":
+        comparison_strategy = normalize_space(
+            stage64_reasoning_contract.get("hard_negative_strategy")
+            if isinstance(stage64_reasoning_contract, dict)
+            else ""
+        )
+        comparison_generation_layout_contract = {
+            "total_event_count": 8,
+            "array_role_order_is_mandatory": True,
+            "primary_pair_array_indexes": [0, 1],
+            "contrast_array_indexes": [2, 3],
+            "context_array_indexes": [4, 5, 6, 7],
+            "primary_pair": {
+                "entity_rule": "two different non-empty normalized entity strings",
+                "key_rule": "one byte-for-byte identical non-empty slot and one identical integer time_index; normalized form defines primary_key",
+                "status_rule": "both exactly active",
+                "value_rule": "two distinct JSON integers; booleans forbidden",
+            },
+            "two_plus_two_contrast": {
+                "entity_rule": "events[2:4] use the two primary entities exactly once each",
+                "slot_rule": "events[2:4] reuse the exact primary slot",
+                "status_rule": "both use explicit non-active status literals",
+                "time_rule": "one shared integer time that differs from the primary time",
+                "numeric_relation": (
+                    "Let P=abs(events[0].value-events[1].value) and "
+                    "C=abs(events[2].value-events[3].value). For the immutable "
+                    "near_numeric_off_by_one target, require abs(P-C)==1 and C!=P."
+                    if comparison_strategy == "near_numeric_off_by_one"
+                    else "Use the exact numeric relation implied by the immutable hard_negative_strategy target."
+                ),
+            },
+            "context": {
+                "key_definition": "(normalized slot, integer time_index)",
+                "key_rule": "events[4:8] keys are pairwise distinct and differ from both primary and contrast keys",
+                "support_claim_rule": (
+                    "state each context fact naturally; never mention graph roles, keys, validators, or layout instructions"
+                ),
+            },
+            "second_active_slot_time_group_forbidden": True,
+            "one_non_active_wrong_time_contrast_pair_required": True,
+        }
+    count_generation_layout_contract: dict[str, Any] | None = None
+    if stage64_operation == "count":
+        count_generation_layout_contract = {
+            "total_event_count": 8,
+            "array_role_order_is_mandatory": True,
+            "included_member_array_indexes": [0, 1, 2, 3],
+            "excluded_member_array_indexes": [4, 5, 6, 7],
+            "candidate_set": {
+                "set_id_rule": "one byte-for-byte identical non-empty string across all eight events",
+                "condition_rule": "one byte-for-byte identical non-empty natural filter condition across all eight events",
+                "entity_rule": "one byte-for-byte identical non-empty concrete entity string across all eight events",
+                "slot_rule": "one byte-for-byte identical non-empty semantic slot string across all eight events",
+                "value_rule": "all eight normalized member values are pairwise distinct",
+            },
+            "membership_by_array_index": [
+                True,
+                True,
+                True,
+                True,
+                False,
+                False,
+                False,
+                False,
+            ],
+            "event_schema_rule": (
+                "status must be supported and every optional field that is present must be legal under semantic_graph_v2"
+            ),
+        }
+    visibility_generation_layout_contract: dict[str, Any] | None = None
+    if stage64_operation == "visibility":
+        visibility_generation_layout_contract = {
+            "total_event_count": 8,
+            "array_role_order_is_mandatory": True,
+            "resource_array_index": 0,
+            "permission_array_index": 1,
+            "wrong_observer_array_index": 2,
+            "wrong_permission_array_index": 3,
+            "wrong_condition_array_index": 4,
+            "additional_scoped_negative_array_indexes": [5, 6, 7],
+            "resource": {
+                "scope_rule": "OMIT scope entirely",
+                "depends_on_rule": "OMIT depends_on or use []",
+                "parent_novelty_rule": (
+                    "entity+slot+value+status must not equal any complete signature in seed.semantic_parent_graph.events"
+                ),
+            },
+            "permission": {
+                "depends_on_rule": "exactly [events[0].event_id]",
+                "scope_rule": (
+                    "observer, permission, and condition are all concrete non-empty strings"
+                ),
+            },
+            "minimal_pair_scopes": {
+                "events[2]": "same permission and condition as events[1], different observer",
+                "events[3]": "same observer and condition as events[1], different permission",
+                "events[4]": "same observer and permission as events[1], different condition",
+            },
+            "remaining_scoped_negatives": (
+                "each events[5:8] scope differs from events[1] in at least one of observer, permission, or condition"
+            ),
+            "dependency_rule": (
+                "events[1] -> events[0] is the sole dependency edge; events[0] and events[2:8] omit depends_on"
+            ),
+            "unique_scope_rule": (
+                "exactly one event matches all three events[1] scope fields; status differences do not count"
+            ),
+        }
+    relation_generation_layout_contract: dict[str, Any] | None = None
+    if stage64_operation == "relation_lookup":
+        relation_generation_layout_contract = {
+            "total_event_count": 8,
+            "array_role_order_is_mandatory": True,
+            "binder_array_index": 0,
+            "relation_array_index": 1,
+            "same_entity_negative_array_index": 2,
+            "other_entity_negative_array_index": 3,
+            "context_array_indexes": [4, 5, 6, 7],
+            "binder_relation": {
+                "binding_rule": "events[0].value equals events[1].entity byte-for-byte",
+                "dependency_rule": "events[1].depends_on is exactly [events[0].event_id]",
+                "answer_rule": "events[1].value is the answer-bearing relation value",
+            },
+            "same_entity_negative": {
+                "entity_rule": "events[2].entity equals events[1].entity byte-for-byte",
+                "slot_rule": "events[2].slot equals events[1].slot byte-for-byte",
+                "value_rule": "events[2].value differs semantically from events[1].value",
+            },
+            "other_entity_negative": {
+                "entity_rule": "events[3].entity differs from events[1].entity",
+                "slot_rule": "events[3].slot equals events[1].slot byte-for-byte",
+            },
+            "dependency_rule": (
+                "events[1] -> events[0] is the sole dependency edge; all other events omit depends_on"
+            ),
+            "parent_novelty_rule": (
+                "every child entity+slot+value+status signature and every child support claim must be novel relative to the parent"
+            ),
+        }
+    if stage64_operation:
+        requirements.append(
+            "Set parent_graph_id exactly to seed.semantic_parent_graph.graph_id so the new graph delta remains linked to its Stage2 parent snapshot."
+        )
+        requirements.extend(
+            [
+                "Set schema_version exactly to 'semantic_graph_v2' and operation exactly to the requested qa_operation.",
+                f"Set graph_id exactly to {expected_child_graph_id!r}; it must differ from parent_graph_id.",
+                "For every event, status is an independent field and must equal one exact literal from approved_statuses. Never copy event_type, operation names, or category labels into status.",
+                "For Stage64 semantic graphs, omit the optional event_type field entirely; event_type is not a status value.",
+                "Omit every optional event field that is not shown for the requested operation. Never emit null, empty-object, placeholder, or alternate-shape optional fields.",
+            ]
+        )
+        if stage64_operation == "relation_lookup":
+            relation_answer_type_examples = {
+                "Person": "a concrete person's name",
+                "GroupOrOrg": "a concrete organization or group name",
+                "LocationOrScope": "a concrete place or scope",
+                "DateOrTime": "a concrete date or time",
+                "Event": "a concrete event name",
+                "ObjectOrCommonNoun": "a concrete object or noun phrase",
+                "AttributeValue": "a concrete attribute value",
+                "ProperNounOrNamedEntity": "a concrete named entity",
+            }
+            answer_type_example = relation_answer_type_examples.get(
+                preferred_answer_type, "a concrete graph-grounded answer value"
+            )
+            requirements.append(
+                f"For relation_lookup, E2.value is the answer-bearing relation value and MUST be {answer_type_example} "
+                f"compatible with preferred_answer_type={preferred_answer_type!r}. Do not use generic labels such as "
+                "'internal', 'unknown', or 'some value'; make the target type directly answerable from the graph."
+            )
+            requirements.extend(
+                [
+                    "Return exactly 8 events in fixed role order. Set events[0].value byte-for-byte equal to events[1].entity; do not use the alternate same-entity binder form.",
+                    "Set events[1].depends_on exactly to [events[0].event_id]. This must be the only dependency edge in the entire graph.",
+                    "Set events[2].entity and events[2].slot byte-for-byte equal to events[1].entity and events[1].slot, but give events[2] a semantically distinct value.",
+                    "Set events[3].slot byte-for-byte equal to events[1].slot and use an entity different from events[1].entity. events[4:8] are independent context facts. Every event except events[1] must omit depends_on.",
+                    "Before returning, machine-check relation_generation_layout_contract. If the relation entity or slot changes, rewrite events[2] and events[3] so all listed equalities remain true.",
+                ]
+            )
+        if stage64_operation == "temporal_state_update":
+            requirements.extend(
+                [
+                    "For every event, time_index must be an integer equal to its 1-based array position: 1, 2, ..., N. Never reuse a time_index.",
+                    (
+                        "Return exactly 8 events. events[0:4] are the only update chain: the same exact entity and slot with four distinct values. "
+                        f"For this target, events[1].status must be exactly 'active' and is the current/gold fact even though it is not the maximum-time event. events[0] and events[2] must use exact non-active literals from [{STAGE64_NON_ACTIVE_STATUS_LITERAL_TEXT}]. "
+                        f"events[3] is a later invalid same-slot hard negative and its status must be exactly one of {temporal_strategy_statuses!r} for hard_negative_strategy={temporal_strategy!r}. No other primary event may be active/restored."
+                        if temporal_anti_shortcut
+                        else f"Return exactly 8 events. events[0:4] are the only update chain: the same exact entity and slot with four distinct values. Each events[0:3].status must be exactly one of [{STAGE64_NON_ACTIVE_STATUS_LITERAL_TEXT}], never the category label 'non-active'; events[3].status must be exactly 'active'. Never use 'restored' in the primary chain."
+                    ),
+                    "events[0] must OMIT previous_value and depends_on. events[1], events[2], and events[3] must point previous_value to the immediately preceding value and set depends_on to exactly the immediately preceding event_id. A repeated value, skipped dependency, or restore cycle is invalid.",
+                    "events[4:8] are four context singletons. Give each a different entity+slot pair from every other context event and from the primary chain. OMIT previous_value entirely on all four; never return previous_value:null.",
+                    (
+                        "Before returning, machine-check the exact temporal_generation_layout_contract. The sole active/current gold must be events[1], and the later events[2:4] must remain invalid with events[3] realizing the target strategy; a maximum-time gold is a hard failure."
+                        if temporal_anti_shortcut
+                        else "Before returning, machine-check the exact temporal_generation_layout_contract. A second 3+ event entity+slot group, a restored terminal value, or an earlier active chain event is a hard failure."
+                    ),
+                ]
+            )
+        elif stage64_operation == "count":
+            requirements.extend(
+                [
+                    "Return exactly 8 candidate-member events in fixed role order. On every event use the same byte-for-byte non-empty set_id, condition string, concrete entity string, and semantic slot string; put the member identity in value.",
+                    "All eight member values must be pairwise distinct after casefolding and punctuation/underscore normalization. A repeated value in different included roles, or once included and once excluded, is always invalid.",
+                    "Set events[0:4].set_membership.included to true and events[4:8].set_membership.included to false. Do not choose a different balance or reorder these truth roles.",
+                    "Use only supported semantic_graph_v2 statuses. Optional event fields must be valid when present; omit unnecessary optional fields instead of returning null, placeholders, or alternate shapes.",
+                    "Before returning, machine-check the exact count_generation_layout_contract. Exactly eight unique normalized values and the deterministic four-true/four-false array roles are hard requirements.",
+                ]
+            )
+        elif stage64_operation == "comparison":
+            comparison_numeric_requirement = (
+                "Let P=abs(events[0].value-events[1].value) and C=abs(events[2].value-events[3].value). "
+                "Because hard_negative_strategy is 'near_numeric_off_by_one', you MUST make abs(P-C)==1 "
+                "and C!=P; choose the four integer values together before writing the graph."
+                if isinstance(stage64_reasoning_contract, dict)
+                and stage64_reasoning_contract.get("hard_negative_strategy")
+                == "near_numeric_off_by_one"
+                else "Satisfy the exact numeric relation required by the immutable comparison hard_negative_strategy."
+            )
+            requirements.extend(
+                [
+                    "Return exactly 8 events. events[0:2] are the sole primary comparison pair: different entities, the exact same slot and integer time_index, status exactly 'active', and distinct JSON integer values.",
+                    "events[2:4] are the 2+2 contrast roles: reuse the primary slot, use one primary entity each, use explicit non-active statuses, and give them one shared non-primary time. events[4:8] are four unrelated context roles.",
+                    comparison_numeric_requirement,
+                    "The contrast key is the sole permitted repeated non-primary (normalized slot, integer time_index) key. Every events[4:8] key must be unique and differ from both primary and contrast keys.",
+                    "Write every context alignment_hints.support_claim as a natural statement of that fact. Never mention primary/context roles, slot-time keys, validators, machine checks, or layout instructions inside a support claim.",
+                    "Before returning, machine-check the exact comparison_generation_layout_contract. A same-entity primary pair, textual primary value, duplicate primary value, primary event whose status is not exactly 'active', repeated context key, or primary-key reuse is invalid.",
+                ]
+            )
+        elif stage64_operation == "visibility":
+            requirements.extend(
+                [
+                    "Return exactly 8 events in fixed role order. events[0] is a novel child resource fact and must omit scope and depends_on; it must not copy a complete parent event signature.",
+                    "events[1] is the sole permission composition. It must depend_on exactly [events[0].event_id] and its observer, permission, and condition scope fields must all be concrete non-empty strings.",
+                    "Build three exact minimal-pair negatives: events[2] changes only observer, events[3] changes only permission, and events[4] changes only condition relative to events[1].",
+                    "Every events[5:8] scope must also differ from events[1] in at least one of observer, permission, or condition. A different status does not make an identical scope distinct.",
+                    "events[1] -> events[0] is the sole dependency edge. Every other event must omit depends_on. Before returning, machine-check visibility_generation_layout_contract and verify exactly one full scope match.",
+                ]
+            )
+    operation_value_example: Any = "string"
+    if stage64_operation == "comparison":
+        operation_value_example = 17
+    event_schema: dict[str, Any] = {
+        "event_id": "unique local string referenced by depends_on",
+        "round_id": round_id,
+        "time_index": 1,
+        "entity": "string",
+        "slot": "string",
+        "value": operation_value_example,
+        "status": {
+            "type": "string",
+            "allowed_values": sorted(APPROVED_STATUSES),
+            "must_equal_one_allowed_value": True,
+        },
+        **operation_event_fields,
+        "required_for_dialogue": True,
+        "source": "api_graph_expansion",
+        "alignment_hints": {
+            "must_mention_any": ["entity or slot aliases"],
+            "must_mention_value_any": ["value aliases"],
+            "support_claim": "single sentence to realize in dialogue",
+        },
+    }
+    if not stage64_operation:
+        # Legacy graph consumers still use event_type; Stage64 semantic graphs
+        # do not need it, and showing its literals next to status invites the
+        # API to copy an event_type label into the status field.
+        event_schema["event_type"] = (
+            "state_change|belief_update|cancel|restore|delay|expire|report|permission_scope|conflict"
+        )
     prompt = {
         "task": "current_method graph-first native challenger graph/event_plan expansion",
         "requirements": requirements,
@@ -2759,37 +6054,60 @@ def call_api_graph_expansion(
         "sample_index": sample_index,
         "requested_question_type": question_type,
         "requested_attack_skill": attack_skill,
+        "stage64_target": stage64_target or None,
+        "stage64_reasoning_target_contract": stage64_reasoning_contract,
+        "item_difficulty_target": stage64_difficulty_target if stage64_operation else None,
+        "stage64_item_difficulty_contract": stage64_difficulty_contract if stage64_operation else None,
+        "operation_contract": operation_contract or None,
         "approved_attack_skills": list(APPROVED_ATTACK_SKILLS),
-        "approved_event_types": sorted(APPROVED_EVENT_TYPES),
+        "approved_event_types": ([] if stage64_operation else sorted(APPROVED_EVENT_TYPES)),
         "approved_statuses": sorted(APPROVED_STATUSES),
-        "seed": compact_seed_for_prompt(seed_row),
-        "legacy_alignment_result": legacy_alignment_result,
+        "status_literal_contract": status_literal_contract,
+        "seed": semantic_seed_prompt,
+        "legacy_alignment_result": legacy_alignment_for_graph_prompt(
+            legacy_alignment_result,
+            semantic_graph_v2=bool(stage64_operation),
+        ),
         "hidden_query_conditioned_objective": query_objective,
+        "temporal_generation_layout_contract": temporal_generation_layout_contract,
+        "comparison_generation_layout_contract": comparison_generation_layout_contract,
+        "count_generation_layout_contract": count_generation_layout_contract,
+        "visibility_generation_layout_contract": visibility_generation_layout_contract,
+        "relation_generation_layout_contract": relation_generation_layout_contract,
+        "forbidden_output_top_level_keys": [
+            "task",
+            "requirements",
+            "seed",
+            "legacy_alignment_result",
+            "output_schema",
+            "approved_attack_skills",
+            "approved_event_types",
+            "approved_statuses",
+            "status_literal_contract",
+            "hidden_query_conditioned_objective",
+            "operation_contract",
+            "item_difficulty_target",
+            "stage64_item_difficulty_contract",
+            "stage64_reasoning_target_contract",
+            "previous_semantic_validation_error",
+            "invalid_graph_to_correct",
+            "correction_instruction",
+            "unsupported_status_correction",
+            "semantic_correction_constraints",
+            "temporal_generation_layout_contract",
+            "comparison_generation_layout_contract",
+            "count_generation_layout_contract",
+            "visibility_generation_layout_contract",
+            "relation_generation_layout_contract",
+        ],
         "output_schema": {
-            "graph_snapshot_id": "string",
-            "question_type": "single_choice|ordering|multi_select|evidence_selection|state_reconstruction",
-            "attack_skill": "approved attack skill",
-            "events": [
-                {
-                    "origin_event_id": "optional provenance only",
-                    "lineage_id": "optional provenance only",
-                    "round_id": round_id,
-                    "time_index": 1,
-                    "event_type": "state_change|belief_update|cancel|restore|delay|expire|report|permission_scope|conflict",
-                    "entity": "string",
-                    "slot": "string",
-                    "value": "string",
-                    "previous_value": "optional string",
-                    "status": "active|outdated|canceled|restored|expired|delayed_not_active|false|belief|report|scope_limited",
-                    "required_for_dialogue": True,
-                    "source": "api_graph_expansion",
-                    "alignment_hints": {
-                        "must_mention_any": ["entity or slot aliases"],
-                        "must_mention_value_any": ["value aliases"],
-                        "support_claim": "single sentence to realize in dialogue",
-                    },
-                }
-            ],
+            "schema_version": "semantic_graph_v2",
+            "graph_id": expected_child_graph_id,
+            "parent_graph_id": ((semantic_seed_prompt.get("semantic_parent_graph") or {}).get("graph_id")),
+            "operation": stage64_operation or "requested Stage3 qa_operation",
+            "question_type": question_type,
+            "attack_skill": attack_skill,
+            "events": [event_schema],
             "false_candidates": [],
             "metadata": {
                 "query_conditioned_graph_expansion": "optional bool; echo true only if hidden_query_conditioned_objective was followed",
@@ -2798,26 +6116,970 @@ def call_api_graph_expansion(
             },
         },
     }
-    raw_payload, meta = call_raw_json_api(
-        args,
-        prompt,
-        system_prompt=(
-            "You are a strict JSON-only graph-first challenger. Expand the current graph/event_plan. "
-            "Return exactly one JSON object. Do not write dialogue. Do not write final trusted QA."
-        ),
-        required_keys=("events",),
-        call_kind="api_graph_expansion",
-        max_tokens_override=int(getattr(args, "graph_expansion_max_tokens", 0) or 0) or None,
+    graph_system_prompt = (
+        "You are a strict JSON-only graph-first challenger. The user JSON is an INPUT SPECIFICATION, not an output template to echo. "
+        "Create a new semantic graph delta. Return exactly one JSON object whose only top-level keys are "
+        "schema_version, graph_id, parent_graph_id, operation, question_type, attack_skill, events, false_candidates, and metadata. "
+        "Never copy task, requirements, seed, legacy_alignment_result, output_schema, approved_* lists, status_literal_contract, operation_contract, hidden_query_conditioned_objective, "
+        "item_difficulty_target, stage64_item_difficulty_contract, stage64_reasoning_target_contract, "
+        "temporal_generation_layout_contract, comparison_generation_layout_contract, count_generation_layout_contract, visibility_generation_layout_contract, relation_generation_layout_contract, previous_semantic_validation_error, invalid_graph_to_correct, correction_instruction, unsupported_status_correction, or semantic_correction_constraints into the response. "
+        "Do not write dialogue. Do not write final trusted QA."
     )
-    plan = normalize_current_event_plan(
-        raw_payload,
-        seed_row,
-        question_type=question_type,
-        attack_skill=attack_skill,
-        policy=policy,
-        sample_index=sample_index,
-        round_id=round_id,
-    )
+    semantic_retry_limit = max(0, int(getattr(args, "graph_semantic_retries", 1) or 0))
+    semantic_attempt_history: list[dict[str, Any]] = []
+    raw_payload: dict[str, Any] | None = None
+    meta: dict[str, Any] = {}
+    for semantic_attempt in range(semantic_retry_limit + 1):
+        repetition_diagnostic = _semantic_retry_repetition_diagnostic(
+            semantic_attempt_history
+        )
+        if repetition_diagnostic is not None:
+            last_attempt = semantic_attempt_history[-1]
+            current_meta = copy.deepcopy(last_attempt.get("api_meta") or {})
+            current_meta["used"] = False
+            current_meta["error_type"] = "semantic_retry_repeated_payload"
+            current_meta["reason"] = repetition_diagnostic["reason"]
+            current_meta["semantic_retry_count"] = max(
+                0, len(semantic_attempt_history) - 1
+            )
+            current_meta["semantic_attempt_history"] = copy.deepcopy(
+                semantic_attempt_history
+            )
+            current_meta["semantic_retry_circuit_breaker"] = copy.deepcopy(
+                repetition_diagnostic
+            )
+            error = NativeGraphDialogueReject(
+                "semantic_graph_v2 retry circuit breaker rejected two consecutive "
+                "machine-equivalent invalid payloads with identical issues"
+            )
+            setattr(
+                error,
+                "api_graph_payload",
+                copy.deepcopy(last_attempt.get("raw_payload")),
+            )
+            setattr(error, "api_graph_meta", copy.deepcopy(current_meta))
+            raise error
+        prompt_attempt = copy.deepcopy(prompt)
+        if semantic_attempt_history:
+            prompt_attempt["previous_semantic_validation_error"] = copy.deepcopy(
+                semantic_attempt_history[-1]["issues"]
+            )
+            prompt_attempt["invalid_graph_to_correct"] = sanitize_invalid_graph_for_semantic_retry(
+                semantic_attempt_history[-1]["raw_payload"]
+            )
+            prompt_attempt["correction_instruction"] = (
+                "Correct invalid_graph_to_correct in place where possible. Return only the corrected canonical graph object. "
+                "Its support-claim prose was deliberately omitted to prevent parent-text feedback; write new natural support claims. "
+                "Fix every listed validator issue and follow operation_contract literally. Do not echo the input specification."
+            )
+            unsupported_status_paths: list[dict[str, Any]] = []
+            for issue in semantic_attempt_history[-1].get("issues") or []:
+                if not isinstance(issue, dict) or issue.get("code") != "unsupported_status":
+                    continue
+                details = issue.get("details") if isinstance(issue.get("details"), dict) else {}
+                supported = [
+                    status
+                    for status in (details.get("supported") or [])
+                    if isinstance(status, str) and status in APPROVED_STATUSES
+                ]
+                unsupported_status_paths.append(
+                    {
+                        "path": normalize_space(issue.get("path")),
+                        "invalid_status_literal": normalize_space(details.get("status")),
+                        "supported_status_literals": supported or sorted(APPROVED_STATUSES),
+                    }
+                )
+            if unsupported_status_paths:
+                prompt_attempt["unsupported_status_correction"] = {
+                    "invalid_paths": unsupported_status_paths,
+                    "allowed_status_literals": sorted(APPROVED_STATUSES),
+                    "non_active_status_literals": list(STAGE64_NON_ACTIVE_STATUS_LITERALS),
+                    "forbidden_category_labels_as_status": ["non-active"],
+                    "instruction": (
+                        "At every listed path, replace the invalid value with one semantically accurate exact literal "
+                        "from that path's supported_status_literals. Never emit the category label 'non-active', and "
+                        "do not use an arbitrary default or alter unrelated machine fields."
+                    ),
+                }
+                prompt_attempt["correction_instruction"] += (
+                    " Fix every unsupported_status path listed in unsupported_status_correction by selecting one "
+                    "semantically accurate exact supported_status_literals entry. The category label 'non-active' "
+                    "is forbidden as event.status; do not leave it unchanged and do not guess an unrelated default."
+                )
+            parent_reuse_event_ids = [
+                normalize_space(
+                    (
+                        issue.get("details")
+                        if isinstance(issue.get("details"), dict)
+                        else {}
+                    ).get("child_event_id")
+                )
+                for issue in semantic_attempt_history[-1].get("issues") or []
+                if isinstance(issue, dict)
+                and issue.get("code") == "parent_event_exact_semantic_reuse"
+                and normalize_space(
+                    (
+                        issue.get("details")
+                        if isinstance(issue.get("details"), dict)
+                        else {}
+                    ).get("child_event_id")
+                )
+            ]
+            parent_claim_reuse_event_ids = [
+                normalize_space(
+                    (
+                        issue.get("details")
+                        if isinstance(issue.get("details"), dict)
+                        else {}
+                    ).get("child_event_id")
+                )
+                for issue in semantic_attempt_history[-1].get("issues") or []
+                if isinstance(issue, dict)
+                and issue.get("code") == "parent_support_claim_verbatim_reuse"
+                and normalize_space(
+                    (
+                        issue.get("details")
+                        if isinstance(issue.get("details"), dict)
+                        else {}
+                    ).get("child_event_id")
+                )
+            ]
+            parent_collision_event_ids = list(
+                dict.fromkeys(parent_reuse_event_ids + parent_claim_reuse_event_ids)
+            )
+            if parent_reuse_event_ids:
+                prompt_attempt["correction_instruction"] += (
+                    " The parent novelty gate flagged child event IDs "
+                    f"{parent_reuse_event_ids!r}. Replace each flagged event with a genuinely new "
+                    "entity/slot/value/status combination; do not preserve the copied parent fact or merely "
+                    "paraphrase its support claim."
+                )
+            if parent_claim_reuse_event_ids:
+                prompt_attempt["correction_instruction"] += (
+                    " The parent novelty gate also flagged support-claim reuse on child event IDs "
+                    f"{parent_claim_reuse_event_ids!r}. Replace each entire event with a novel child fact and write a "
+                    "new support claim from that new fact; paraphrasing the copied parent sentence is insufficient."
+                )
+            invalid_events = semantic_attempt_history[-1]["raw_payload"].get("events")
+            if stage64_operation == "comparison" and isinstance(invalid_events, list) and len(invalid_events) >= 4:
+                left = invalid_events[0] if isinstance(invalid_events[0], dict) else {}
+                right = invalid_events[1] if isinstance(invalid_events[1], dict) else {}
+                existing_event_ids = [
+                    normalize_space(event.get("event_id"))
+                    if isinstance(event, dict)
+                    else ""
+                    for event in invalid_events[:8]
+                ]
+                if (
+                    len(existing_event_ids) == 8
+                    and all(existing_event_ids)
+                    and len(set(existing_event_ids)) == 8
+                ):
+                    required_event_ids = existing_event_ids
+                else:
+                    required_event_ids = [f"E{index}" for index in range(1, 9)]
+                primary_event_ids = required_event_ids[:2]
+                contrast_event_ids = required_event_ids[2:4]
+                context_event_ids = required_event_ids[4:]
+                alternate_entity = next(
+                    (
+                        normalize_space(event.get("entity"))
+                        for event in invalid_events[1:]
+                        if isinstance(event, dict)
+                        and normalize_space(event.get("entity"))
+                        and normalize_space(event.get("entity")) != normalize_space(left.get("entity"))
+                    ),
+                    "a different concrete entity",
+                )
+                primary_difference = None
+                if (
+                    isinstance(left.get("value"), int)
+                    and not isinstance(left.get("value"), bool)
+                    and isinstance(right.get("value"), int)
+                    and not isinstance(right.get("value"), bool)
+                ):
+                    primary_difference = abs(left["value"] - right["value"])
+                recommended_contrast_difference = (
+                    primary_difference + 1
+                    if primary_difference is not None
+                    else None
+                )
+                recommended_contrast_values = None
+                if (
+                    recommended_contrast_difference is not None
+                    and isinstance(invalid_events[2], dict)
+                    and isinstance(invalid_events[2].get("value"), int)
+                    and not isinstance(invalid_events[2].get("value"), bool)
+                ):
+                    recommended_contrast_values = [
+                        invalid_events[2].get("value"),
+                        invalid_events[2].get("value")
+                        + recommended_contrast_difference,
+                    ]
+                prompt_attempt["semantic_correction_constraints"] = {
+                    "operation": "comparison",
+                    "required_total_event_count": 8,
+                    "required_total_event_count_range": [8, 8],
+                    "required_array_event_id_order": required_event_ids,
+                    "primary_pair_event_ids": primary_event_ids,
+                    "contrast_pair_event_ids": contrast_event_ids,
+                    "context_event_ids": context_event_ids,
+                    "left_event_id": left.get("event_id"),
+                    "right_event_id": right.get("event_id"),
+                    "required_right_entity": alternate_entity,
+                    "required_shared_slot": left.get("slot"),
+                    "required_shared_time_index": left.get("time_index"),
+                    "primary_key": {
+                        "normalized_slot": _temporal_generation_text_key(left.get("slot")),
+                        "time_index": left.get("time_index"),
+                    },
+                    "required_value_relation": "both values must be distinct JSON integers",
+                    "target_hard_negative_strategy": comparison_strategy or None,
+                    "required_contrast_difference_relation": (
+                        "P=abs(events[0].value-events[1].value); "
+                        "C=abs(events[2].value-events[3].value); "
+                        "abs(P-C)==1 and C!=P"
+                        if comparison_strategy == "near_numeric_off_by_one"
+                        else "follow the immutable target hard_negative_strategy"
+                    ),
+                    "primary_difference_from_current_payload": primary_difference,
+                    "recommended_contrast_difference": recommended_contrast_difference,
+                    "recommended_contrast_values": recommended_contrast_values,
+                    "required_contrast_event_values": (
+                        {
+                            required_event_ids[2]: recommended_contrast_values[0],
+                            required_event_ids[3]: recommended_contrast_values[1],
+                        }
+                        if recommended_contrast_values is not None
+                        else None
+                    ),
+                    "context_key_definition": "(normalized slot, integer time_index)",
+                    "context_pairwise_unique_key_check": (
+                        "all context_event_ids have pairwise distinct keys and none equals primary_key"
+                    ),
+                    "repair_mode": "rebuild_numeric_roles_from_scratch",
+                    "detected_native_layout_issues": comparison_raw_generation_layout_issues(
+                        {"operation": "comparison", "events": invalid_events},
+                        stage64_target,
+                    ),
+                    "machine_checks": [
+                        "len(events) == 8 and event IDs appear in required_array_event_id_order",
+                        "events[0].entity != events[1].entity",
+                        "events[0].slot == events[1].slot",
+                        "events[0].time_index == events[1].time_index",
+                        "events[0].status == events[1].status == active",
+                        "events[0].value and events[1].value are distinct JSON integers",
+                        "events[2:4] use the two primary entities, the exact primary slot, one shared non-primary time_index, non-active statuses, and distinct JSON integer values",
+                        *(
+                            [
+                                "P=abs(events[0].value-events[1].value), C=abs(events[2].value-events[3].value), abs(P-C)==1, and C!=P"
+                            ]
+                            if comparison_strategy == "near_numeric_off_by_one"
+                            else []
+                        ),
+                        "every event in context_event_ids has a non-empty slot and integer time_index",
+                        "context (normalized slot, time_index) keys are pairwise distinct",
+                        "no context key equals primary_key or the contrast pair key",
+                        "context support_claim values state facts naturally and contain no graph-role or validator instructions",
+                        "the core semantic validator reports exactly one active two-entity integer comparison pair",
+                    ],
+                }
+                prompt_attempt["correction_instruction"] += (
+                    " For comparison, rebuild the complete eight-event array into the exact listed roles. The four "
+                    "numeric roles are NOT immutable: replace their values together whenever required to satisfy the "
+                    "arithmetic contract. The first two listed event IDs are the sole primary pair. The next two are "
+                    "the non-active wrong-time contrast pair for the same entities and slot. The last four are context "
+                    "roles: assign each a distinct normalized slot/time_index key, with none equal to the primary or contrast key. "
+                    "Do not delete events or hide a repeated key by changing status/value types. Keep context facts and "
+                    "support claims natural, and satisfy every machine check before returning."
+                )
+                if comparison_strategy == "near_numeric_off_by_one":
+                    prompt_attempt["correction_instruction"] += (
+                        " Compute P=abs(events[0].value-events[1].value) and "
+                        "C=abs(events[2].value-events[3].value) before returning; change the complete graph so "
+                        f"abs(P-C)==1 and C!=P. The current P is {primary_difference!r}; use a contrast difference of "
+                        f"exactly {recommended_contrast_difference!r}. Set the contrast values to "
+                        f"{recommended_contrast_values!r} when provided (event mapping "
+                        f"{prompt_attempt['semantic_correction_constraints']['required_contrast_event_values']!r}); copy these exact JSON integers, "
+                        "do not recalculate or choose alternatives. This is a MUST constraint, not a suggestion. Do not "
+                        "preserve a contrast pair with the same or an unrelated difference."
+                    )
+            elif stage64_operation == "bridge" and isinstance(invalid_events, list):
+                existing_event_ids = [
+                    normalize_space(event.get("event_id"))
+                    if isinstance(event, dict)
+                    else ""
+                    for event in invalid_events[:8]
+                ]
+                if (
+                    len(existing_event_ids) == 8
+                    and all(existing_event_ids)
+                    and len(set(existing_event_ids)) == 8
+                ):
+                    required_event_ids = existing_event_ids
+                else:
+                    required_event_ids = [f"E{index}" for index in range(1, 9)]
+                dependency_map = {
+                    event_id: ([required_event_ids[0], required_event_ids[1]] if index == 2 else [])
+                    for index, event_id in enumerate(required_event_ids)
+                }
+                prompt_attempt["semantic_correction_constraints"] = {
+                    "operation": "bridge",
+                    "required_total_event_count_range": [6, 8],
+                    "required_array_event_id_order": required_event_ids,
+                    "required_terminal_event_id": required_event_ids[2],
+                    "required_dependency_map": dependency_map,
+                    "forbidden_additional_dependency_edges": True,
+                    "parent_collision_event_ids": parent_collision_event_ids,
+                    "repair_mode": "rebuild_roles_from_scratch",
+                    "machine_checks": [
+                        "the first three listed event IDs are the sole bridge roles",
+                        "events[0] and events[1] omit depends_on",
+                        "events[2].depends_on is exactly [events[0].event_id, events[1].event_id]",
+                        "every event after events[2] omits depends_on",
+                        "the core validator reports exactly one sink endpoint with a dependency closure of at least two events",
+                        "every parent-collision event is replaced as a whole, including its fact tuple and support claim",
+                    ],
+                }
+                prompt_attempt["correction_instruction"] += (
+                    " For bridge, rebuild the complete events array in the listed order. Replace every event listed in "
+                    "parent_collision_event_ids with a genuinely new child fact before assigning bridge roles. Keep exactly one terminal "
+                    f"bridge endpoint {required_event_ids[2]!r}; set its depends_on exactly to "
+                    f"[{required_event_ids[0]!r}, {required_event_ids[1]!r}], remove depends_on from every other event, "
+                    "and rewrite any former secondary bridge/context chain as independent context facts. Do not leave "
+                    "a second sink with two ancestors. Satisfy every machine check before returning."
+                )
+            elif stage64_operation == "relation_lookup" and isinstance(invalid_events, list) and len(invalid_events) >= 4:
+                existing_event_ids = [
+                    normalize_space(event.get("event_id"))
+                    if isinstance(event, dict)
+                    else ""
+                    for event in invalid_events[:8]
+                ]
+                if (
+                    len(existing_event_ids) == 8
+                    and all(existing_event_ids)
+                    and len(set(existing_event_ids)) == 8
+                ):
+                    required_event_ids = existing_event_ids
+                else:
+                    required_event_ids = [f"E{index}" for index in range(1, 9)]
+                binder = invalid_events[0] if isinstance(invalid_events[0], dict) else {}
+                relation = invalid_events[1] if isinstance(invalid_events[1], dict) else {}
+                required_dependency_map = {
+                    event_id: ([required_event_ids[0]] if index == 1 else [])
+                    for index, event_id in enumerate(required_event_ids)
+                }
+                prompt_attempt["semantic_correction_constraints"] = {
+                    "operation": "relation_lookup",
+                    "required_total_event_count": 8,
+                    "required_total_event_count_range": [8, 8],
+                    "required_array_event_id_order": required_event_ids,
+                    "binder_event_id": required_event_ids[0],
+                    "relation_event_id": required_event_ids[1],
+                    "same_entity_negative_event_id": required_event_ids[2],
+                    "other_entity_negative_event_id": required_event_ids[3],
+                    "required_relation_dependency": [required_event_ids[0]],
+                    "required_binder_binding": {
+                        "rule": "events[0].value equals events[1].entity byte-for-byte",
+                        "current_payload_satisfies_rule": _temporal_generation_values_equal(
+                            binder.get("value"), relation.get("entity")
+                        ),
+                        "alternate_binding_form_forbidden": True,
+                    },
+                    "required_field_equalities": [
+                        "events[0].value == events[1].entity",
+                        "events[2].entity == events[1].entity",
+                        "events[2].slot == events[1].slot",
+                        "events[3].slot == events[1].slot",
+                    ],
+                    "required_field_inequalities": [
+                        "events[2].value != events[1].value",
+                        "events[3].entity != events[1].entity",
+                    ],
+                    "required_dependency_map": required_dependency_map,
+                    "required_unique_dependency_edge": [
+                        [required_event_ids[1], required_event_ids[0]]
+                    ],
+                    "parent_collision_event_ids": parent_collision_event_ids,
+                    "repair_mode": "rebuild_roles_from_scratch",
+                    "machine_checks": [
+                        "len(events) == 8 and event IDs appear in required_array_event_id_order",
+                        "the entire graph has exactly one dependency edge",
+                        "events[1].depends_on is exactly [events[0].event_id]",
+                        "events[0].value equals events[1].entity byte-for-byte",
+                        "events[2] uses events[1] entity and slot byte-for-byte with a distinct value and omits depends_on",
+                        "events[3] uses a different entity with events[1] slot byte-for-byte and omits depends_on",
+                        "events[4:8] omit depends_on",
+                        "every parent-collision event is replaced as a whole, including its fact tuple and support claim",
+                    ],
+                }
+                prompt_attempt["correction_instruction"] += (
+                    " For relation_lookup, REBUILD the complete eight-event array; do not copy the invalid graph wholesale. Set "
+                    f"{required_event_ids[0]!r}.value byte-for-byte equal to {required_event_ids[1]!r}.entity; the "
+                    "alternate same-entity/different-slot binder form is forbidden. Set "
+                    f"{required_event_ids[1]!r}.depends_on exactly to [{required_event_ids[0]!r}], and remove every "
+                    "other dependency edge. Copy the corrected relation entity and slot into the third role, then give "
+                    "that role a distinct value. Copy the corrected relation slot into the fourth role and give it a "
+                    "different entity. If E2 changes, cascade those changes into E3 and E4. Replace every event listed "
+                    "in parent_collision_event_ids with a new fact tuple and a new natural support claim. Do not preserve "
+                    "a direct lookup that fails the binder relation; satisfy every machine check before returning."
+                )
+            elif stage64_operation == "cause_consequence" and isinstance(invalid_events, list):
+                existing_event_ids = [
+                    normalize_space(event.get("event_id"))
+                    if isinstance(event, dict)
+                    else ""
+                    for event in invalid_events[:8]
+                ]
+                if (
+                    len(existing_event_ids) == 8
+                    and all(existing_event_ids)
+                    and len(set(existing_event_ids)) == 8
+                ):
+                    required_event_ids = existing_event_ids
+                else:
+                    required_event_ids = [f"E{index}" for index in range(1, 9)]
+                invalid_event_by_id = {
+                    normalize_space(event.get("event_id")): event
+                    for event in invalid_events
+                    if isinstance(event, dict)
+                    and normalize_space(event.get("event_id"))
+                }
+                parent_reused_signatures = {
+                    child_event_id: {
+                        "entity": invalid_event_by_id[child_event_id].get("entity"),
+                        "slot": invalid_event_by_id[child_event_id].get("slot"),
+                        "value": invalid_event_by_id[child_event_id].get("value"),
+                        "status": invalid_event_by_id[child_event_id].get("status"),
+                    }
+                    for child_event_id in parent_reuse_event_ids
+                    if child_event_id in invalid_event_by_id
+                }
+                dependency_map = {
+                    event_id: ([required_event_ids[0]] if index == 1 else [])
+                    for index, event_id in enumerate(required_event_ids)
+                }
+                prompt_attempt["semantic_correction_constraints"] = {
+                    "operation": "cause_consequence",
+                    "required_total_event_count_range": [6, 8],
+                    "required_array_event_id_order": required_event_ids,
+                    "required_cause_event_id": required_event_ids[0],
+                    "required_effect_event_id": required_event_ids[1],
+                    "required_dependency_map": dependency_map,
+                    "forbidden_additional_dependency_edges": True,
+                    "parent_reuse_event_ids": parent_reuse_event_ids,
+                    "parent_reused_signatures": parent_reused_signatures,
+                    "repair_mode": "rebuild_roles_from_scratch",
+                    "forbidden_dependency_event_ids": required_event_ids[2:],
+                    "machine_checks": [
+                        "events[0] is the unique earlier cause",
+                        "events[1].depends_on is exactly [events[0].event_id] and events[1].time_index is greater",
+                        "every event after events[1] omits depends_on",
+                        "the core validator reports exactly one ordered dependency edge",
+                        "every parent-reused event ID is replaced by a novel entity/slot/value/status fact",
+                    ],
+                }
+                prompt_attempt["correction_instruction"] += (
+                    " For cause_consequence, REBUILD the complete events array in the listed order; do not copy the "
+                    "invalid graph wholesale. Preserve exactly one "
+                    f"edge: {required_event_ids[1]!r}.depends_on must be [{required_event_ids[0]!r}], with a strictly later "
+                    "time_index; remove depends_on from every event after the effect. Rewrite any secondary chains as "
+                    "independent adjacent noncausal facts. Replace every parent-reused event named in the constraints "
+                    "with a genuinely novel fact. None of the listed entity/slot/value/status tuples may appear in the "
+                    "corrected graph; change at least one tuple component and its support claim. The flagged cause event "
+                    "must receive a new concrete value, not the old parent value. Satisfy every machine check before "
+                    "returning."
+                )
+            elif stage64_operation == "visibility" and isinstance(invalid_events, list) and len(invalid_events) >= 2:
+                existing_event_ids = [
+                    normalize_space(event.get("event_id"))
+                    if isinstance(event, dict)
+                    else ""
+                    for event in invalid_events[:8]
+                ]
+                if (
+                    len(existing_event_ids) == 8
+                    and all(existing_event_ids)
+                    and len(set(existing_event_ids)) == 8
+                ):
+                    required_event_ids = existing_event_ids
+                else:
+                    required_event_ids = [f"E{index}" for index in range(1, 9)]
+                permission_event = invalid_events[1] if isinstance(invalid_events[1], dict) else {}
+                scope = permission_event.get("scope") if isinstance(permission_event.get("scope"), dict) else {}
+                required_scope = {
+                    field: scope.get(field)
+                    for field in ("observer", "permission", "condition")
+                }
+                exact_scope_duplicate_event_ids = [
+                    normalize_space(event.get("event_id"))
+                    for event in invalid_events
+                    if isinstance(event, dict)
+                    and isinstance(event.get("scope"), dict)
+                    and all(
+                        normalize_space(event["scope"].get(field))
+                        == normalize_space(required_scope.get(field))
+                        for field in ("observer", "permission", "condition")
+                    )
+                ]
+                required_dependency_map = {
+                    event_id: ([required_event_ids[0]] if index == 1 else [])
+                    for index, event_id in enumerate(required_event_ids)
+                }
+                prompt_attempt["semantic_correction_constraints"] = {
+                    "operation": "visibility",
+                    "required_total_event_count": 8,
+                    "required_total_event_count_range": [8, 8],
+                    "required_array_event_id_order": required_event_ids,
+                    "resource_event_id": required_event_ids[0],
+                    "permission_event_id": required_event_ids[1],
+                    "wrong_observer_event_id": required_event_ids[2],
+                    "wrong_permission_event_id": required_event_ids[3],
+                    "wrong_condition_event_id": required_event_ids[4],
+                    "required_permission_scope_reference_event_id": required_event_ids[1],
+                    "required_permission_dependency": [required_event_ids[0]],
+                    "required_dependency_map": required_dependency_map,
+                    "forbidden_exact_scope_match_event_ids": required_event_ids[2:],
+                    "detected_exact_scope_match_event_ids": exact_scope_duplicate_event_ids,
+                    "detected_duplicate_scope_event_ids": [
+                        event_id
+                        for event_id in exact_scope_duplicate_event_ids
+                        if event_id != required_event_ids[1]
+                    ],
+                    "parent_collision_event_ids": parent_collision_event_ids,
+                    "repair_mode": "rebuild_roles_from_scratch",
+                    "machine_checks": [
+                        "len(events) == 8 and event IDs appear in required_array_event_id_order",
+                        "events[0] is a novel child resource event and omits scope and depends_on",
+                        "events[1].depends_on is exactly [events[0].event_id]",
+                        "events[1].scope remains the reference scope and has three concrete non-empty fields",
+                        "events[2] changes only observer relative to events[1]",
+                        "events[3] changes only permission relative to events[1]",
+                        "events[4] changes only condition relative to events[1]",
+                        "events[5:8] each differ from events[1] in at least one observer/permission/condition field",
+                        "events[2:8] omit depends_on",
+                        "exactly one event has the full required_permission_scope",
+                        "every detected duplicate scope event is rewritten; changing status alone is insufficient",
+                        "every parent-collision event is replaced as a whole, including its fact tuple and support claim",
+                    ],
+                }
+                prompt_attempt["correction_instruction"] += (
+                    " For visibility, REBUILD the complete eight-event array; do not copy the invalid graph wholesale. "
+                    "Keep the first two listed roles as the sole resource-plus-permission composition. "
+                    f"Set {required_event_ids[1]!r}.depends_on exactly to [{required_event_ids[0]!r}] and use that "
+                    f"event's three-field scope as the reference. Make {required_event_ids[2]!r} differ only in observer, "
+                    f"{required_event_ids[3]!r} differ only in permission, and {required_event_ids[4]!r} differ only "
+                    "in condition. Rewrite every later event so at least one scope field differs, and remove depends_on "
+                    "from every event except the permission event. Rewrite every ID in detected_duplicate_scope_event_ids "
+                    "explicitly; changing status is not a repair. Replace every event listed in parent_collision_event_ids "
+                    "with a new fact tuple and new natural support claim. Exactly one event may match all three scope "
+                    "fields; satisfy every machine check before returning."
+                )
+            elif stage64_operation == "count" and isinstance(invalid_events, list):
+                existing_event_ids = [
+                    normalize_space(event.get("event_id"))
+                    if isinstance(event, dict)
+                    else ""
+                    for event in invalid_events[:8]
+                ]
+                if (
+                    len(existing_event_ids) == 8
+                    and all(existing_event_ids)
+                    and len(set(existing_event_ids)) == 8
+                ):
+                    required_event_ids = existing_event_ids
+                else:
+                    required_event_ids = [f"E{index}" for index in range(1, 9)]
+                required_included_by_event_id = {
+                    event_id: index < 4
+                    for index, event_id in enumerate(required_event_ids)
+                }
+                prompt_attempt["semantic_correction_constraints"] = {
+                    "operation": "count",
+                    "required_total_event_count": 8,
+                    "required_total_event_count_range": [8, 8],
+                    "required_array_event_id_order": required_event_ids,
+                    "candidate_member_event_ids": required_event_ids,
+                    "included_member_event_ids": required_event_ids[:4],
+                    "excluded_member_event_ids": required_event_ids[4:],
+                    "required_included_by_event_id": required_included_by_event_id,
+                    "shared_dimension_rule": (
+                        "choose one NEW non-empty set_id, entity, slot, and membership condition, then copy each exactly across all eight events"
+                    ),
+                    "required_value_relation": (
+                        "all eight values are pairwise distinct after casefolding and punctuation/underscore normalization"
+                    ),
+                    "detected_native_layout_issues": (
+                        count_raw_generation_layout_issues(
+                            {"operation": "count", "events": invalid_events}
+                        )
+                    ),
+                    "parent_collision_event_ids": parent_collision_event_ids,
+                    "repair_mode": "rebuild_candidate_set_from_scratch",
+                    "machine_checks": [
+                        "len(events) == 8 and event IDs appear in required_array_event_id_order",
+                        "every event has the same byte-for-byte non-empty set_membership.set_id",
+                        "every event has the same byte-for-byte non-empty entity and slot",
+                        "all eight normalized value fields are pairwise distinct",
+                        "events[0:4].set_membership.included == true",
+                        "events[4:8].set_membership.included == false",
+                        "every status is supported and every present optional field is valid under semantic_graph_v2",
+                        "the core semantic validator reports one eight-member candidate set with four included and four excluded members",
+                        "every parent-collision event is replaced as a whole, including its fact tuple and support claim",
+                    ],
+                }
+                prompt_attempt["correction_instruction"] += (
+                    " For count, REBUILD the entire candidate set from scratch; do not preserve the invalid graph's "
+                    "entity, slot, set_id, condition, or member values. Choose one NEW non-empty set_id, entity, slot, "
+                    "and membership condition across all roles. Give every role a different normalized member "
+                    "value, including replacing any value duplicated between an included and excluded role, and update "
+                    "that event's alignment_hints to state the replacement fact naturally. The first four listed event "
+                    "IDs must be included=true and the last four included=false. Do not delete a role, reorder truth "
+                    "labels, or hide a duplicate by changing its type. Replace every event listed in "
+                    "parent_collision_event_ids with a genuinely new child fact and support claim. Satisfy every machine "
+                    "check before returning."
+                )
+            elif stage64_operation == "temporal_state_update" and isinstance(invalid_events, list):
+                existing_event_ids = [
+                    normalize_space(event.get("event_id"))
+                    if isinstance(event, dict)
+                    else ""
+                    for event in invalid_events[:8]
+                ]
+                if (
+                    len(existing_event_ids) == 8
+                    and all(existing_event_ids)
+                    and len(set(existing_event_ids)) == 8
+                ):
+                    required_event_ids = existing_event_ids
+                else:
+                    required_event_ids = [f"E{index}" for index in range(1, 9)]
+                primary_event_ids = required_event_ids[:4]
+                context_event_ids = required_event_ids[4:]
+                prompt_attempt["semantic_correction_constraints"] = {
+                    "operation": "temporal_state_update",
+                    "required_total_event_count": 8,
+                    "required_total_event_count_range": [8, 8],
+                    "required_chain_count": 1,
+                    "required_chain_event_count": 4,
+                    "required_chain_event_count_range": [4, 4],
+                    "primary_chain_event_ids": primary_event_ids,
+                    "secondary_context_event_ids": context_event_ids,
+                    "required_array_event_id_order": required_event_ids,
+                    "required_status_literals_by_event_id": (
+                        {
+                            primary_event_ids[0]: list(STAGE64_NON_ACTIVE_STATUS_LITERALS),
+                            primary_event_ids[1]: ["active"],
+                            primary_event_ids[2]: list(STAGE64_NON_ACTIVE_STATUS_LITERALS),
+                            primary_event_ids[3]: list(temporal_strategy_statuses),
+                        }
+                        if temporal_anti_shortcut
+                        else {
+                            primary_event_ids[0]: list(STAGE64_NON_ACTIVE_STATUS_LITERALS),
+                            primary_event_ids[1]: list(STAGE64_NON_ACTIVE_STATUS_LITERALS),
+                            primary_event_ids[2]: list(STAGE64_NON_ACTIVE_STATUS_LITERALS),
+                            primary_event_ids[3]: ["active"],
+                        }
+                    ),
+                    "max_time_shortcut_forbidden": temporal_anti_shortcut,
+                    "current_gold_event_id": (
+                        primary_event_ids[1]
+                        if temporal_anti_shortcut
+                        else primary_event_ids[3]
+                    ),
+                    "later_invalid_event_ids": (
+                        primary_event_ids[2:4] if temporal_anti_shortcut else []
+                    ),
+                    "target_strategy_invalid_event_id": (
+                        primary_event_ids[3] if temporal_anti_shortcut else None
+                    ),
+                    "hard_negative_strategy": temporal_strategy or None,
+                    "forbidden_category_labels_as_status": ["non-active"],
+                    "required_previous_value_links": [
+                        {
+                            "event_id": primary_event_ids[index],
+                            "must_equal_value_of_event_id": primary_event_ids[index - 1],
+                        }
+                        for index in range(1, 4)
+                    ],
+                    "previous_value_forbidden_event_ids": [
+                        primary_event_ids[0],
+                        *context_event_ids,
+                    ],
+                    "detected_candidate_chain_diagnostics": (
+                        temporal_retry_candidate_chain_diagnostics(invalid_events)
+                    ),
+                    "detected_native_layout_issues": (
+                        temporal_raw_generation_layout_issues(
+                            {
+                                "operation": "temporal_state_update",
+                                "events": invalid_events,
+                            },
+                            stage64_target,
+                        )
+                    ),
+                    "machine_checks": [
+                        "len(events) == 8 and event IDs appear in required_array_event_id_order",
+                        "events[0:4] use one byte-for-byte identical entity string and one byte-for-byte identical slot string",
+                        "events[0:4] contain four semantically distinct values; no value repeats and no cycle returns to an earlier value",
+                        *(
+                            [
+                                f"events[0].status and events[2].status each equal one exact literal from [{STAGE64_NON_ACTIVE_STATUS_LITERAL_TEXT}]",
+                                "events[1].status == active exactly and events[1] is the non-max-time current/gold event",
+                                f"events[3].status is one exact literal from {temporal_strategy_statuses!r} and realizes hard_negative_strategy={temporal_strategy!r}",
+                            ]
+                            if temporal_anti_shortcut
+                            else [
+                                f"events[0].status, events[1].status, and events[2].status each equal one exact literal from [{STAGE64_NON_ACTIVE_STATUS_LITERAL_TEXT}]; the category label 'non-active' is forbidden",
+                                "events[3].status == active exactly; restored is forbidden",
+                            ]
+                        ),
+                        "events[0] omits previous_value; null is not omission",
+                        "events[1].previous_value == events[0].value",
+                        "events[2].previous_value == events[1].value",
+                        "events[3].previous_value == events[2].value",
+                        "events[4:8] have four mutually distinct entity+slot pairs and none equals the primary entity+slot pair",
+                        "events[4:8] all omit previous_value; null is not omission",
+                        "time_index equals the one-based array position 1 through 8",
+                        "exactly one entity+slot group contains 3 or more events",
+                    ],
+                }
+                prompt_attempt["correction_instruction"] += (
+                    " For temporal_state_update, rebuild the events array into the exact eight roles in "
+                    "semantic_correction_constraints. The first four listed event IDs are the sole answer chain. Give "
+                    "them one exact entity+slot and four different values. "
+                    + (
+                        f"Set the second event to status active as the current/gold value, while the first and third use non-active literals and the fourth uses one exact status from {temporal_strategy_statuses!r} as the later target-strategy invalid update. The maximum-time event must not be gold. "
+                        if temporal_anti_shortcut
+                        else f"Set each of the first three statuses to one exact literal from [{STAGE64_NON_ACTIVE_STATUS_LITERAL_TEXT}], never the category label 'non-active'; follow them with status exactly active. "
+                    )
+                    + "Preserve the three exact adjacent previous_value links. Do not "
+                    "preserve a restore cycle. "
+                    "The last four listed event IDs are independent context singletons: rewrite each to a different "
+                    "entity+slot pair and REMOVE previous_value entirely. Do not turn the second candidate chain into "
+                    "another chain, and do not return previous_value:null. Satisfy every machine check before returning."
+                )
+        graph_parent_prompt_audit = audit_graph_parent_prompt_verbatim_exposure(
+            prompt_attempt,
+            seed_row,
+        )
+        if graph_parent_prompt_audit.get("pass") is not True:
+            current_meta = {
+                "used": False,
+                "call_kind": "api_graph_expansion",
+                "error_type": "graph_parent_verbatim_prompt_exposure",
+                "semantic_attempt": semantic_attempt + 1,
+                "semantic_retry_count": semantic_attempt,
+                "graph_parent_prompt_audit": copy.deepcopy(
+                    graph_parent_prompt_audit
+                ),
+                "semantic_attempt_history": copy.deepcopy(
+                    semantic_attempt_history
+                ),
+            }
+            error = NativeGraphDialogueReject(
+                "graph API prompt failed parent-text exposure audit before request"
+            )
+            setattr(
+                error,
+                "api_graph_payload",
+                copy.deepcopy(
+                    semantic_attempt_history[-1]["raw_payload"]
+                    if semantic_attempt_history
+                    else None
+                ),
+            )
+            setattr(error, "api_graph_meta", copy.deepcopy(current_meta))
+            raise error
+        current_payload, current_meta = call_raw_json_api(
+            args,
+            prompt_attempt,
+            system_prompt=graph_system_prompt,
+            required_keys=("events",),
+            call_kind="api_graph_expansion",
+            max_tokens_override=int(getattr(args, "graph_expansion_max_tokens", 0) or 0) or None,
+        )
+        current_meta["semantic_attempt"] = semantic_attempt + 1
+        current_meta["graph_parent_prompt_audit"] = copy.deepcopy(
+            graph_parent_prompt_audit
+        )
+        if not isinstance(current_payload, dict):
+            raw_responses = [
+                item.get("raw_response")
+                for item in (current_meta.get("errors") or [])
+                if isinstance(item, dict) and isinstance(item.get("raw_response"), str)
+            ]
+            raw_context = {
+                "parse_status": "unparsed_api_graph_response",
+                "raw_responses": raw_responses,
+            }
+            parse_issues = [
+                {
+                    "code": str(current_meta.get("error_type") or current_meta.get("reason") or "api_graph_failed"),
+                    "path": "$",
+                    "message": "API graph response was not a parseable canonical JSON object.",
+                }
+            ]
+            semantic_attempt_history.append(
+                {
+                    "semantic_attempt": semantic_attempt + 1,
+                    "issues": parse_issues,
+                    "raw_payload": raw_context,
+                    "api_meta": copy.deepcopy(current_meta),
+                }
+            )
+            if semantic_attempt < semantic_retry_limit:
+                continue
+            current_meta["semantic_retry_count"] = semantic_attempt
+            current_meta["semantic_attempt_history"] = copy.deepcopy(semantic_attempt_history)
+            error = NativeGraphDialogueReject(
+                "api graph expansion failed before semantic validation: "
+                f"{current_meta.get('error_type') or current_meta.get('reason') or 'unknown_error'}"
+            )
+            setattr(error, "api_graph_payload", raw_context)
+            setattr(error, "api_graph_meta", copy.deepcopy(current_meta))
+            raise error
+
+        if stage64_operation == "comparison":
+            current_payload, integer_normalizer_diagnostics = normalize_comparison_integer_strings(
+                current_payload
+            )
+            current_meta.setdefault("normalizer_diagnostics", {}).update(
+                integer_normalizer_diagnostics
+            )
+            current_payload, duplicate_normalizer_diagnostics = normalize_comparison_exact_duplicate_events(
+                current_payload
+            )
+            current_meta.setdefault("normalizer_diagnostics", {}).update(
+                duplicate_normalizer_diagnostics
+            )
+
+        raw_semantic_issues: list[dict[str, Any]] = []
+        if stage64_operation and current_meta.get("used"):
+            parent_novelty_gate = graph_parent_novelty_gate_summary(
+                current_payload,
+                seed_row,
+                operation=stage64_operation,
+            )
+            current_meta["graph_parent_novelty_gate"] = copy.deepcopy(
+                parent_novelty_gate
+            )
+            raw_semantic_issues.extend(parent_novelty_gate["issues"])
+            if stage64_operation == "temporal_state_update":
+                raw_semantic_issues.extend(
+                    temporal_raw_generation_layout_issues(
+                        current_payload,
+                        stage64_target,
+                    )
+                )
+            elif stage64_operation == "comparison":
+                raw_semantic_issues.extend(
+                    comparison_raw_generation_layout_issues(
+                        current_payload,
+                        stage64_target,
+                    )
+                )
+            elif stage64_operation == "count":
+                raw_semantic_issues.extend(
+                    count_raw_generation_layout_issues(current_payload)
+                )
+            raw_semantic_issues.extend(
+                semantic_graph_v2.validate_graph_delta(
+                    current_payload,
+                    operation=stage64_operation,
+                    reasoning_target=stage64_target,
+                )
+            )
+            raw_semantic_issues.extend(
+                _stage64_reasoning_graph_target_issues(
+                    current_payload,
+                    stage64_target,
+                )
+            )
+            for forbidden_key in prompt["forbidden_output_top_level_keys"]:
+                if forbidden_key in current_payload:
+                    raw_semantic_issues.append(
+                        {
+                            "code": "forbidden_graph_output_key",
+                            "path": f"$.{forbidden_key}",
+                            "message": "The graph response echoed an input-specification or correction-only field.",
+                            "details": {"key": forbidden_key},
+                        }
+                    )
+            expected_parent_graph_id = normalize_space(
+                ((semantic_seed_prompt.get("semantic_parent_graph") or {}).get("graph_id"))
+            )
+            actual_parent_graph_id = normalize_space(current_payload.get("parent_graph_id"))
+            actual_child_graph_id = normalize_space(current_payload.get("graph_id"))
+            if actual_child_graph_id != expected_child_graph_id:
+                raw_semantic_issues.append(
+                    {
+                        "code": "graph_id_mismatch",
+                        "path": "$.graph_id",
+                        "message": "graph_id must match the requested unique Stage3 child graph identifier.",
+                        "details": {"expected": expected_child_graph_id, "actual": actual_child_graph_id},
+                    }
+                )
+            if expected_parent_graph_id and actual_parent_graph_id != expected_parent_graph_id:
+                raw_semantic_issues.append(
+                    {
+                        "code": "parent_graph_id_mismatch",
+                        "path": "$.parent_graph_id",
+                        "message": "parent_graph_id must match the supplied Stage3 parent snapshot graph_id.",
+                        "details": {"expected": expected_parent_graph_id, "actual": actual_parent_graph_id},
+                    }
+                )
+            current_meta["semantic_graph_v2_quality"] = {
+                "pass": not raw_semantic_issues,
+                "qa_operation": stage64_operation,
+                "gate_version": GRAPH_CACHE_SCHEMA_VERSION,
+                "issues": copy.deepcopy(raw_semantic_issues),
+            }
+        if raw_semantic_issues:
+            semantic_attempt_history.append(
+                {
+                    "semantic_attempt": semantic_attempt + 1,
+                    "issues": copy.deepcopy(raw_semantic_issues),
+                    "raw_payload": copy.deepcopy(current_payload),
+                    "api_meta": copy.deepcopy(current_meta),
+                }
+            )
+            if semantic_attempt < semantic_retry_limit:
+                continue
+            current_meta["semantic_retry_count"] = semantic_attempt
+            current_meta["semantic_attempt_history"] = copy.deepcopy(semantic_attempt_history)
+            error = NativeGraphDialogueReject(
+                f"semantic_graph_v2 quality failed: {raw_semantic_issues[:6]}"
+            )
+            setattr(error, "api_graph_payload", copy.deepcopy(current_payload))
+            setattr(error, "api_graph_meta", copy.deepcopy(current_meta))
+            raise error
+
+        raw_payload = current_payload
+        meta = current_meta
+        meta["semantic_retry_count"] = semantic_attempt
+        if semantic_attempt_history:
+            meta["semantic_attempt_history"] = copy.deepcopy(semantic_attempt_history)
+        break
+
+    if raw_payload is None:
+        raise RuntimeError("Stage3 semantic graph loop ended without a payload or explicit rejection")
+    try:
+        plan = normalize_current_event_plan(
+            raw_payload,
+            seed_row,
+            question_type=question_type,
+            attack_skill=attack_skill,
+            policy=policy,
+            sample_index=sample_index,
+            round_id=round_id,
+        )
+    except Exception as exc:
+        # Preserve the API response for reject logs even when normalization fails before return.
+        setattr(exc, "api_graph_payload", copy.deepcopy(raw_payload))
+        setattr(exc, "api_graph_meta", copy.deepcopy(meta))
+        raise
     if query_objective:
         plan.setdefault("metadata", {})
         if isinstance(plan["metadata"], dict):
@@ -2867,42 +7129,258 @@ def assign_current_alignment_anchors(current_event_plan: dict[str, Any], rng: ra
     return plan
 
 
+def _dialogue_contract_component(value: Any) -> str:
+    """Render a graph-contract atom as natural prompt text, never as an ID."""
+
+    if value is None or isinstance(value, (dict, list, tuple, set)):
+        return ""
+    return normalize_space(
+        sanitize_internal_text(re.sub(r"(?<=\w)_(?=\w)", " ", str(value)))
+    )
+
+
+def _dialogue_dependency_surface(event: dict[str, Any]) -> str:
+    entity = _dialogue_contract_component(event.get("entity"))
+    slot = _dialogue_contract_component(event.get("slot"))
+    value = _dialogue_contract_component(
+        event.get("dialogue_value")
+        if event.get("dialogue_value") is not None
+        else event.get("value")
+    )
+    if not (entity and slot and value):
+        return ""
+    status = normalize_space(event.get("status") or "active")
+    if status == "outdated":
+        return sanitize_internal_text(
+            f"This refers to the superseded {entity} {slot} entry of {value}, "
+            "which no longer applies."
+        )
+    if status == "canceled":
+        return sanitize_internal_text(
+            f"This refers to the withdrawn proposal for {entity}'s {slot} to be "
+            f"{value}, which never took effect."
+        )
+    if status == "expired":
+        return sanitize_internal_text(
+            f"This refers to the expired {entity} {slot} entry of {value}, which "
+            "is no longer valid."
+        )
+    if status == "delayed_not_active":
+        return sanitize_internal_text(
+            f"This refers to the pending proposal for {entity}'s {slot} to be "
+            f"{value}, which has not taken effect yet."
+        )
+    if status == "false":
+        return sanitize_internal_text(
+            f"This refers to the corrected claim that {entity}'s {slot} was "
+            f"{value}; that claim was untrue."
+        )
+    if status == "belief":
+        return sanitize_internal_text(
+            f"This refers to the uncertain impression that {entity}'s {slot} "
+            f"might be {value}."
+        )
+    if status == "report":
+        return sanitize_internal_text(
+            f"This refers to the unconfirmed report that {entity}'s {slot} "
+            f"might be {value}."
+        )
+    if status == "scope_limited":
+        return sanitize_internal_text(
+            f"This refers to the restricted {entity} {slot} detail of {value}."
+        )
+    return sanitize_internal_text(
+        f"This follows from {entity}'s {slot} being {value}."
+    )
+
+
+def _dialogue_scope_surface(scope: Any) -> str:
+    if not isinstance(scope, dict):
+        return ""
+    observer = _dialogue_contract_component(scope.get("observer"))
+    permission = _dialogue_contract_component(scope.get("permission"))
+    condition = _dialogue_contract_component(scope.get("condition"))
+    if not (observer and permission):
+        return ""
+    suffix = f" when {condition}" if condition else ""
+    return sanitize_internal_text(
+        f"For {observer}, the applicable permission is {permission}{suffix}."
+    )
+
+
+def _dialogue_membership_surface(event: dict[str, Any]) -> str:
+    membership = event.get("set_membership")
+    if not isinstance(membership, dict) or not isinstance(
+        membership.get("included"), bool
+    ):
+        return ""
+    value = _dialogue_contract_component(
+        event.get("dialogue_value")
+        if event.get("dialogue_value") is not None
+        else event.get("value")
+    )
+    slot = _dialogue_contract_component(event.get("slot")) or "candidate"
+    condition = _dialogue_contract_component(membership.get("condition"))
+    if not value:
+        return ""
+    inclusion = "qualifies for" if membership["included"] else "does not qualify for"
+    suffix = f" under the condition that {condition}" if condition else ""
+    return sanitize_internal_text(
+        f"{value} {inclusion} the {slot} list{suffix}."
+    )
+
+
+def _append_distinct_natural_contract_surfaces(
+    claim: str,
+    surfaces: Iterable[str],
+) -> str:
+    rendered = normalize_space(claim)
+    normalized_rendered = normalize_text(rendered)
+    for surface in surfaces:
+        natural = normalize_space(surface)
+        if not natural or normalize_text(natural) in normalized_rendered:
+            continue
+        if rendered and rendered[-1] not in ".?!":
+            rendered = f"{rendered}."
+        rendered = normalize_space(f"{rendered} {natural}")
+        normalized_rendered = normalize_text(rendered)
+    return sanitize_internal_text(rendered)
+
+
 def sanitize_event_plan_for_dialogue_api(current_event_plan: dict[str, Any]) -> dict[str, Any]:
     """Build a dialogue-facing current plan without raw schema/lineage identifiers."""
     event_to_marker = current_event_plan.get("current_event_instance_to_anchor") if isinstance(current_event_plan.get("current_event_instance_to_anchor"), dict) else {}
+    source_events = [
+        event
+        for event in (current_event_plan.get("events") or [])
+        if isinstance(event, dict)
+    ]
+    source_by_id = {
+        normalize_space(event.get("event_instance_id")): event
+        for event in source_events
+        if normalize_space(event.get("event_instance_id"))
+    }
+    known_event_ids = set(source_by_id)
     sanitized_events: list[dict[str, Any]] = []
-    for index, event in enumerate(current_event_plan.get("events") or [], start=1):
-        if not isinstance(event, dict):
-            continue
+    for index, event in enumerate(source_events, start=1):
         event_id = normalize_space(event.get("event_instance_id"))
         anchor = normalize_space(event.get("alignment_anchor") or event_to_marker.get(event_id))
         status = normalize_space(event.get("status") or "active")
-        claim = normalize_space(event.get("dialogue_support_claim") or ((event.get("alignment_hints") or {}) if isinstance(event.get("alignment_hints"), dict) else {}).get("support_claim") or event.get("value"))
-        claim = _naturalize_claim_for_status(claim, status)
+        raw_claim = normalize_space(event.get("dialogue_support_claim") or ((event.get("alignment_hints") or {}) if isinstance(event.get("alignment_hints"), dict) else {}).get("support_claim") or event.get("value"))
+        claim_before_status_transform = sanitize_internal_text(raw_claim)
+        status_transformed_claim = _naturalize_claim_for_status(raw_claim, status)
+        claim = status_transformed_claim
+        raw_dependencies = event.get("depends_on")
+        dependency_ids = [
+            normalize_space(dependency)
+            for dependency in (
+                raw_dependencies if isinstance(raw_dependencies, list) else []
+            )
+            if normalize_space(dependency) in known_event_ids
+            and normalize_space(dependency) != event_id
+        ]
+        dependency_ids = list(dict.fromkeys(dependency_ids))
+        dependency_surfaces = [
+            _dialogue_dependency_surface(source_by_id[dependency_id])
+            for dependency_id in dependency_ids
+        ]
+        dependency_surfaces = [surface for surface in dependency_surfaces if surface]
+        scope = (
+            copy.deepcopy(event.get("scope"))
+            if isinstance(event.get("scope"), dict)
+            else None
+        )
+        membership = (
+            copy.deepcopy(event.get("set_membership"))
+            if isinstance(event.get("set_membership"), dict)
+            else None
+        )
+        scope_surface = _dialogue_scope_surface(scope)
+        membership_surface = _dialogue_membership_surface(event)
+        status_suffix = _formal_status_suffix_surface(status)
+        source_support_claim = normalize_space(event.get("raw_support_claim"))
+        sanitized_source_support_claim = (
+            sanitize_internal_text(source_support_claim) if source_support_claim else ""
+        )
+        local_status_surface_rewritten = bool(
+            status_suffix
+            and source_support_claim
+            and sanitized_source_support_claim != source_support_claim
+            and sanitized_source_support_claim == claim_before_status_transform
+            and normalize_space(status_transformed_claim).endswith(status_suffix)
+        )
+        suffix_appended = bool(
+            status_suffix
+            and status_transformed_claim != claim_before_status_transform
+            and normalize_space(status_transformed_claim).endswith(status_suffix)
+        )
+        local_claim_transform_source = (
+            "local_internal_status_surface_replacement"
+            if local_status_surface_rewritten
+            else "local_status_natural_suffix"
+        )
+        local_status_span_created = suffix_appended or local_status_surface_rewritten
+        claim = status_transformed_claim
         value = sanitize_internal_text(event.get("dialogue_value") or event.get("value"))
-        sanitized_events.append(
-            {
+        status_meaning = _formal_status_meaning(status)
+        sanitized_event = {
                 "event_instance_id": event_id,
                 "fact_id": normalize_space(event.get("dialogue_fact_id")) or f"F{index:02d}",
                 "time_index": event.get("time_index"),
+                "entity": normalize_space(event.get("entity")),
+                "slot": normalize_space(event.get("slot")),
+                "value": copy.deepcopy(event.get("value")),
+                "status": status,
+                "depends_on": dependency_ids,
+                "dependency_facts_to_express": dependency_surfaces,
+                "scope": scope,
+                "scope_fact_to_express": scope_surface or None,
+                "set_membership": membership,
+                "membership_fact_to_express": membership_surface or None,
                 "scenario_fact": value,
                 "dialogue_support_claim": claim,
-                "status_meaning": {
-                    "active": "settled as true in the conversation",
-                    "restored": "restored or made true again",
-                    "outdated": "old information corrected later",
-                    "canceled": "called off",
-                    "expired": "no longer valid",
-                    "delayed_not_active": "planned for later, not yet happening",
-                    "false": "corrected as not true",
-                    "belief": "someone thinks this, but it may be uncertain",
-                    "report": "someone reported this, but it may need confirmation",
-                    "scope_limited": "only some people can know this",
-                }.get(status, "conversation update"),
+                "status_meaning": status_meaning,
+                "local_claim_transform_provenance": {
+                    "schema_version": FORMAL_LOCAL_SPAN_PROVENANCE_VERSION,
+                    "source": local_claim_transform_source,
+                    "status": status,
+                    "suffix_appended": local_status_span_created,
+                    "surface_replacement_verified": local_status_surface_rewritten,
+                    "suffix_sha256": hashlib.sha256(
+                        status_suffix.casefold().encode("utf-8")
+                    ).hexdigest()
+                    if local_status_span_created
+                    else None,
+                    "suffix_char_count": (
+                        len(status_suffix) if local_status_span_created else 0
+                    ),
+                    "claim_sha256": hashlib.sha256(
+                        normalize_space(claim).casefold().encode("utf-8")
+                    ).hexdigest(),
+                    "source_support_claim_sha256": hashlib.sha256(
+                        source_support_claim.casefold().encode("utf-8")
+                    ).hexdigest()
+                    if source_support_claim
+                    else None,
+                    "sanitized_source_support_claim_sha256": hashlib.sha256(
+                        sanitized_source_support_claim.casefold().encode("utf-8")
+                    ).hexdigest()
+                    if sanitized_source_support_claim
+                    else None,
+                },
+                "local_status_meaning_provenance": {
+                    "schema_version": FORMAL_STATUS_MEANING_VERSION,
+                    "source": "local_status_meaning_mapping",
+                    "status": status,
+                    "meaning_sha256": hashlib.sha256(
+                        status_meaning.casefold().encode("utf-8")
+                    ).hexdigest(),
+                    "meaning_char_count": len(status_meaning),
+                },
                 "marker": anchor,
                 "required": event.get("required_for_dialogue") is not False,
             }
-        )
+        sanitized_events.append(sanitized_event)
     return {
         "question_type": current_event_plan.get("question_type"),
         "attack_skill": current_event_plan.get("attack_skill"),
@@ -3075,6 +7553,4510 @@ def sanitized_event_value_count(current_event_plan: dict[str, Any]) -> int:
     return count
 
 
+def _stage64_evidence_layout_plan(
+    anchor_realization_checklist: list[dict[str, Any]],
+    *,
+    current_event_plan: dict[str, Any] | None = None,
+    qa_operation: str | None = None,
+    item_difficulty_target: str | None = None,
+) -> dict[str, Any]:
+    """Build a placement-only plan for naturally dispersed Stage64 evidence.
+
+    The plan contains marker references, never solver-visible fact text. It helps the
+    dialogue API reserve early, middle, and later support locations without restoring
+    the deterministic fact scaffold that made old samples artificially easy.
+    """
+    required_items = [
+        {
+            "event_instance_id": normalize_space(item.get("event_instance_id")),
+            "fact_id": normalize_space(item.get("fact_id")),
+            "marker": normalize_space(item.get("marker")),
+        }
+        for item in anchor_realization_checklist
+        if isinstance(item, dict) and normalize_space(item.get("marker"))
+    ]
+    required_count = len(required_items)
+    minimum_distinct_turns = (
+        required_count * STAGE64_EVIDENCE_MIN_DISTINCT_TURN_PERCENT + 99
+    ) // 100
+    bands = [
+        {
+            "name": "early",
+            "target_appended_turn_percent_range": [10, 25],
+            "marker_refs": [],
+        },
+        {
+            "name": "middle",
+            "target_appended_turn_percent_range": [40, 55],
+            "marker_refs": [],
+        },
+        {
+            "name": "later",
+            "target_appended_turn_percent_range": [65, 74],
+            "marker_refs": [],
+        },
+    ]
+    normalized_operation = normalize_space(
+        qa_operation
+        or (current_event_plan or {}).get("operation")
+        or (current_event_plan or {}).get("qa_operation")
+    ).casefold()
+    # Evidence placement supports the controller's easy recovery target even though
+    # the stricter Stage64 QA-writing contract intentionally defaults unknown/easy
+    # prompt hardness to boundary.
+    normalized_difficulty = (
+        _normalize_boundary_item_difficulty_target(item_difficulty_target)
+        or "boundary"
+    )
+    target_band_by_difficulty = {
+        "easy": "later",
+        "boundary": "middle",
+        "harder_boundary": "early",
+        "hard": "early",
+    }
+    target_band = target_band_by_difficulty[normalized_difficulty]
+    placement_applicable = normalized_operation == "comparison"
+    primary_event_instance_ids: list[str] = []
+    primary_markers: list[str] = []
+    missing_primary_event_instance_ids: list[str] = []
+    duplicate_checklist_event_instance_ids: list[str] = []
+    comparison_contract_sha256 = None
+    primary_derivation_source = "not_applicable_preserve_context_dispersion"
+
+    if placement_applicable:
+        comparison_contract = derive_unique_comparison_contract(current_event_plan or {})
+        if isinstance(comparison_contract, dict):
+            primary_derivation_source = "unique_comparison_graph_contract"
+            comparison_contract_sha256 = comparison_contract.get("contract_sha256")
+            primary_event_instance_ids = [
+                normalize_space(event_id)
+                for event_id in comparison_contract.get("primary_event_instance_ids") or []
+                if normalize_space(event_id)
+            ]
+            checklist_markers_by_event_id: dict[str, list[str]] = {}
+            for item in required_items:
+                event_id = normalize_space(item.get("event_instance_id"))
+                marker = normalize_space(item.get("marker"))
+                if event_id and marker:
+                    checklist_markers_by_event_id.setdefault(event_id, []).append(marker)
+            duplicate_checklist_event_instance_ids = sorted(
+                event_id
+                for event_id, markers in checklist_markers_by_event_id.items()
+                if len(markers) != 1
+            )
+            for event_id in primary_event_instance_ids:
+                markers = checklist_markers_by_event_id.get(event_id) or []
+                if len(markers) != 1:
+                    missing_primary_event_instance_ids.append(event_id)
+                    continue
+                primary_markers.append(markers[0])
+        else:
+            primary_derivation_source = "unique_comparison_graph_contract_missing"
+
+    primary_marker_set = set(primary_markers)
+    mapping_pass = bool(
+        not placement_applicable
+        or (
+            len(primary_event_instance_ids) == 2
+            and len(primary_markers) == 2
+            and len(set(primary_event_instance_ids)) == 2
+            and len(primary_marker_set) == 2
+            and not missing_primary_event_instance_ids
+            and not duplicate_checklist_event_instance_ids
+        )
+    )
+    if placement_applicable and mapping_pass:
+        primary_items = [
+            item for item in required_items if item["marker"] in primary_marker_set
+        ]
+        context_items = [
+            item for item in required_items if item["marker"] not in primary_marker_set
+        ]
+        context_count = len(context_items)
+        for index, item in enumerate(context_items):
+            band_index = min(2, index * 3 // context_count) if context_count else 0
+            bands[band_index]["marker_refs"].append(item)
+        target_band_row = next(band for band in bands if band["name"] == target_band)
+        # Easy evidence belongs near the tail of the later queue. Boundary and hard
+        # targets must be the first items realized once their target band is eligible.
+        if normalized_difficulty == "easy":
+            target_band_row["marker_refs"].extend(primary_items)
+        else:
+            target_band_row["marker_refs"] = primary_items + target_band_row["marker_refs"]
+    else:
+        # Non-comparison operations retain the established safe dispersion. A failed
+        # comparison mapping is still laid out for diagnostics, then rejected by the
+        # formal capacity preflight before any dialogue API call.
+        for index, item in enumerate(required_items):
+            band_index = min(2, index * 3 // required_count) if required_count else 0
+            bands[band_index]["marker_refs"].append(item)
+
+    difficulty_evidence_placement = {
+        "schema_version": "stage64_difficulty_evidence_placement_v1",
+        "applicable": placement_applicable,
+        "qa_operation": normalized_operation or None,
+        "requested_item_difficulty_target": normalized_difficulty,
+        "primary_derivation_source": primary_derivation_source,
+        "comparison_graph_contract_sha256": comparison_contract_sha256,
+        "primary_event_instance_ids": primary_event_instance_ids,
+        "primary_markers": primary_markers,
+        "missing_primary_event_instance_ids": missing_primary_event_instance_ids,
+        "duplicate_checklist_event_instance_ids": duplicate_checklist_event_instance_ids,
+        "target_band": target_band if placement_applicable else None,
+        "mapping_pass": mapping_pass,
+        "plan_pass": mapping_pass,
+    }
+    return {
+        "plan_version": "stage64_evidence_layout_v3",
+        "placement_only_not_dialogue_text": True,
+        "required_event_count": required_count,
+        "minimum_distinct_evidence_turns": minimum_distinct_turns,
+        "maximum_required_events_per_turn": STAGE64_EVIDENCE_MAX_REQUIRED_EVENTS_PER_TURN,
+        "maximum_shared_turn_reduction": max(0, required_count - minimum_distinct_turns),
+        "difficulty_evidence_placement": difficulty_evidence_placement,
+        "placement_bands": [band for band in bands if band["marker_refs"]],
+    }
+
+
+def _formal_marker_layout_rows(
+    evidence_layout_plan: dict[str, Any],
+) -> tuple[dict[str, list[dict[str, Any]]], list[str], list[str]]:
+    """Return deterministic band queues plus duplicate/unsupported-band audits."""
+
+    by_band = {name: [] for name in FORMAL_DIALOGUE_MARKER_BANDS}
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    unsupported_bands: list[str] = []
+    for band in evidence_layout_plan.get("placement_bands") or []:
+        if not isinstance(band, dict):
+            continue
+        name = normalize_space(band.get("name"))
+        if name not in by_band:
+            unsupported_bands.append(name or "<empty>")
+            continue
+        for raw_item in band.get("marker_refs") or []:
+            if not isinstance(raw_item, dict):
+                continue
+            marker = normalize_space(raw_item.get("marker"))
+            if not marker:
+                continue
+            if marker in seen:
+                duplicates.append(marker)
+                continue
+            seen.add(marker)
+            item = copy.deepcopy(raw_item)
+            item["marker"] = marker
+            by_band[name].append(item)
+    return by_band, sorted(set(duplicates)), sorted(set(unsupported_bands))
+
+
+def formal_segment_marker_capacity_diagnostics(
+    evidence_layout_plan: dict[str, Any],
+    *,
+    max_segments: int,
+    marker_cap: int = FORMAL_DIALOGUE_MAX_MARKERS_PER_SEGMENT,
+) -> dict[str, Any]:
+    """Prove before any API call that all required markers fit under the hard cap."""
+
+    by_band, duplicate_markers, unsupported_bands = _formal_marker_layout_rows(
+        evidence_layout_plan
+    )
+    segment_count = int(max_segments or 0)
+    cap = int(marker_cap or 0)
+    required_markers = [
+        normalize_space(item.get("marker"))
+        for name in FORMAL_DIALOGUE_MARKER_BANDS
+        for item in by_band[name]
+    ]
+    required_count = len(required_markers)
+    capacity = max(0, segment_count) * max(0, cap)
+    minimum_segments = (
+        (required_count + cap - 1) // cap
+        if required_count and cap > 0
+        else 0
+    )
+    difficulty_evidence_placement = copy.deepcopy(
+        evidence_layout_plan.get("difficulty_evidence_placement") or {}
+    )
+    reason = None
+    if cap <= 0:
+        reason = "invalid_marker_cap"
+    elif segment_count <= 0:
+        reason = "invalid_max_segments"
+    elif unsupported_bands:
+        reason = "unsupported_marker_band"
+    elif duplicate_markers:
+        reason = "duplicate_layout_marker"
+    elif (
+        difficulty_evidence_placement.get("applicable") is True
+        and difficulty_evidence_placement.get("plan_pass") is not True
+    ):
+        reason = "invalid_primary_evidence_placement_contract"
+    elif required_count > capacity:
+        reason = "insufficient_marker_segment_capacity"
+    return {
+        "scheduler_version": FORMAL_DIALOGUE_MARKER_SCHEDULER_VERSION,
+        "marker_cap_per_segment": cap,
+        "max_segments": segment_count,
+        "required_marker_count": required_count,
+        "required_markers": required_markers,
+        "required_markers_by_band": {
+            name: [normalize_space(item.get("marker")) for item in by_band[name]]
+            for name in FORMAL_DIALOGUE_MARKER_BANDS
+        },
+        "minimum_marker_segments_required": minimum_segments,
+        "total_marker_capacity": capacity,
+        "duplicate_layout_markers": duplicate_markers,
+        "unsupported_layout_bands": unsupported_bands,
+        "difficulty_evidence_placement": difficulty_evidence_placement,
+        "pass": reason is None,
+        "failure_reason": reason,
+    }
+
+
+def formal_segment_marker_schedule(
+    evidence_layout_plan: dict[str, Any],
+    emitted_markers: Iterable[str],
+    *,
+    cumulative_tokens: int,
+    target_tokens: int,
+    segment_index: int,
+    max_segments: int,
+    marker_cap: int = FORMAL_DIALOGUE_MAX_MARKERS_PER_SEGMENT,
+) -> dict[str, Any]:
+    """Schedule a capped segment from deterministic early/middle/later queues."""
+
+    capacity = formal_segment_marker_capacity_diagnostics(
+        evidence_layout_plan,
+        max_segments=max_segments,
+        marker_cap=marker_cap,
+    )
+    by_band, _duplicates, _unsupported = _formal_marker_layout_rows(evidence_layout_plan)
+    emitted = {
+        normalize_space(marker)
+        for marker in emitted_markers
+        if normalize_space(marker)
+    }
+    pending = {
+        name: [
+            copy.deepcopy(item)
+            for item in by_band[name]
+            if normalize_space(item.get("marker")) not in emitted
+        ]
+        for name in FORMAL_DIALOGUE_MARKER_BANDS
+    }
+    pending_before_by_band = {
+        name: [normalize_space(item.get("marker")) for item in pending[name]]
+        for name in FORMAL_DIALOGUE_MARKER_BANDS
+    }
+    pending_count = sum(len(items) for items in pending.values())
+    index = max(0, int(segment_index or 0))
+    segment_count = int(max_segments or 0)
+    cap = int(marker_cap or 0)
+    remaining_segments_including_current = max(0, segment_count - index)
+    future_capacity = max(0, remaining_segments_including_current - 1) * max(0, cap)
+    feasible = bool(capacity.get("pass")) and pending_count <= (
+        remaining_segments_including_current * max(0, cap)
+    )
+    failure_reason = capacity.get("failure_reason")
+    if capacity.get("pass") and not feasible:
+        failure_reason = "insufficient_remaining_marker_segment_capacity"
+
+    target = max(1, int(target_tokens or 0))
+    progress_percent = round(max(0, int(cumulative_tokens or 0)) * 100.0 / target, 4)
+    band_eligible = {
+        "early": True,
+        "middle": progress_percent >= FORMAL_DIALOGUE_MIDDLE_START_PERCENT,
+        "later": progress_percent >= FORMAL_DIALOGUE_LATER_START_PERCENT,
+    }
+    assigned_items: list[dict[str, Any]] = []
+    assigned_by_band = {name: [] for name in FORMAL_DIALOGUE_MARKER_BANDS}
+    capacity_forced_markers: list[str] = []
+
+    def assign_one(name: str, *, capacity_forced: bool) -> bool:
+        if len(assigned_items) >= cap or not pending[name]:
+            return False
+        item = pending[name].pop(0)
+        marker = normalize_space(item.get("marker"))
+        assigned_items.append(item)
+        assigned_by_band[name].append(marker)
+        if capacity_forced:
+            capacity_forced_markers.append(marker)
+        return True
+
+    if feasible and cap > 0:
+        # Old-band residue is always drained first. A newly eligible band may then use
+        # the remaining slot, so an early 3-marker band becomes 2+1 instead of 2+last.
+        for name in FORMAL_DIALOGUE_MARKER_BANDS:
+            if not band_eligible[name]:
+                continue
+            while assign_one(name, capacity_forced=False):
+                pass
+
+        # Reserve enough markers in this segment that the future capped segments can
+        # finish. This is the only reason a not-yet-eligible band may be pulled early.
+        minimum_assignment_now = max(0, pending_count - future_capacity)
+        while len(assigned_items) < minimum_assignment_now:
+            assigned = False
+            for name in FORMAL_DIALOGUE_MARKER_BANDS:
+                if assign_one(name, capacity_forced=not band_eligible[name]):
+                    assigned = True
+                    break
+            if not assigned:
+                feasible = False
+                failure_reason = "marker_scheduler_cannot_satisfy_capacity_proof"
+                break
+
+    pending_after_by_band = {
+        name: [normalize_space(item.get("marker")) for item in pending[name]]
+        for name in FORMAL_DIALOGUE_MARKER_BANDS
+    }
+    pending_after_count = sum(len(items) for items in pending.values())
+    capacity_proof_pass = bool(
+        feasible
+        and len(assigned_items) <= max(0, cap)
+        and pending_after_count <= future_capacity
+    )
+    if feasible and not capacity_proof_pass:
+        feasible = False
+        failure_reason = "marker_scheduler_capacity_proof_failed"
+    return {
+        "scheduler_version": FORMAL_DIALOGUE_MARKER_SCHEDULER_VERSION,
+        "segment_index": index,
+        "marker_cap_per_segment": cap,
+        "cumulative_tokens": int(cumulative_tokens or 0),
+        "target_tokens": int(target_tokens or 0),
+        "progress_percent": progress_percent,
+        "band_eligible": band_eligible,
+        "pending_before_by_band": pending_before_by_band,
+        "pending_before_count": pending_count,
+        "assigned_items": assigned_items,
+        "assigned_markers": [normalize_space(item.get("marker")) for item in assigned_items],
+        "assigned_by_band": assigned_by_band,
+        "assigned_count": len(assigned_items),
+        "capacity_forced_markers": capacity_forced_markers,
+        "pending_after_by_band": pending_after_by_band,
+        "pending_after_count": pending_after_count,
+        "remaining_segments_including_current": remaining_segments_including_current,
+        "future_marker_capacity": future_capacity,
+        "minimum_assignment_required_this_segment": max(0, pending_count - future_capacity),
+        "capacity_proof_pass": capacity_proof_pass,
+        "pass": bool(feasible and capacity_proof_pass),
+        "failure_reason": failure_reason,
+        "schedule_input_hash": stable_hash(
+            {
+                "scheduler_version": FORMAL_DIALOGUE_MARKER_SCHEDULER_VERSION,
+                "segment_index": index,
+                "emitted_markers": sorted(emitted),
+                "pending_before_by_band": pending_before_by_band,
+                "cumulative_tokens": int(cumulative_tokens or 0),
+                "target_tokens": int(target_tokens or 0),
+                "max_segments": segment_count,
+                "marker_cap": cap,
+            },
+            length=24,
+        ),
+    }
+
+
+def formal_segment_marker_items(
+    evidence_layout_plan: dict[str, Any],
+    emitted_markers: Iterable[str],
+    *,
+    cumulative_tokens: int,
+    target_tokens: int,
+    segment_index: int,
+    max_segments: int,
+) -> list[dict[str, Any]]:
+    """Compatibility wrapper returning the audited scheduler's assigned items."""
+
+    schedule = formal_segment_marker_schedule(
+        evidence_layout_plan,
+        emitted_markers,
+        cumulative_tokens=cumulative_tokens,
+        target_tokens=target_tokens,
+        segment_index=segment_index,
+        max_segments=max_segments,
+    )
+    return copy.deepcopy(schedule.get("assigned_items") or []) if schedule.get("pass") else []
+
+
+def formal_segment_marker_prompt_contract(marker_schedule: dict[str, Any]) -> dict[str, Any]:
+    """Expose scheduler mechanics to the API without leaking future marker IDs."""
+
+    return {
+        "scheduler_version": marker_schedule.get("scheduler_version"),
+        "segment_index": marker_schedule.get("segment_index"),
+        "marker_cap_per_segment": marker_schedule.get("marker_cap_per_segment"),
+        "assigned_count": marker_schedule.get("assigned_count"),
+        "progress_percent": marker_schedule.get("progress_percent"),
+        "capacity_proof_pass": marker_schedule.get("capacity_proof_pass"),
+        "remaining_segments_including_current": marker_schedule.get(
+            "remaining_segments_including_current"
+        ),
+        "future_marker_capacity": marker_schedule.get("future_marker_capacity"),
+        "minimum_assignment_required_this_segment": marker_schedule.get(
+            "minimum_assignment_required_this_segment"
+        ),
+    }
+
+
+def formal_segment_marker_scheduler_summary(
+    capacity_diagnostics: dict[str, Any],
+    schedule_records: list[dict[str, Any]],
+    emitted_markers: Iterable[str],
+) -> dict[str, Any]:
+    """Build compact provenance for the raw record and accepted clean contract."""
+
+    required = list(capacity_diagnostics.get("required_markers") or [])
+    emitted = sorted(
+        {
+            normalize_space(marker)
+            for marker in emitted_markers
+            if normalize_space(marker)
+        }
+    )
+    assignments = [
+        marker
+        for record in schedule_records
+        for marker in record.get("assigned_markers") or []
+    ]
+    assignment_counts = Counter(assignments)
+    duplicate_assignments = sorted(
+        marker for marker, count in assignment_counts.items() if count > 1
+    )
+    band_segments = {
+        name: [
+            int(record.get("segment_index") or 0)
+            for record in schedule_records
+            if (record.get("assigned_by_band") or {}).get(name)
+        ]
+        for name in FORMAL_DIALOGUE_MARKER_BANDS
+    }
+    cap = int(capacity_diagnostics.get("marker_cap_per_segment") or 0)
+    max_assigned = max(
+        [int(record.get("assigned_count") or 0) for record in schedule_records]
+        or [0]
+    )
+    complete = (
+        bool(capacity_diagnostics.get("pass"))
+        and set(emitted) == set(required)
+        and len(assignments) == len(required)
+        and not duplicate_assignments
+        and max_assigned <= cap
+    )
+    placement = copy.deepcopy(
+        capacity_diagnostics.get("difficulty_evidence_placement") or {}
+    )
+    placement_applicable = placement.get("applicable") is True
+    primary_markers = [
+        normalize_space(marker)
+        for marker in placement.get("primary_markers") or []
+        if normalize_space(marker)
+    ]
+    target_band = normalize_space(placement.get("target_band")) or None
+    primary_assignment_rows: list[dict[str, Any]] = []
+    for marker in primary_markers:
+        for record in schedule_records:
+            if marker not in (record.get("assigned_markers") or []):
+                continue
+            progress = float(record.get("progress_percent") or 0.0)
+            realized_band = (
+                "early"
+                if progress < FORMAL_DIALOGUE_MIDDLE_START_PERCENT
+                else "middle"
+                if progress < FORMAL_DIALOGUE_LATER_START_PERCENT
+                else "later"
+            )
+            primary_assignment_rows.append(
+                {
+                    "marker": marker,
+                    "segment_index": int(record.get("segment_index") or 0),
+                    "progress_percent": progress,
+                    "planned_band": next(
+                        (
+                            name
+                            for name in FORMAL_DIALOGUE_MARKER_BANDS
+                            if marker in ((record.get("assigned_by_band") or {}).get(name) or [])
+                        ),
+                        None,
+                    ),
+                    "realized_band": realized_band,
+                    "capacity_forced": marker
+                    in (record.get("capacity_forced_markers") or []),
+                }
+            )
+    primary_assignment_counts = Counter(
+        row["marker"] for row in primary_assignment_rows
+    )
+    realized_primary_bands = [
+        row["realized_band"] for row in primary_assignment_rows
+    ]
+    primary_placement_pass = bool(
+        not placement_applicable
+        or (
+            placement.get("mapping_pass") is True
+            and len(primary_markers) == 2
+            and all(primary_assignment_counts.get(marker) == 1 for marker in primary_markers)
+            and len(primary_assignment_rows) == len(primary_markers)
+            and all(row["realized_band"] == target_band for row in primary_assignment_rows)
+        )
+    )
+    audit_rows = [
+        {
+            "segment_index": int(record.get("segment_index") or 0),
+            "pending_before_by_band": record.get("pending_before_by_band"),
+            "assigned_by_band": record.get("assigned_by_band"),
+            "pending_after_by_band": record.get("pending_after_by_band"),
+            "capacity_forced_markers": record.get("capacity_forced_markers"),
+            "capacity_proof_pass": record.get("capacity_proof_pass"),
+            "schedule_input_hash": record.get("schedule_input_hash"),
+        }
+        for record in schedule_records
+    ]
+    return {
+        "scheduler_version": FORMAL_DIALOGUE_MARKER_SCHEDULER_VERSION,
+        "marker_cap_per_segment": cap,
+        "required_marker_count": len(required),
+        "emitted_marker_count": len(emitted),
+        "marker_assignment_segment_count": sum(
+            1 for record in schedule_records if record.get("assigned_markers")
+        ),
+        "max_assigned_markers_per_segment": max_assigned,
+        "duplicate_assigned_markers": duplicate_assignments,
+        "missing_markers": sorted(set(required) - set(emitted)),
+        "unexpected_emitted_markers": sorted(set(emitted) - set(required)),
+        "band_assignment_segments": band_segments,
+        "all_markers_assigned_once_under_cap": complete,
+        "difficulty_evidence_placement_applicable": placement_applicable,
+        "requested_item_difficulty_target": placement.get(
+            "requested_item_difficulty_target"
+        ),
+        "primary_event_instance_ids": copy.deepcopy(
+            placement.get("primary_event_instance_ids") or []
+        ),
+        "primary_markers": primary_markers,
+        "target_primary_evidence_band": target_band,
+        "primary_marker_assignment_rows": primary_assignment_rows,
+        "realized_primary_evidence_bands": realized_primary_bands,
+        "primary_evidence_placement_pass": primary_placement_pass,
+        "difficulty_evidence_placement_pass": primary_placement_pass,
+        "schedule_audit_hash": stable_hash(
+            {
+                "schedule_rows": audit_rows,
+                "requested_item_difficulty_target": placement.get(
+                    "requested_item_difficulty_target"
+                ),
+                "primary_markers": primary_markers,
+                "target_primary_evidence_band": target_band,
+                "primary_marker_assignment_rows": primary_assignment_rows,
+                "primary_evidence_placement_pass": primary_placement_pass,
+            },
+            length=24,
+        ),
+    }
+
+
+FORMAL_SEGMENT_EMBEDDED_CONTRACT_FIELDS = (
+    "dependency_facts_to_express",
+    "scope_fact_to_express",
+    "membership_fact_to_express",
+)
+
+
+def _formal_segment_claim_only_prompt_item(item: dict[str, Any]) -> dict[str, Any]:
+    """Keep one preflighted exact claim without replaying its component surfaces."""
+
+    sanitized = copy.deepcopy(item)
+    embedded = False
+    for field in FORMAL_SEGMENT_EMBEDDED_CONTRACT_FIELDS:
+        if field in sanitized:
+            embedded = True
+            sanitized.pop(field, None)
+    if embedded:
+        sanitized["reasoning_contract_embedded_in_exact_claim"] = True
+    return sanitized
+
+
+def _formal_segment_fact_plan(
+    dialogue_plan: dict[str, Any],
+    assigned_markers: set[str],
+) -> dict[str, Any]:
+    """Expose detailed graph facts only when this segment must realize them."""
+
+    assigned_events: list[dict[str, Any]] = []
+    frozen_unassigned: list[dict[str, Any]] = []
+    for event in dialogue_plan.get("events") or []:
+        if not isinstance(event, dict):
+            continue
+        marker = normalize_space(event.get("marker") or event.get("alignment_anchor"))
+        if marker in assigned_markers:
+            assigned = _formal_segment_claim_only_prompt_item(event)
+            assigned["required_in_this_segment"] = True
+            assigned_events.append(assigned)
+            continue
+        frozen_unassigned.append(
+            {
+                "event_instance_id": normalize_space(event.get("event_instance_id")),
+                "fact_id": normalize_space(event.get("fact_id")),
+            }
+        )
+    return {
+        "question_type": dialogue_plan.get("question_type"),
+        "attack_skill": dialogue_plan.get("attack_skill"),
+        "assigned_events": assigned_events,
+        "frozen_unassigned_event_count": len(frozen_unassigned),
+        "frozen_unassigned_event_hash": stable_hash(frozen_unassigned, length=24),
+        "unassigned_event_text_omitted": True,
+    }
+
+
+def _formal_dialogue_prefix_hash(
+    *,
+    graph_snapshot_hash: str,
+    parent_dialogue_turns: list[dict[str, Any]],
+) -> str:
+    return stable_hash(
+        {
+            "protocol": "formal_api_native_segmented_dialogue_v1",
+            "graph_snapshot_hash": graph_snapshot_hash,
+            "parent_dialogue_turns": parent_dialogue_turns,
+        },
+        length=24,
+    )
+
+
+def verify_formal_dialogue_prefix_hash_chain(
+    initial_prefix_hash: str,
+    segment_records: list[dict[str, Any]],
+    final_prefix_hash: str,
+) -> bool:
+    current = normalize_space(initial_prefix_hash)
+    accepted_count = 0
+    for record in segment_records:
+        if not isinstance(record, dict) or not normalize_space(record.get("prefix_hash_after")):
+            continue
+        if normalize_space(record.get("prefix_hash_before")) != current:
+            return False
+        validation = record.get("validation") if isinstance(record.get("validation"), dict) else {}
+        marked_turns = validation.get("marked_turns") if isinstance(validation.get("marked_turns"), list) else None
+        if marked_turns is None:
+            return False
+        expected = stable_hash(
+            {
+                "protocol": "formal_api_native_segmented_dialogue_v1",
+                "prefix_hash_before": current,
+                "segment_index": int(record.get("segment_index") or 0),
+                "segment_marked_turns": marked_turns,
+            },
+            length=24,
+        )
+        if normalize_space(record.get("prefix_hash_after")) != expected:
+            return False
+        current = expected
+        accepted_count += 1
+    return bool(accepted_count and current == normalize_space(final_prefix_hash))
+
+
+def _formal_segment_speaker_text_sha256(turns: list[dict[str, Any]]) -> str:
+    payload = [
+        {
+            "speaker": turn.get("speaker"),
+            "text": turn.get("text"),
+        }
+        for turn in turns
+        if isinstance(turn, dict)
+    ]
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _formal_parent_safe_speaker_label(value: Any) -> str:
+    """Preserve ordinary speaker labels without exposing a long parent substring."""
+
+    label = normalize_space(value or "Speaker")
+    if len(label) < FORMAL_PARENT_PROMPT_MIN_SUBSTRING_CHARS:
+        return label
+    digest = hashlib.sha256(label.encode("utf-8")).hexdigest()[:12]
+    return f"speaker_{digest}"
+
+
+def build_formal_nonverbatim_parent_context(
+    parent_dialogue_turns: list[dict[str, Any]],
+    parent_context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Build structural continuity context without parent dialogue text.
+
+    The normal graph-conditioned path can use selected parent turns. Formal Stage64
+    mining cannot: exposing those turns encouraged the challenger to copy them and to
+    mistake parent values for current alignment markers. This manifest intentionally
+    contains only cryptographic digests, bounded speaker labels/order, counts, and
+    digest-only active/superseded state buckets.
+    """
+
+    context = parent_context if isinstance(parent_context, dict) else {}
+    raw_state = (
+        context.get("active_superseded_state_summary")
+        if isinstance(context.get("active_superseded_state_summary"), dict)
+        else {}
+    )
+
+    def state_bucket(key: str, state_class: str) -> dict[str, Any]:
+        raw_items = raw_state.get(key)
+        items = (
+            [normalize_space(item) for item in raw_items if normalize_space(item)]
+            if isinstance(raw_items, list)
+            else []
+        )
+        canonical = json.dumps(
+            items,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return {
+            "state_class": state_class,
+            "item_count": len(items),
+            "item_digest_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+            "verbatim_values_included": False,
+        }
+
+    speakers = [
+        _formal_parent_safe_speaker_label(turn.get("speaker"))
+        for turn in parent_dialogue_turns
+        if isinstance(turn, dict)
+    ]
+    speaker_counts = Counter(speakers)
+    nonempty_turn_count = sum(
+        1
+        for turn in parent_dialogue_turns
+        if isinstance(turn, dict) and normalize_space(turn.get("text"))
+    )
+    manifest = {
+        "schema_version": FORMAL_PARENT_CONTEXT_SCHEMA_VERSION,
+        "parent_dialogue_digest": {
+            "algorithm": "sha256",
+            "speaker_text_sha256": _formal_segment_speaker_text_sha256(
+                parent_dialogue_turns
+            ),
+            "full_parent_turn_count": len(parent_dialogue_turns),
+            "nonempty_parent_turn_count": nonempty_turn_count,
+            "parent_turn_text_included": False,
+        },
+        "speaker_structure": {
+            "speaker_set": sorted(set(speakers)),
+            "speaker_label_allowlist": sorted(set(speakers)),
+            "speaker_labels_are_the_only_parent_lexical_fields": True,
+            "speaker_turn_counts": {
+                speaker: int(speaker_counts[speaker])
+                for speaker in sorted(speaker_counts)
+            },
+            "recent_speaker_order": speakers[-FORMAL_DIALOGUE_PREFIX_TAIL_TURNS:],
+            "unique_speaker_count": len(set(speakers)),
+        },
+        "active_superseded_state_summary": {
+            "active_or_latest": state_bucket(
+                "active_or_latest_context", "active_or_latest"
+            ),
+            "superseded_or_nonsettled": state_bucket(
+                "superseded_or_nonsettled_context", "superseded_or_nonsettled"
+            ),
+            "state_value_text_included": False,
+        },
+        "continuity_contract": {
+            "parent_turns_are_preserved_outside_api_prompt": True,
+            "continue_with_new_turns_only": True,
+            "normalized_parent_contiguous_substring_at_or_above_minimum_forbidden": True,
+            "minimum_forbidden_substring_chars": (
+                FORMAL_PARENT_PROMPT_MIN_SUBSTRING_CHARS
+            ),
+        },
+    }
+    manifest["manifest_sha256"] = hashlib.sha256(
+        json.dumps(
+            manifest,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return manifest
+
+
+def build_formal_nonverbatim_accepted_prefix_context(
+    accepted_appended_turns: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Describe the accepted append prefix without replaying any accepted turn text."""
+
+    speakers = [
+        _formal_parent_safe_speaker_label(turn.get("speaker"))
+        for turn in accepted_appended_turns
+        if isinstance(turn, dict)
+    ]
+    speaker_counts = Counter(speakers)
+    nonempty_turn_count = sum(
+        1
+        for turn in accepted_appended_turns
+        if isinstance(turn, dict) and normalize_space(turn.get("text"))
+    )
+    manifest = {
+        "schema_version": FORMAL_ACCEPTED_PREFIX_CONTEXT_SCHEMA_VERSION,
+        "accepted_prefix_digest": {
+            "algorithm": "sha256",
+            "speaker_text_sha256": _formal_segment_speaker_text_sha256(
+                accepted_appended_turns
+            ),
+            "full_turn_count": len(accepted_appended_turns),
+            "nonempty_turn_count": nonempty_turn_count,
+            "accepted_turn_text_included": False,
+        },
+        "speaker_structure": {
+            "speaker_set": sorted(set(speakers)),
+            "speaker_label_allowlist": sorted(set(speakers)),
+            "speaker_labels_are_the_only_accepted_prefix_lexical_fields": True,
+            "speaker_turn_counts": {
+                speaker: int(speaker_counts[speaker])
+                for speaker in sorted(speaker_counts)
+            },
+            "recent_speaker_order": speakers[-FORMAL_DIALOGUE_PREFIX_TAIL_TURNS:],
+            "unique_speaker_count": len(set(speakers)),
+        },
+        "continuity_contract": {
+            "accepted_turns_are_preserved_outside_api_prompt": True,
+            "prefix_hash_is_authoritative": True,
+            "continue_with_new_turns_only": True,
+            "accepted_turn_text_reconstruction_forbidden": True,
+            "accepted_turn_text_or_summary_included": False,
+        },
+    }
+    manifest["manifest_sha256"] = hashlib.sha256(
+        json.dumps(
+            manifest,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return manifest
+
+
+def _formal_prompt_string_values(value: Any, path: str = "$") -> list[tuple[str, str]]:
+    rows: list[tuple[str, str]] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            rows.extend(_formal_prompt_string_values(child, f"{path}.{key}"))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            rows.extend(_formal_prompt_string_values(child, f"{path}[{index}]"))
+    elif isinstance(value, str):
+        rows.append((path, normalize_space(value).casefold()))
+    return rows
+
+
+def formal_current_exact_claim_audit_exempt_spans(
+    prompt: dict[str, Any],
+    claim_provenance: Iterable[dict[str, Any]],
+    assigned_markers: set[str],
+) -> list[dict[str, Any]]:
+    """Register exact current-claim fields without exempting arbitrary prompt prose."""
+
+    registered: dict[str, dict[str, str]] = {}
+    for item in claim_provenance:
+        if not isinstance(item, dict):
+            continue
+        marker = normalize_space(item.get("marker"))
+        claim = normalize_space(item.get("validated_claim"))
+        event_id = normalize_space(item.get("event_instance_id"))
+        claim_source = normalize_space(item.get("claim_source"))
+        if not (marker in assigned_markers and claim and event_id and claim_source):
+            continue
+        registered[marker] = {
+            "claim": claim,
+            "event_instance_id": event_id,
+            "claim_source": claim_source,
+            "registered_claim_sha256": hashlib.sha256(
+                claim.casefold().encode("utf-8")
+            ).hexdigest(),
+        }
+
+    exemptions: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def register(marker: Any, value: Any, path: str) -> None:
+        marker_text = normalize_space(marker)
+        record = registered.get(marker_text)
+        if not record or normalize_space(value) != record["claim"]:
+            return
+        key = (marker_text, path)
+        if key in seen:
+            return
+        seen.add(key)
+        exemptions.append(
+            {
+                "schema_version": FORMAL_CURRENT_EXACT_CLAIM_EXEMPTION_VERSION,
+                "container_text": record["claim"],
+                "span_text": record["claim"],
+                "reason": "current_graph_registered_exact_claim",
+                "event_instance_id": record["event_instance_id"],
+                "marker": marker_text,
+                "claim_source": record["claim_source"],
+                "registered_claim_sha256": record["registered_claim_sha256"],
+                "allowed_prompt_paths": [path],
+            }
+        )
+
+    fact_plan = (
+        (prompt.get("frozen_graph") or {}).get("fact_plan")
+        if isinstance(prompt.get("frozen_graph"), dict)
+        else {}
+    )
+    if not isinstance(fact_plan, dict):
+        fact_plan = {}
+    for index, event in enumerate(fact_plan.get("assigned_events") or []):
+        if isinstance(event, dict):
+            register(
+                event.get("marker"),
+                event.get("dialogue_support_claim"),
+                f"$.frozen_graph.fact_plan.assigned_events[{index}].dialogue_support_claim",
+            )
+
+    segment = prompt.get("segment") if isinstance(prompt.get("segment"), dict) else {}
+    for index, item in enumerate(
+        segment.get("assigned_anchor_realization_checklist") or []
+    ):
+        if isinstance(item, dict):
+            register(
+                item.get("marker"),
+                item.get("natural_support_claim_to_include"),
+                f"$.segment.assigned_anchor_realization_checklist[{index}].natural_support_claim_to_include",
+            )
+    marker_claims = segment.get("marker_to_exact_natural_support_claim")
+    if isinstance(marker_claims, dict):
+        for marker, claim in marker_claims.items():
+            register(
+                marker,
+                claim,
+                f"$.segment.marker_to_exact_natural_support_claim.{marker}",
+            )
+    for index, shape in enumerate(segment.get("required_marked_turn_shapes") or []):
+        if not isinstance(shape, dict):
+            continue
+        marker = normalize_space(shape.get("marker"))
+        for shape_key in ("text_must_equal", "text_must_start_with"):
+            if shape.get(shape_key) is not None:
+                register(
+                    marker,
+                    shape.get(shape_key),
+                    f"$.segment.required_marked_turn_shapes[{index}].{shape_key}",
+                )
+        quote_map = shape.get("support_quotes_must_equal")
+        if isinstance(quote_map, dict) and marker in quote_map:
+            register(
+                marker,
+                quote_map.get(marker),
+                f"$.segment.required_marked_turn_shapes[{index}].support_quotes_must_equal.{marker}",
+            )
+
+    repair = (
+        prompt.get("segment_alignment_repair_contract")
+        if isinstance(prompt.get("segment_alignment_repair_contract"), dict)
+        else {}
+    )
+    failed_claims = repair.get("failed_marker_to_exact_natural_support_claim")
+    if isinstance(failed_claims, dict):
+        for marker, claim in failed_claims.items():
+            register(
+                marker,
+                claim,
+                f"$.segment_alignment_repair_contract.failed_marker_to_exact_natural_support_claim.{marker}",
+            )
+    return exemptions
+
+
+def formal_local_parent_audit_exempt_spans(
+    dialogue_plan: dict[str, Any],
+) -> list[dict[str, str]]:
+    """Return hash-verified local spans; raw graph prose never qualifies."""
+
+    spans: list[dict[str, str]] = []
+    for event in dialogue_plan.get("events") or []:
+        if not isinstance(event, dict):
+            continue
+        event_id = normalize_space(event.get("event_instance_id"))
+        status = normalize_space(event.get("status"))
+        claim = normalize_space(event.get("dialogue_support_claim"))
+        claim_provenance = (
+            event.get("local_claim_transform_provenance")
+            if isinstance(event.get("local_claim_transform_provenance"), dict)
+            else {}
+        )
+        suffix = _formal_status_suffix_surface(status)
+        expected_claim_hash = hashlib.sha256(
+            claim.casefold().encode("utf-8")
+        ).hexdigest()
+        expected_suffix_hash = hashlib.sha256(
+            suffix.casefold().encode("utf-8")
+        ).hexdigest()
+        if (
+            suffix
+            and claim_provenance.get("schema_version")
+            == FORMAL_LOCAL_SPAN_PROVENANCE_VERSION
+            and claim_provenance.get("source")
+            in {
+                "local_status_natural_suffix",
+                "local_canonical_status_suffix",
+                "local_internal_status_surface_replacement",
+            }
+            and claim_provenance.get("suffix_appended") is True
+            and normalize_space(claim_provenance.get("claim_sha256"))
+            == expected_claim_hash
+            and normalize_space(claim_provenance.get("suffix_sha256"))
+            == expected_suffix_hash
+            and normalize_text(suffix) in normalize_text(claim)
+        ):
+            spans.append(
+                {
+                    "container_text": claim,
+                    "span_text": suffix,
+                    "reason": (
+                        "locally_appended_canonical_status_suffix"
+                        if claim_provenance.get("source")
+                        == "local_canonical_status_suffix"
+                        else "locally_rewritten_status_surface"
+                        if claim_provenance.get("source")
+                        == "local_internal_status_surface_replacement"
+                        else "locally_appended_status_natural_suffix"
+                    ),
+                    "event_instance_id": event_id,
+                }
+            )
+
+        meaning = normalize_space(event.get("status_meaning"))
+        meaning_provenance = (
+            event.get("local_status_meaning_provenance")
+            if isinstance(event.get("local_status_meaning_provenance"), dict)
+            else {}
+        )
+        expected_meaning = _formal_status_meaning(status)
+        expected_meaning_hash = hashlib.sha256(
+            meaning.casefold().encode("utf-8")
+        ).hexdigest()
+        if (
+            meaning
+            and meaning == expected_meaning
+            and meaning_provenance.get("schema_version")
+            == FORMAL_STATUS_MEANING_VERSION
+            and meaning_provenance.get("source") == "local_status_meaning_mapping"
+            and normalize_space(meaning_provenance.get("meaning_sha256"))
+            == expected_meaning_hash
+        ):
+            spans.append(
+                {
+                    "container_text": meaning,
+                    "span_text": meaning,
+                    "reason": "local_canonical_status_meaning",
+                    "event_instance_id": event_id,
+                }
+            )
+    return spans
+
+
+def audit_formal_parent_prompt_verbatim_exposure(
+    prompt: dict[str, Any],
+    parent_dialogue_turns: list[dict[str, Any]],
+    *,
+    local_exempt_spans: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Detect parent text while excluding only proven local postprocess spans."""
+
+    width = FORMAL_PARENT_PROMPT_MIN_SUBSTRING_CHARS
+    parent_ngram_turns: dict[str, set[int]] = {}
+    for turn_index, turn in enumerate(parent_dialogue_turns):
+        if not isinstance(turn, dict):
+            continue
+        text = normalize_space(turn.get("text")).casefold()
+        for index in range(max(0, len(text) - width + 1)):
+            ngram = text[index : index + width]
+            if ngram.strip():
+                parent_ngram_turns.setdefault(ngram, set()).add(turn_index)
+
+    exposure_keys: set[tuple[int, str, str]] = set()
+    exempted_match_keys: set[tuple[int, str, str, str]] = set()
+    exempted_span_keys: set[tuple[str, str, str]] = set()
+    exposed_prompt_paths: set[str] = set()
+    exposed_parent_turn_indices: set[int] = set()
+    normalized_exempt_spans: list[dict[str, Any]] = []
+    for item in local_exempt_spans or []:
+        if not isinstance(item, dict):
+            continue
+        container = normalize_space(item.get("container_text")).casefold()
+        span = normalize_space(item.get("span_text")).casefold()
+        reason = normalize_space(item.get("reason"))
+        schema_version = normalize_space(item.get("schema_version"))
+        allowed_prompt_paths = [
+            normalize_space(path)
+            for path in item.get("allowed_prompt_paths") or []
+            if normalize_space(path)
+        ]
+        registered_claim_sha256 = normalize_space(
+            item.get("registered_claim_sha256")
+        )
+        marker = normalize_space(item.get("marker"))
+        event_instance_id = normalize_space(item.get("event_instance_id"))
+        claim_source = normalize_space(item.get("claim_source"))
+        if not (container and span and reason and span in container):
+            continue
+        computed_span_sha256 = hashlib.sha256(span.encode("utf-8")).hexdigest()
+        if allowed_prompt_paths and (
+            schema_version != FORMAL_CURRENT_EXACT_CLAIM_EXEMPTION_VERSION
+        ):
+            continue
+        if schema_version == FORMAL_CURRENT_EXACT_CLAIM_EXEMPTION_VERSION and (
+            reason != "current_graph_registered_exact_claim"
+            or not marker
+            or not event_instance_id
+            or not claim_source
+            or span != container
+            or len(allowed_prompt_paths) != 1
+            or registered_claim_sha256 != computed_span_sha256
+        ):
+            continue
+        normalized_exempt_spans.append(
+            {
+                "container": container,
+                "span": span,
+                "reason": reason,
+                "schema_version": schema_version,
+                "allowed_prompt_paths": allowed_prompt_paths,
+                "span_sha256": computed_span_sha256,
+            }
+        )
+    for path, prompt_text in _formal_prompt_string_values(prompt):
+        applicable_spans = [
+            item
+            for item in normalized_exempt_spans
+            if item["container"] == prompt_text
+            and (
+                not item["allowed_prompt_paths"]
+                or path in item["allowed_prompt_paths"]
+            )
+        ]
+        exempt_intervals: list[tuple[int, int, dict[str, str]]] = []
+        for item in applicable_spans:
+            start = 0
+            while True:
+                index = prompt_text.find(item["span"], start)
+                if index < 0:
+                    break
+                exempt_intervals.append((index, index + len(item["span"]), item))
+                start = index + max(1, len(item["span"]))
+        for index in range(max(0, len(prompt_text) - width + 1)):
+            ngram = prompt_text[index : index + width]
+            if not ngram.strip() or ngram not in parent_ngram_turns:
+                continue
+            ngram_sha256 = hashlib.sha256(ngram.encode("utf-8")).hexdigest()
+            containing_exemption = next(
+                (
+                    item
+                    for start, end, item in exempt_intervals
+                    if index >= start and index + width <= end
+                ),
+                None,
+            )
+            if containing_exemption is not None:
+                exempted_span_keys.add(
+                    (
+                        path,
+                        containing_exemption["span_sha256"],
+                        containing_exemption["reason"],
+                    )
+                )
+                for turn_index in parent_ngram_turns[ngram]:
+                    exempted_match_keys.add(
+                        (
+                            turn_index,
+                            path,
+                            ngram_sha256,
+                            containing_exemption["reason"],
+                        )
+                    )
+                continue
+            exposed_prompt_paths.add(path)
+            for turn_index in parent_ngram_turns[ngram]:
+                exposed_parent_turn_indices.add(turn_index)
+                exposure_keys.add((turn_index, path, ngram_sha256))
+
+    audit_core = {
+        "schema_version": FORMAL_PARENT_PROMPT_AUDIT_VERSION,
+        "pass": not exposure_keys,
+        "minimum_substring_chars": width,
+        "parent_turn_count": len(parent_dialogue_turns),
+        "prompt_string_field_count": len(_formal_prompt_string_values(prompt)),
+        "parent_verbatim_exposure_count": len(exposure_keys),
+        "exposed_parent_turn_count": len(exposed_parent_turn_indices),
+        "exposed_prompt_field_count": len(exposed_prompt_paths),
+        "exposed_parent_turn_indices": sorted(exposed_parent_turn_indices),
+        "exposed_prompt_paths": sorted(exposed_prompt_paths),
+        "exposed_substring_sha256": sorted({item[2] for item in exposure_keys}),
+        "local_span_provenance_version": FORMAL_LOCAL_SPAN_PROVENANCE_VERSION,
+        "registered_local_exempt_span_count": len(normalized_exempt_spans),
+        "registered_path_scoped_exact_claim_exempt_span_count": sum(
+            1
+            for item in normalized_exempt_spans
+            if item.get("schema_version")
+            == FORMAL_CURRENT_EXACT_CLAIM_EXEMPTION_VERSION
+        ),
+        "local_exempted_parent_substring_count": len(exempted_match_keys),
+        "local_exempted_span_count": len(exempted_span_keys),
+        "local_exempted_span_sha256": sorted(
+            {item[1] for item in exempted_span_keys}
+        ),
+        "local_exemption_reasons": sorted(
+            {item[2] for item in exempted_span_keys}
+        ),
+        "local_exempted_prompt_paths": sorted(
+            {item[0] for item in exempted_span_keys}
+        ),
+        "parent_dialogue_sha256": _formal_segment_speaker_text_sha256(
+            parent_dialogue_turns
+        ),
+        "prompt_sha256": hashlib.sha256(
+            json.dumps(
+                prompt,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest(),
+        "raw_parent_text_recorded": False,
+    }
+    audit_core["audit_sha256"] = hashlib.sha256(
+        json.dumps(
+            audit_core,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return audit_core
+
+
+def audit_formal_accepted_prefix_prompt_verbatim_exposure(
+    prompt: dict[str, Any],
+    accepted_appended_turns: list[dict[str, Any]],
+    *,
+    local_exempt_spans: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Fail closed if a later segment prompt contains accepted-prefix prose."""
+
+    parent_style_audit = audit_formal_parent_prompt_verbatim_exposure(
+        prompt,
+        accepted_appended_turns,
+        local_exempt_spans=local_exempt_spans,
+    )
+    audit = {
+        "schema_version": FORMAL_ACCEPTED_PREFIX_PROMPT_AUDIT_VERSION,
+        "current_exact_claim_exemption_schema_version": (
+            FORMAL_CURRENT_EXACT_CLAIM_EXEMPTION_VERSION
+        ),
+        "pass": parent_style_audit.get("pass") is True,
+        "minimum_substring_chars": parent_style_audit.get(
+            "minimum_substring_chars"
+        ),
+        "accepted_prefix_turn_count": parent_style_audit.get("parent_turn_count"),
+        "prompt_string_field_count": parent_style_audit.get(
+            "prompt_string_field_count"
+        ),
+        "accepted_prefix_verbatim_exposure_count": parent_style_audit.get(
+            "parent_verbatim_exposure_count"
+        ),
+        "exposed_accepted_prefix_turn_count": parent_style_audit.get(
+            "exposed_parent_turn_count"
+        ),
+        "exposed_prompt_field_count": parent_style_audit.get(
+            "exposed_prompt_field_count"
+        ),
+        "exposed_accepted_prefix_turn_indices": parent_style_audit.get(
+            "exposed_parent_turn_indices"
+        ),
+        "exposed_prompt_paths": parent_style_audit.get("exposed_prompt_paths"),
+        "exposed_substring_sha256": parent_style_audit.get(
+            "exposed_substring_sha256"
+        ),
+        "local_span_provenance_version": parent_style_audit.get(
+            "local_span_provenance_version"
+        ),
+        "registered_local_exempt_span_count": parent_style_audit.get(
+            "registered_local_exempt_span_count"
+        ),
+        "registered_path_scoped_exact_claim_exempt_span_count": (
+            parent_style_audit.get(
+                "registered_path_scoped_exact_claim_exempt_span_count"
+            )
+        ),
+        "local_exempted_accepted_prefix_substring_count": parent_style_audit.get(
+            "local_exempted_parent_substring_count"
+        ),
+        "local_exempted_span_count": parent_style_audit.get(
+            "local_exempted_span_count"
+        ),
+        "local_exempted_span_sha256": parent_style_audit.get(
+            "local_exempted_span_sha256"
+        ),
+        "local_exemption_reasons": parent_style_audit.get(
+            "local_exemption_reasons"
+        ),
+        "local_exempted_prompt_paths": parent_style_audit.get(
+            "local_exempted_prompt_paths"
+        ),
+        "accepted_prefix_dialogue_sha256": parent_style_audit.get(
+            "parent_dialogue_sha256"
+        ),
+        "prompt_sha256": parent_style_audit.get("prompt_sha256"),
+        "raw_accepted_prefix_text_recorded": False,
+    }
+    audit["audit_sha256"] = hashlib.sha256(
+        json.dumps(
+            audit,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return audit
+
+
+def formal_accepted_prefix_prompt_audit_summary(
+    prompt_audits: list[dict[str, Any]],
+) -> dict[str, Any]:
+    audit_hashes = [
+        normalize_space(audit.get("audit_sha256"))
+        for audit in prompt_audits
+        if isinstance(audit, dict) and normalize_space(audit.get("audit_sha256"))
+    ]
+    summary = {
+        "schema_version": FORMAL_ACCEPTED_PREFIX_CONTEXT_SCHEMA_VERSION,
+        "prompt_audit_schema_version": (
+            FORMAL_ACCEPTED_PREFIX_PROMPT_AUDIT_VERSION
+        ),
+        "minimum_substring_chars": FORMAL_PARENT_PROMPT_MIN_SUBSTRING_CHARS,
+        "current_exact_claim_exemption_schema_version": (
+            FORMAL_CURRENT_EXACT_CLAIM_EXEMPTION_VERSION
+        ),
+        "audited_prompt_count": len(prompt_audits),
+        "registered_path_scoped_exact_claim_exempt_span_count": sum(
+            int(
+                audit.get(
+                    "registered_path_scoped_exact_claim_exempt_span_count"
+                )
+                or 0
+            )
+            for audit in prompt_audits
+            if isinstance(audit, dict)
+        ),
+        "accepted_prefix_verbatim_exposure_count": sum(
+            int(audit.get("accepted_prefix_verbatim_exposure_count") or 0)
+            for audit in prompt_audits
+            if isinstance(audit, dict)
+        ),
+        "accepted_prefix_prompt_audit_verified": bool(prompt_audits)
+        and len(audit_hashes) == len(prompt_audits)
+        and all(audit.get("pass") is True for audit in prompt_audits),
+        "raw_accepted_prefix_text_recorded": False,
+        "prompt_audit_sha256": audit_hashes,
+    }
+    summary["summary_sha256"] = hashlib.sha256(
+        json.dumps(
+            summary,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return summary
+
+
+def formal_parent_prompt_audit_summary(
+    parent_manifest: dict[str, Any],
+    prompt_audits: list[dict[str, Any]],
+    *,
+    validated_parent_turn_count: int,
+) -> dict[str, Any]:
+    audit_hashes = [
+        normalize_space(audit.get("audit_sha256"))
+        for audit in prompt_audits
+        if isinstance(audit, dict) and normalize_space(audit.get("audit_sha256"))
+    ]
+    summary = {
+        "schema_version": FORMAL_PARENT_CONTEXT_SCHEMA_VERSION,
+        "prompt_audit_schema_version": FORMAL_PARENT_PROMPT_AUDIT_VERSION,
+        "minimum_substring_chars": FORMAL_PARENT_PROMPT_MIN_SUBSTRING_CHARS,
+        "manifest_sha256": normalize_space(parent_manifest.get("manifest_sha256")),
+        "audited_prompt_count": len(prompt_audits),
+        "parent_verbatim_exposure_count": sum(
+            int(audit.get("parent_verbatim_exposure_count") or 0)
+            for audit in prompt_audits
+            if isinstance(audit, dict)
+        ),
+        "local_span_provenance_version": FORMAL_LOCAL_SPAN_PROVENANCE_VERSION,
+        "local_exempted_parent_substring_count": sum(
+            int(audit.get("local_exempted_parent_substring_count") or 0)
+            for audit in prompt_audits
+            if isinstance(audit, dict)
+        ),
+        "local_exempted_span_sha256": sorted(
+            {
+                normalize_space(span_hash)
+                for audit in prompt_audits
+                if isinstance(audit, dict)
+                for span_hash in (audit.get("local_exempted_span_sha256") or [])
+                if normalize_space(span_hash)
+            }
+        ),
+        "local_exemption_reasons": sorted(
+            {
+                normalize_space(reason)
+                for audit in prompt_audits
+                if isinstance(audit, dict)
+                for reason in (audit.get("local_exemption_reasons") or [])
+                if normalize_space(reason)
+            }
+        ),
+        "parent_prompt_audit_verified": bool(prompt_audits)
+        and len(audit_hashes) == len(prompt_audits)
+        and all(audit.get("pass") is True for audit in prompt_audits),
+        "prompt_audit_sha256": audit_hashes,
+        "one_physical_formal_request_per_audited_prompt": True,
+        "internal_retry_disabled_for_parent_audit": True,
+        "full_parent_turns_used_for_output_duplicate_audit": True,
+        "validated_parent_turn_count": int(validated_parent_turn_count),
+    }
+    summary["audit_sha256"] = hashlib.sha256(
+        json.dumps(
+            summary,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return summary
+
+
+def _formal_segment_named_speaker_matches_claim(speaker: str, claim: str) -> bool:
+    """Require a first-person realization to retain the claim's named subject."""
+
+    speaker_tokens = token_set(speaker)
+    claim_tokens = token_set(claim)
+    return bool(speaker_tokens and speaker_tokens.issubset(claim_tokens))
+
+
+def normalize_formal_segment_neutral_sidecars(
+    proposal: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Complete only absent empty sidecars without inferring alignment evidence.
+
+    The API occasionally omits both redundant empty sidecar fields on neutral
+    turns.  A missing key is completed only when every sidecar value that is
+    present already has the exact empty container required for a neutral turn.
+    Non-empty, null, or incorrectly typed sidecars remain untouched so the
+    downstream marker and type checks continue to fail closed.
+    """
+
+    normalized = copy.deepcopy(proposal)
+    turns = _as_dialogue_list(normalized.get("appended_dialogue_turns_segment"))
+    before_hash = _formal_segment_speaker_text_sha256(turns)
+    repairs: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for turn_index, turn in enumerate(turns):
+        if not isinstance(turn, dict):
+            continue
+        anchors_present = "alignment_anchors" in turn
+        quotes_present = "support_quotes" in turn
+        if anchors_present and quotes_present:
+            continue
+        anchors_are_empty = not anchors_present or (
+            isinstance(turn.get("alignment_anchors"), list)
+            and not turn.get("alignment_anchors")
+        )
+        quotes_are_empty = not quotes_present or (
+            isinstance(turn.get("support_quotes"), dict)
+            and not turn.get("support_quotes")
+        )
+        if not anchors_are_empty or not quotes_are_empty:
+            skipped.append(
+                {
+                    "turn_index": turn_index,
+                    "reason": "present_sidecar_not_exact_empty_container",
+                    "alignment_anchors_present": anchors_present,
+                    "support_quotes_present": quotes_present,
+                }
+            )
+            continue
+        added_keys: list[str] = []
+        if not anchors_present:
+            turn["alignment_anchors"] = []
+            added_keys.append("alignment_anchors")
+        if not quotes_present:
+            turn["support_quotes"] = {}
+            added_keys.append("support_quotes")
+        if added_keys:
+            repairs.append(
+                {
+                    "turn_index": turn_index,
+                    "added_keys": added_keys,
+                    "provenance": "absent_key_with_only_empty_or_absent_peer_sidecar",
+                }
+            )
+
+    after_hash = _formal_segment_speaker_text_sha256(turns)
+    diagnostics = {
+        "schema_version": FORMAL_SEGMENT_NEUTRAL_SIDECAR_NORMALIZER_VERSION,
+        "used": bool(repairs),
+        "repair_count": len(repairs),
+        "repairs": repairs,
+        "skipped": skipped,
+        "absent_keys_only": True,
+        "alignment_evidence_inferred": False,
+        "speaker_text_sha256_before": before_hash,
+        "speaker_text_sha256_after": after_hash,
+        "dialogue_content_preserved": before_hash == after_hash,
+    }
+    return normalized, diagnostics
+
+
+def normalize_formal_segment_sidecar_support_quotes(
+    proposal: dict[str, Any],
+    *,
+    assigned_markers: set[str],
+    marker_to_exact_claim: dict[str, str],
+    anchor_to_event: dict[str, str],
+    current_event_plan: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Losslessly bind valid first-person support turns to exact sidecar quotes.
+
+    This only edits sidecar metadata. A non-exact quote is replaced with the raw
+    turn text when the frozen exact claim, named speaker, marker placement, and
+    speaker-aware event semantics all agree.
+    """
+
+    normalized = copy.deepcopy(proposal)
+    turns = _as_dialogue_list(normalized.get("appended_dialogue_turns_segment"))
+    before_hash = _formal_segment_speaker_text_sha256(turns)
+    event_by_id = {
+        normalize_space(event.get("event_instance_id")): event
+        for event in current_event_plan.get("events") or []
+        if isinstance(event, dict) and normalize_space(event.get("event_instance_id"))
+    }
+    occurrences: dict[str, list[int]] = {marker: [] for marker in assigned_markers}
+    anchors_by_turn: dict[int, list[str]] = {}
+    for index, turn in enumerate(turns):
+        raw_anchors = turn.get("alignment_anchors") if isinstance(turn, dict) else None
+        anchors = (
+            [normalize_space(item) for item in raw_anchors if normalize_space(item)]
+            if isinstance(raw_anchors, list)
+            else [normalize_space(raw_anchors)]
+            if isinstance(raw_anchors, str) and normalize_space(raw_anchors)
+            else []
+        )
+        anchors_by_turn[index] = anchors
+        for marker in anchors:
+            if marker in occurrences:
+                occurrences[marker].append(index)
+
+    repairs: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for marker in sorted(assigned_markers):
+        indices = occurrences.get(marker) or []
+        if len(indices) != 1:
+            skipped.append(
+                {
+                    "marker": marker,
+                    "reason": "assigned_marker_not_exactly_once",
+                    "occurrence_count": len(indices),
+                }
+            )
+            continue
+        index = indices[0]
+        if anchors_by_turn.get(index) != [marker]:
+            skipped.append(
+                {
+                    "marker": marker,
+                    "reason": "assigned_marker_not_on_independent_turn",
+                    "turn_index": index,
+                }
+            )
+            continue
+        turn = turns[index]
+        support_quotes = turn.get("support_quotes")
+        exact_claim = marker_to_exact_claim.get(marker)
+        old_quote = support_quotes.get(marker) if isinstance(support_quotes, dict) else None
+        if not isinstance(exact_claim, str) or not exact_claim or old_quote != exact_claim:
+            skipped.append(
+                {
+                    "marker": marker,
+                    "reason": "sidecar_quote_not_frozen_exact_claim",
+                    "turn_index": index,
+                }
+            )
+            continue
+        raw_text = turn.get("text")
+        if not isinstance(raw_text, str) or not raw_text:
+            skipped.append(
+                {
+                    "marker": marker,
+                    "reason": "support_turn_text_missing",
+                    "turn_index": index,
+                }
+            )
+            continue
+        if normalize_text(old_quote) in normalize_text(raw_text):
+            continue
+        event = event_by_id.get(anchor_to_event.get(marker, ""))
+        speaker = turn.get("speaker")
+        text_only_semantics = bool(
+            isinstance(event, dict) and _event_lexical_supported(event, raw_text)
+        )
+        speaker_aware_semantics = bool(
+            isinstance(event, dict)
+            and isinstance(speaker, str)
+            and _event_lexical_supported(event, f"{speaker}: {raw_text}")
+        )
+        if text_only_semantics:
+            semantic_mode = "text_only"
+        elif speaker_aware_semantics and _formal_segment_named_speaker_matches_claim(
+            speaker,
+            exact_claim,
+        ):
+            semantic_mode = "speaker_first_person"
+        elif speaker_aware_semantics:
+            skipped.append(
+                {
+                    "marker": marker,
+                    "reason": "speaker_not_named_claim_subject",
+                    "turn_index": index,
+                }
+            )
+            continue
+        else:
+            skipped.append(
+                {
+                    "marker": marker,
+                    "reason": "speaker_aware_event_semantics_mismatch",
+                    "turn_index": index,
+                }
+            )
+            continue
+        support_quotes[marker] = raw_text
+        repairs.append(
+            {
+                "marker": marker,
+                "turn_index": index,
+                "event_instance_id": anchor_to_event.get(marker),
+                "old_quote_sha256": hashlib.sha256(old_quote.encode("utf-8")).hexdigest(),
+                "new_quote_sha256": hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),
+                "validated_claim_sha256": hashlib.sha256(exact_claim.encode("utf-8")).hexdigest(),
+                "provenance": "frozen_exact_claim_to_api_first_person_turn_text",
+                "semantic_mode": semantic_mode,
+                "speaker_aware_event_semantics_pass": True,
+            }
+        )
+
+    after_hash = _formal_segment_speaker_text_sha256(turns)
+    dialogue_content_preserved = before_hash == after_hash
+    for repair in repairs:
+        repair["dialogue_content_preserved"] = dialogue_content_preserved
+    diagnostics = {
+        "schema_version": FORMAL_SEGMENT_SIDECAR_QUOTE_NORMALIZER_VERSION,
+        "used": bool(repairs),
+        "repair_count": len(repairs),
+        "repairs": repairs,
+        "skipped": skipped,
+        "speaker_text_sha256_before": before_hash,
+        "speaker_text_sha256_after": after_hash,
+        "dialogue_content_preserved": dialogue_content_preserved,
+    }
+    return normalized, diagnostics
+
+
+def _normalize_formal_segment_turn_text(value: Any) -> str:
+    """Normalize dialogue text for duplicate detection without dropping Unicode."""
+
+    return re.sub(r"[\W_]+", " ", normalize_space(value).casefold(), flags=re.UNICODE).strip()
+
+
+def _formal_segment_turn_anchor_set(turn: dict[str, Any]) -> frozenset[str]:
+    raw = turn.get("alignment_anchors") if isinstance(turn, dict) else None
+    if isinstance(raw, list):
+        return frozenset(normalize_space(item) for item in raw if normalize_space(item))
+    marker = normalize_space(raw)
+    return frozenset({marker}) if marker else frozenset()
+
+
+def audit_formal_dialogue_segment_turn_duplicates(
+    segment_turns: list[dict[str, Any]],
+    frozen_prefix_turns: list[dict[str, Any]],
+    marker_to_exact_claim: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Fail-closed exact/fuzzy/phrase duplicate audit before segment commit.
+
+    Exact comparison uses the complete normalized turn. Fuzzy and phrase comparison
+    removes a validated marker support-claim prefix first, so canonical graph claims do
+    not create false positives while copied or expanded body text remains detectable.
+    """
+
+    validated_claims = marker_to_exact_claim or {}
+
+    def comparison_body(turn: dict[str, Any], normalized: str) -> tuple[str, bool]:
+        anchors = _formal_segment_turn_anchor_set(turn)
+        prefixes = sorted(
+            {
+                _normalize_formal_segment_turn_text(validated_claims.get(marker))
+                for marker in anchors
+                if _normalize_formal_segment_turn_text(validated_claims.get(marker))
+            },
+            key=len,
+            reverse=True,
+        )
+        for prefix in prefixes:
+            if normalized == prefix:
+                return "", True
+            if normalized.startswith(prefix + " "):
+                return normalized[len(prefix) :].strip(), True
+        return normalized, False
+
+    def prepared(turns: list[dict[str, Any]], scope: str) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for index, turn in enumerate(turns):
+            if not isinstance(turn, dict):
+                continue
+            normalized = _normalize_formal_segment_turn_text(turn.get("text"))
+            if not normalized:
+                continue
+            anchors = _formal_segment_turn_anchor_set(turn)
+            body, prefix_stripped = comparison_body(turn, normalized)
+            body_tokens = body.split()
+            rows.append(
+                {
+                    "scope": scope,
+                    "index": index,
+                    "normalized": normalized,
+                    "normalized_sha256": hashlib.sha256(normalized.encode("utf-8")).hexdigest(),
+                    "char_count": len(normalized),
+                    "token_count": len(normalized.split()),
+                    "comparison_body": body,
+                    "comparison_body_sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
+                    "comparison_char_count": len(body),
+                    "comparison_token_count": len(body_tokens),
+                    "comparison_tokens": body_tokens,
+                    "comparison_token_set": set(body_tokens),
+                    "canonical_support_prefix_stripped": prefix_stripped,
+                    "anchors": anchors,
+                }
+            )
+        return rows
+
+    candidates = prepared(segment_turns, "segment")
+    references = prepared(frozen_prefix_turns, "frozen_prefix")
+    exact_pairs: list[dict[str, Any]] = []
+    near_pairs: list[dict[str, Any]] = []
+    phrase_containment_pairs: list[dict[str, Any]] = []
+    exact_comparison_count = 0
+    near_candidate_pair_count = 0
+
+    def pair_record(
+        left: dict[str, Any],
+        right: dict[str, Any],
+        *,
+        sequence_similarity: float,
+        token_jaccard: float,
+    ) -> dict[str, Any]:
+        return {
+            "left_scope": left["scope"],
+            "left_index": left["index"],
+            "right_scope": right["scope"],
+            "right_index": right["index"],
+            "left_normalized_sha256": left["normalized_sha256"],
+            "right_normalized_sha256": right["normalized_sha256"],
+            "left_char_count": left["char_count"],
+            "right_char_count": right["char_count"],
+            "left_token_count": left["token_count"],
+            "right_token_count": right["token_count"],
+            "left_comparison_body_sha256": left["comparison_body_sha256"],
+            "right_comparison_body_sha256": right["comparison_body_sha256"],
+            "left_comparison_char_count": left["comparison_char_count"],
+            "right_comparison_char_count": right["comparison_char_count"],
+            "left_comparison_token_count": left["comparison_token_count"],
+            "right_comparison_token_count": right["comparison_token_count"],
+            "left_canonical_support_prefix_stripped": left[
+                "canonical_support_prefix_stripped"
+            ],
+            "right_canonical_support_prefix_stripped": right[
+                "canonical_support_prefix_stripped"
+            ],
+            "left_markers": sorted(left["anchors"]),
+            "right_markers": sorted(right["anchors"]),
+            "sequence_similarity": round(float(sequence_similarity), 6),
+            "token_jaccard": round(float(token_jaccard), 6),
+        }
+
+    def compare(left: dict[str, Any], right: dict[str, Any]) -> None:
+        nonlocal exact_comparison_count, near_candidate_pair_count
+        exact_comparison_count += 1
+        if left["normalized"] == right["normalized"]:
+            exact_pairs.append(
+                pair_record(left, right, sequence_similarity=1.0, token_jaccard=1.0)
+            )
+            return
+        if not left["comparison_body"] or not right["comparison_body"]:
+            return
+
+        shorter_token_count = min(
+            left["comparison_token_count"], right["comparison_token_count"]
+        )
+        if shorter_token_count >= FORMAL_SEGMENT_PHRASE_MIN_SHORTER_TOKENS:
+            ngram_size = FORMAL_SEGMENT_PHRASE_NGRAM_SIZE
+            left_ngrams = {
+                tuple(left["comparison_tokens"][index : index + ngram_size])
+                for index in range(len(left["comparison_tokens"]) - ngram_size + 1)
+            }
+            right_ngrams = {
+                tuple(right["comparison_tokens"][index : index + ngram_size])
+                for index in range(len(right["comparison_tokens"]) - ngram_size + 1)
+            }
+            shared_ngram_count = len(left_ngrams & right_ngrams)
+            phrase_containment = shared_ngram_count / max(
+                1, min(len(left_ngrams), len(right_ngrams))
+            )
+            if (
+                shared_ngram_count >= FORMAL_SEGMENT_PHRASE_MIN_SHARED_NGRAMS
+                and phrase_containment >= FORMAL_SEGMENT_PHRASE_CONTAINMENT_THRESHOLD
+            ):
+                record = pair_record(
+                    left,
+                    right,
+                    sequence_similarity=0.0,
+                    token_jaccard=0.0,
+                )
+                record.update(
+                    {
+                        "word_ngram_size": ngram_size,
+                        "shared_word_ngram_count": shared_ngram_count,
+                        "shorter_word_ngram_count": min(
+                            len(left_ngrams), len(right_ngrams)
+                        ),
+                        "word_ngram_containment": round(phrase_containment, 6),
+                    }
+                )
+                phrase_containment_pairs.append(record)
+                return
+
+        if (
+            left["comparison_char_count"] < FORMAL_SEGMENT_NEAR_DUPLICATE_MIN_CHARS
+            or right["comparison_char_count"] < FORMAL_SEGMENT_NEAR_DUPLICATE_MIN_CHARS
+            or left["comparison_token_count"] < FORMAL_SEGMENT_NEAR_DUPLICATE_MIN_TOKENS
+            or right["comparison_token_count"] < FORMAL_SEGMENT_NEAR_DUPLICATE_MIN_TOKENS
+        ):
+            return
+        length_upper_bound = (
+            2.0 * min(left["comparison_char_count"], right["comparison_char_count"])
+            / (left["comparison_char_count"] + right["comparison_char_count"])
+        )
+        if length_upper_bound < FORMAL_SEGMENT_NEAR_DUPLICATE_SEQUENCE_THRESHOLD:
+            return
+        union = left["comparison_token_set"] | right["comparison_token_set"]
+        token_jaccard = len(
+            left["comparison_token_set"] & right["comparison_token_set"]
+        ) / max(1, len(union))
+        if token_jaccard < FORMAL_SEGMENT_NEAR_DUPLICATE_JACCARD_THRESHOLD:
+            return
+        near_candidate_pair_count += 1
+        sequence_similarity = difflib.SequenceMatcher(
+            None,
+            left["comparison_body"],
+            right["comparison_body"],
+            autojunk=False,
+        ).ratio()
+        if sequence_similarity >= FORMAL_SEGMENT_NEAR_DUPLICATE_SEQUENCE_THRESHOLD:
+            near_pairs.append(
+                pair_record(
+                    left,
+                    right,
+                    sequence_similarity=sequence_similarity,
+                    token_jaccard=token_jaccard,
+                )
+            )
+
+    for left_index, left in enumerate(candidates):
+        for right in candidates[:left_index]:
+            compare(left, right)
+        for right in references:
+            compare(left, right)
+
+    audit_core = {
+        "schema_version": FORMAL_SEGMENT_TURN_DUPLICATE_AUDIT_VERSION,
+        "segment_turn_count": len(segment_turns),
+        "audited_segment_turn_count": len(candidates),
+        "frozen_prefix_turn_count": len(frozen_prefix_turns),
+        "audited_frozen_prefix_turn_count": len(references),
+        "exact_comparison_count": exact_comparison_count,
+        "near_candidate_pair_count": near_candidate_pair_count,
+        "near_duplicate_min_chars": FORMAL_SEGMENT_NEAR_DUPLICATE_MIN_CHARS,
+        "near_duplicate_min_tokens": FORMAL_SEGMENT_NEAR_DUPLICATE_MIN_TOKENS,
+        "near_duplicate_sequence_threshold": FORMAL_SEGMENT_NEAR_DUPLICATE_SEQUENCE_THRESHOLD,
+        "near_duplicate_jaccard_threshold": FORMAL_SEGMENT_NEAR_DUPLICATE_JACCARD_THRESHOLD,
+        "canonical_support_prefix_stripped_before_fuzzy_comparison": True,
+        "canonical_support_prefix_source": "validated_marker_to_exact_claim",
+        "fuzzy_comparison_scope_contract": "all_segment_segment_and_segment_prefix_pairs",
+        "phrase_word_ngram_size": FORMAL_SEGMENT_PHRASE_NGRAM_SIZE,
+        "phrase_min_shorter_tokens": FORMAL_SEGMENT_PHRASE_MIN_SHORTER_TOKENS,
+        "phrase_min_shared_ngrams": FORMAL_SEGMENT_PHRASE_MIN_SHARED_NGRAMS,
+        "phrase_containment_threshold": FORMAL_SEGMENT_PHRASE_CONTAINMENT_THRESHOLD,
+        "exact_duplicate_pair_count": len(exact_pairs),
+        "near_duplicate_pair_count": len(near_pairs),
+        "phrase_containment_pair_count": len(phrase_containment_pairs),
+        "exact_duplicate_pairs": exact_pairs,
+        "near_duplicate_pairs": near_pairs,
+        "phrase_containment_pairs": phrase_containment_pairs,
+    }
+    audit_core["pass"] = (
+        not exact_pairs and not near_pairs and not phrase_containment_pairs
+    )
+    audit_core["audit_sha256"] = hashlib.sha256(
+        json.dumps(audit_core, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    return audit_core
+
+
+def formal_segment_turn_duplicate_audit_summary(
+    accepted_audits: list[dict[str, Any]],
+) -> dict[str, Any]:
+    audit_hashes = [
+        normalize_space(audit.get("audit_sha256"))
+        for audit in accepted_audits
+        if isinstance(audit, dict) and normalize_space(audit.get("audit_sha256"))
+    ]
+    summary = {
+        "schema_version": FORMAL_SEGMENT_TURN_DUPLICATE_AUDIT_VERSION,
+        "pass": bool(accepted_audits)
+        and len(audit_hashes) == len(accepted_audits)
+        and all(audit.get("pass") is True for audit in accepted_audits),
+        "accepted_segment_audit_count": len(accepted_audits),
+        "audited_segment_turn_count": sum(
+            int(audit.get("audited_segment_turn_count") or 0)
+            for audit in accepted_audits
+            if isinstance(audit, dict)
+        ),
+        "exact_comparison_count": sum(
+            int(audit.get("exact_comparison_count") or 0)
+            for audit in accepted_audits
+            if isinstance(audit, dict)
+        ),
+        "near_candidate_pair_count": sum(
+            int(audit.get("near_candidate_pair_count") or 0)
+            for audit in accepted_audits
+            if isinstance(audit, dict)
+        ),
+        "exact_duplicate_pair_count": sum(
+            int(audit.get("exact_duplicate_pair_count") or 0)
+            for audit in accepted_audits
+            if isinstance(audit, dict)
+        ),
+        "near_duplicate_pair_count": sum(
+            int(audit.get("near_duplicate_pair_count") or 0)
+            for audit in accepted_audits
+            if isinstance(audit, dict)
+        ),
+        "phrase_containment_pair_count": sum(
+            int(audit.get("phrase_containment_pair_count") or 0)
+            for audit in accepted_audits
+            if isinstance(audit, dict)
+        ),
+        "near_duplicate_min_chars": FORMAL_SEGMENT_NEAR_DUPLICATE_MIN_CHARS,
+        "near_duplicate_min_tokens": FORMAL_SEGMENT_NEAR_DUPLICATE_MIN_TOKENS,
+        "near_duplicate_sequence_threshold": FORMAL_SEGMENT_NEAR_DUPLICATE_SEQUENCE_THRESHOLD,
+        "near_duplicate_jaccard_threshold": FORMAL_SEGMENT_NEAR_DUPLICATE_JACCARD_THRESHOLD,
+        "canonical_support_prefix_source": "validated_marker_to_exact_claim",
+        "fuzzy_comparison_scope_contract": "all_segment_segment_and_segment_prefix_pairs",
+        "phrase_word_ngram_size": FORMAL_SEGMENT_PHRASE_NGRAM_SIZE,
+        "phrase_min_shorter_tokens": FORMAL_SEGMENT_PHRASE_MIN_SHORTER_TOKENS,
+        "phrase_min_shared_ngrams": FORMAL_SEGMENT_PHRASE_MIN_SHARED_NGRAMS,
+        "phrase_containment_threshold": FORMAL_SEGMENT_PHRASE_CONTAINMENT_THRESHOLD,
+        "accepted_segment_audit_sha256": audit_hashes,
+    }
+    summary["summary_sha256"] = hashlib.sha256(
+        json.dumps(summary, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    return summary
+
+
+def _formal_segment_opening_comparison_body(
+    turn: dict[str, Any],
+    marker_to_exact_claim: dict[str, str],
+) -> tuple[list[str], bool]:
+    """Return solver-visible body tokens after a validated support-claim prefix."""
+
+    normalized = _normalize_formal_segment_turn_text(turn.get("text"))
+    if not normalized:
+        return [], False
+    anchors = _formal_segment_turn_anchor_set(turn)
+    prefixes = sorted(
+        {
+            _normalize_formal_segment_turn_text(marker_to_exact_claim.get(marker))
+            for marker in anchors
+            if _normalize_formal_segment_turn_text(marker_to_exact_claim.get(marker))
+        },
+        key=len,
+        reverse=True,
+    )
+    for prefix in prefixes:
+        if normalized == prefix:
+            return [], True
+        if normalized.startswith(prefix + " "):
+            return normalized[len(prefix) :].strip().split(), True
+    return normalized.split(), False
+
+
+def _formal_segment_opening_scope_audit(
+    turns: list[dict[str, Any]],
+    *,
+    scope: str,
+    minimum_count: int,
+    marker_to_exact_claim: dict[str, str],
+) -> dict[str, Any]:
+    prefix_counts: dict[int, Counter[str]] = {
+        token_length: Counter()
+        for token_length in FORMAL_SEGMENT_OPENING_PREFIX_TOKEN_LENGTHS
+    }
+    solver_visible_turn_count = 0
+    eligible_opening_turn_count = 0
+    short_or_empty_body_count = 0
+    canonical_support_prefix_stripped_count = 0
+    for turn in turns:
+        if not isinstance(turn, dict) or not normalize_space(turn.get("text")):
+            continue
+        solver_visible_turn_count += 1
+        body_tokens, prefix_stripped = _formal_segment_opening_comparison_body(
+            turn,
+            marker_to_exact_claim,
+        )
+        canonical_support_prefix_stripped_count += int(prefix_stripped)
+        if len(body_tokens) < FORMAL_SEGMENT_OPENING_MIN_PREFIX_TOKENS:
+            short_or_empty_body_count += 1
+            continue
+        eligible_opening_turn_count += 1
+        for token_length, counts in prefix_counts.items():
+            if len(body_tokens) >= token_length:
+                counts[" ".join(body_tokens[:token_length])] += 1
+
+    repeated_prefixes: list[dict[str, Any]] = []
+    for token_length, counts in prefix_counts.items():
+        for prefix, count in counts.items():
+            share = count / max(1, solver_visible_turn_count)
+            if count >= minimum_count and share > FORMAL_SEGMENT_OPENING_MAX_SHARE:
+                repeated_prefixes.append(
+                    {
+                        "normalized_prefix": prefix,
+                        "prefix_token_count": token_length,
+                        "count": count,
+                        "share_of_solver_visible_turns": round(share, 6),
+                    }
+                )
+    repeated_prefixes.sort(
+        key=lambda row: (
+            -int(row["count"]),
+            -int(row["prefix_token_count"]),
+            str(row["normalized_prefix"]),
+        )
+    )
+    top_prefixes = {
+        str(token_length): [
+            {
+                "normalized_prefix": prefix,
+                "count": count,
+                "share_of_solver_visible_turns": round(
+                    count / max(1, solver_visible_turn_count),
+                    6,
+                ),
+            }
+            for prefix, count in counts.most_common(5)
+        ]
+        for token_length, counts in prefix_counts.items()
+    }
+    return {
+        "scope": scope,
+        "pass": not repeated_prefixes,
+        "solver_visible_turn_count": solver_visible_turn_count,
+        "eligible_opening_turn_count": eligible_opening_turn_count,
+        "short_or_empty_body_count": short_or_empty_body_count,
+        "short_or_empty_body_is_diagnostic_only": True,
+        "canonical_support_prefix_stripped_count": (
+            canonical_support_prefix_stripped_count
+        ),
+        "canonical_support_prefix_source": "validated_marker_to_exact_claim",
+        "prefix_token_lengths": list(FORMAL_SEGMENT_OPENING_PREFIX_TOKEN_LENGTHS),
+        "minimum_repeated_prefix_count": minimum_count,
+        "maximum_allowed_share": FORMAL_SEGMENT_OPENING_MAX_SHARE,
+        "share_denominator": "all_nonempty_solver_visible_turns",
+        "repeated_prefixes": repeated_prefixes,
+        "top_prefixes": top_prefixes,
+    }
+
+
+def audit_formal_dialogue_segment_opening_diversity(
+    segment_turns: list[dict[str, Any]],
+    accepted_appended_turns: list[dict[str, Any]],
+    marker_to_exact_claim: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Reject high-confidence templated openings before an API segment is committed."""
+
+    validated_claims = marker_to_exact_claim or {}
+    segment = _formal_segment_opening_scope_audit(
+        segment_turns,
+        scope="candidate_segment",
+        minimum_count=FORMAL_SEGMENT_OPENING_SEGMENT_MIN_COUNT,
+        marker_to_exact_claim=validated_claims,
+    )
+    cumulative = _formal_segment_opening_scope_audit(
+        list(accepted_appended_turns) + list(segment_turns),
+        scope="accepted_appended_plus_candidate_segment",
+        minimum_count=FORMAL_SEGMENT_OPENING_CUMULATIVE_MIN_COUNT,
+        marker_to_exact_claim=validated_claims,
+    )
+    rejected_prefixes: list[dict[str, Any]] = []
+    for scope_audit in (segment, cumulative):
+        for repeated in scope_audit["repeated_prefixes"]:
+            rejected_prefixes.append(
+                {"scope": scope_audit["scope"], **copy.deepcopy(repeated)}
+            )
+    if segment["pass"] is not True:
+        reason = "segment_opening_prefix_concentration"
+    elif cumulative["pass"] is not True:
+        reason = "cumulative_opening_prefix_concentration"
+    else:
+        reason = "ok"
+    audit = {
+        "schema_version": FORMAL_SEGMENT_OPENING_DIVERSITY_AUDIT_VERSION,
+        "pass": reason == "ok",
+        "reason": reason,
+        "segment_scope": segment,
+        "cumulative_scope": cumulative,
+        "rejected_prefix_count": len(rejected_prefixes),
+        "rejected_prefixes": rejected_prefixes,
+        "entire_uncommitted_segment_must_retry_on_failure": True,
+        "token_length_credit_before_pass_forbidden": True,
+    }
+    audit["audit_sha256"] = hashlib.sha256(
+        json.dumps(audit, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    return audit
+
+
+def formal_segment_opening_diversity_audit_summary(
+    accepted_audits: list[dict[str, Any]],
+) -> dict[str, Any]:
+    audit_hashes = [
+        normalize_space(audit.get("audit_sha256"))
+        for audit in accepted_audits
+        if isinstance(audit, dict) and normalize_space(audit.get("audit_sha256"))
+    ]
+    final_cumulative = (
+        accepted_audits[-1].get("cumulative_scope")
+        if accepted_audits and isinstance(accepted_audits[-1], dict)
+        else {}
+    )
+    if not isinstance(final_cumulative, dict):
+        final_cumulative = {}
+    segment_scopes = [
+        audit.get("segment_scope")
+        for audit in accepted_audits
+        if isinstance(audit, dict) and isinstance(audit.get("segment_scope"), dict)
+    ]
+    summary = {
+        "schema_version": FORMAL_SEGMENT_OPENING_DIVERSITY_AUDIT_VERSION,
+        "pass": bool(accepted_audits)
+        and len(audit_hashes) == len(accepted_audits)
+        and all(audit.get("pass") is True for audit in accepted_audits),
+        "accepted_segment_audit_count": len(accepted_audits),
+        "audited_segment_turn_count": sum(
+            int(scope.get("solver_visible_turn_count") or 0)
+            for scope in segment_scopes
+        ),
+        "short_or_empty_body_count": sum(
+            int(scope.get("short_or_empty_body_count") or 0)
+            for scope in segment_scopes
+        ),
+        "short_or_empty_body_is_diagnostic_only": True,
+        "canonical_support_prefix_stripped_count": sum(
+            int(scope.get("canonical_support_prefix_stripped_count") or 0)
+            for scope in segment_scopes
+        ),
+        "final_cumulative_solver_visible_turn_count": int(
+            final_cumulative.get("solver_visible_turn_count") or 0
+        ),
+        "accepted_concentrated_prefix_count": sum(
+            int(audit.get("rejected_prefix_count") or 0)
+            for audit in accepted_audits
+            if isinstance(audit, dict)
+        ),
+        "prefix_token_lengths": list(FORMAL_SEGMENT_OPENING_PREFIX_TOKEN_LENGTHS),
+        "segment_minimum_repeated_prefix_count": (
+            FORMAL_SEGMENT_OPENING_SEGMENT_MIN_COUNT
+        ),
+        "cumulative_minimum_repeated_prefix_count": (
+            FORMAL_SEGMENT_OPENING_CUMULATIVE_MIN_COUNT
+        ),
+        "maximum_allowed_share": FORMAL_SEGMENT_OPENING_MAX_SHARE,
+        "canonical_support_prefix_source": "validated_marker_to_exact_claim",
+        "accepted_segment_audit_sha256": audit_hashes,
+    }
+    summary["summary_sha256"] = hashlib.sha256(
+        json.dumps(summary, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    return summary
+
+
+def audit_formal_dialogue_segment_graph_fact_isolation(
+    turns: list[dict[str, Any]],
+    *,
+    assigned_markers: set[str],
+    anchor_to_event: dict[str, str],
+    current_event_plan: dict[str, Any],
+    marker_to_exact_claim: dict[str, str],
+) -> dict[str, Any]:
+    """Keep canonical graph evidence isolated from unmarked filler turns.
+
+    Marked evidence text must be exactly its locally generated canonical claim.
+    A neutral turn is rejected when it repeats an exact entity+value pair or an
+    exact entity+slot+status triple. These narrow surfaces catch answer-bearing
+    restatements without rejecting ordinary topic overlap.
+    """
+
+    events_by_id = {
+        normalize_space(event.get("event_instance_id")): event
+        for event in current_event_plan.get("events") or []
+        if isinstance(event, dict)
+        and normalize_space(event.get("event_instance_id"))
+    }
+    violations: list[dict[str, Any]] = []
+    audited_marked_turn_count = 0
+    audited_neutral_turn_count = 0
+    for turn_index, turn in enumerate(turns):
+        if not isinstance(turn, dict):
+            continue
+        raw_anchors = turn.get("alignment_anchors")
+        anchors = (
+            [normalize_space(item) for item in raw_anchors if normalize_space(item)]
+            if isinstance(raw_anchors, list)
+            else []
+        )
+        raw_text = str(turn.get("text") or "").strip()
+        normalized_turn = f" {normalize_text(raw_text)} "
+        if anchors:
+            audited_marked_turn_count += 1
+            marker = anchors[0] if len(anchors) == 1 else ""
+            expected_claim = marker_to_exact_claim.get(marker, "")
+            if marker in assigned_markers and expected_claim and raw_text != expected_claim:
+                violations.append(
+                    {
+                        "reason": "marked_turn_text_not_exact_claim",
+                        "turn_index": turn_index,
+                        "marker": marker,
+                        "expected_claim_sha256": hashlib.sha256(
+                            expected_claim.encode("utf-8")
+                        ).hexdigest(),
+                        "actual_text_sha256": hashlib.sha256(
+                            raw_text.encode("utf-8")
+                        ).hexdigest(),
+                    }
+                )
+            continue
+
+        audited_neutral_turn_count += 1
+        for marker, event_id in anchor_to_event.items():
+            event = events_by_id.get(normalize_space(event_id))
+            if not isinstance(event, dict):
+                continue
+            entity = _dialogue_contract_component(event.get("entity"))
+            value = _dialogue_contract_component(
+                event.get("dialogue_value")
+                if event.get("dialogue_value") is not None
+                else event.get("value")
+            )
+            slot = _dialogue_contract_component(event.get("slot"))
+            status = _dialogue_contract_component(event.get("status"))
+            entity_key = normalize_text(entity)
+            value_key = normalize_text(value)
+            slot_key = normalize_text(slot)
+            status_key = normalize_text(status)
+            entity_value_exposed = bool(
+                entity_key
+                and value_key
+                and entity_key != value_key
+                and f" {entity_key} " in normalized_turn
+                and f" {value_key} " in normalized_turn
+            )
+            entity_slot_status_exposed = bool(
+                entity_key
+                and slot_key
+                and status_key
+                and len({entity_key, slot_key, status_key}) == 3
+                and f" {entity_key} " in normalized_turn
+                and f" {slot_key} " in normalized_turn
+                and f" {status_key} " in normalized_turn
+            )
+            if entity_value_exposed or entity_slot_status_exposed:
+                violations.append(
+                    {
+                        "reason": "neutral_graph_fact_surface_exposure",
+                        "turn_index": turn_index,
+                        "event_instance_id": normalize_space(event_id),
+                        "marker": normalize_space(marker),
+                        "matched_surface": (
+                            "entity+value"
+                            if entity_value_exposed
+                            else "entity+slot+status"
+                        ),
+                    }
+                )
+
+    audit = {
+        "schema_version": FORMAL_SEGMENT_GRAPH_FACT_ISOLATION_AUDIT_VERSION,
+        "pass": not violations,
+        "audited_marked_turn_count": audited_marked_turn_count,
+        "audited_neutral_turn_count": audited_neutral_turn_count,
+        "violation_count": len(violations),
+        "violations": violations,
+    }
+    audit["audit_sha256"] = hashlib.sha256(
+        json.dumps(
+            audit,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return audit
+
+
+def validate_formal_dialogue_segment(
+    proposal: dict[str, Any] | None,
+    *,
+    expected_turn_count: int | None = None,
+    assigned_markers: set[str],
+    anchor_to_event: dict[str, str],
+    current_event_plan: dict[str, Any],
+    frozen_prefix_turns: list[dict[str, Any]],
+    accepted_appended_turns: list[dict[str, Any]] | None = None,
+    marker_to_exact_claim: dict[str, str] | None = None,
+    duplicate_marker_to_exact_claim: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Validate one uncommitted segment before extending the frozen prefix hash chain."""
+
+    if not isinstance(proposal, dict):
+        return {"pass": False, "reason": "segment_payload_missing"}
+    if proposal.get("qa_proposal") not in (None, {}):
+        return {"pass": False, "reason": "qa_returned_before_final_alignment"}
+    expected_top_level_keys = {"appended_dialogue_turns_segment"}
+    actual_top_level_keys = set(proposal)
+    if actual_top_level_keys != expected_top_level_keys:
+        return {
+            "pass": False,
+            "reason": "segment_top_level_schema_mismatch",
+            "missing_top_level_keys": sorted(
+                expected_top_level_keys - actual_top_level_keys
+            ),
+            "unexpected_top_level_keys": sorted(
+                actual_top_level_keys - expected_top_level_keys
+            ),
+        }
+    raw_turns = proposal.get("appended_dialogue_turns_segment")
+    turns = _as_dialogue_list(raw_turns)
+    if not turns:
+        return {"pass": False, "reason": "empty_dialogue_segment"}
+    if expected_turn_count is not None and len(turns) != int(expected_turn_count):
+        return {
+            "pass": False,
+            "reason": "segment_turn_count_mismatch",
+            "expected_turn_count": int(expected_turn_count),
+            "actual_turn_count": len(turns),
+        }
+    normalized_proposal, neutral_sidecar_normalization = (
+        normalize_formal_segment_neutral_sidecars(proposal)
+    )
+    if neutral_sidecar_normalization.get("dialogue_content_preserved") is not True:
+        return {
+            "pass": False,
+            "reason": "neutral_sidecar_normalizer_changed_dialogue_content",
+            "neutral_sidecar_normalization": neutral_sidecar_normalization,
+        }
+    normalized_proposal, quote_normalization = normalize_formal_segment_sidecar_support_quotes(
+        normalized_proposal,
+        assigned_markers=assigned_markers,
+        marker_to_exact_claim=marker_to_exact_claim or {},
+        anchor_to_event=anchor_to_event,
+        current_event_plan=current_event_plan,
+    )
+    if quote_normalization.get("dialogue_content_preserved") is not True:
+        return {
+            "pass": False,
+            "reason": "sidecar_quote_normalizer_changed_dialogue_content",
+            "sidecar_quote_normalization": quote_normalization,
+        }
+    turns = _as_dialogue_list(
+        normalized_proposal.get("appended_dialogue_turns_segment")
+    )
+
+    marker_occurrences: Counter[str] = Counter()
+    for turn_index, turn in enumerate(turns):
+        if not isinstance(turn, dict):
+            return {
+                "pass": False,
+                "reason": "segment_turn_not_object",
+                "turn_index": turn_index,
+            }
+        raw_anchors = turn.get("alignment_anchors")
+        support_quotes = turn.get("support_quotes")
+        if not isinstance(raw_anchors, list) or not isinstance(support_quotes, dict):
+            return {
+                "pass": False,
+                "reason": "segment_sidecar_type_mismatch",
+                "turn_index": turn_index,
+                "neutral_sidecar_normalization": neutral_sidecar_normalization,
+            }
+        anchors = [normalize_space(marker) for marker in raw_anchors]
+        if any(not marker for marker in anchors) or len(anchors) != len(set(anchors)):
+            return {
+                "pass": False,
+                "reason": "segment_invalid_anchor_list",
+                "turn_index": turn_index,
+            }
+        if not anchors:
+            if support_quotes:
+                return {
+                    "pass": False,
+                    "reason": "neutral_turn_has_support_sidecar",
+                    "turn_index": turn_index,
+                }
+            continue
+        invalid_turn_markers = sorted(
+            {marker for marker in anchors if marker not in assigned_markers}
+        )
+        if invalid_turn_markers:
+            return {
+                "pass": False,
+                "reason": "invalid_segment_anchor",
+                "turn_index": turn_index,
+                "invalid_markers": invalid_turn_markers,
+            }
+        if len(anchors) != 1:
+            return {
+                "pass": False,
+                "reason": "segment_turn_has_multiple_markers",
+                "turn_index": turn_index,
+                "markers": anchors,
+            }
+        marker = anchors[0]
+        marker_occurrences[marker] += 1
+        if set(support_quotes) != {marker}:
+            return {
+                "pass": False,
+                "reason": "segment_support_quote_keys_mismatch",
+                "turn_index": turn_index,
+                "marker": marker,
+            }
+        quote = support_quotes.get(marker)
+        if not isinstance(quote, str) or not normalize_space(quote):
+            return {
+                "pass": False,
+                "reason": "segment_support_quote_missing",
+                "turn_index": turn_index,
+                "marker": marker,
+            }
+    wrong_occurrence_counts = {
+        marker: int(marker_occurrences.get(marker, 0))
+        for marker in sorted(assigned_markers)
+        if int(marker_occurrences.get(marker, 0)) != 1
+    }
+    if wrong_occurrence_counts:
+        return {
+            "pass": False,
+            "reason": "assigned_marker_occurrence_count_mismatch",
+            "marker_occurrence_counts": wrong_occurrence_counts,
+        }
+
+    explicit_sidecar_markers: set[str] = set()
+    for turn in turns:
+        sidecar = turn.get("alignment_anchors") if isinstance(turn, dict) else None
+        if isinstance(sidecar, list):
+            explicit_sidecar_markers.update(normalize_space(item) for item in sidecar if normalize_space(item))
+        elif isinstance(sidecar, str) and normalize_space(sidecar):
+            explicit_sidecar_markers.add(normalize_space(sidecar))
+    annotations = parse_anchor_annotations(
+        turns,
+        anchor_to_event,
+        proposal.get("event_alignment_proposal_segment"),
+        prefer_sidecar_when_complete=False,
+    )
+    seen = set(annotations.get("current_anchor_seen") or [])
+    invalid = set(annotations.get("invalid_anchors") or [])
+    missing = set(assigned_markers) - explicit_sidecar_markers
+    unexpected = seen - set(assigned_markers)
+    if invalid:
+        return {"pass": False, "reason": "invalid_segment_anchor", "invalid_markers": sorted(invalid)}
+    if missing:
+        return {"pass": False, "reason": "missing_segment_anchor", "missing_markers": sorted(missing)}
+    if unexpected:
+        return {"pass": False, "reason": "unexpected_segment_anchor", "unexpected_markers": sorted(unexpected)}
+
+    event_by_id = {
+        normalize_space(event.get("event_instance_id")): event
+        for event in current_event_plan.get("events") or []
+        if isinstance(event, dict) and normalize_space(event.get("event_instance_id"))
+    }
+    assigned_turn_indices: dict[str, int] = {}
+    for annotation in annotations.get("proposals") or []:
+        if not isinstance(annotation, dict):
+            continue
+        marker = normalize_space(annotation.get("alignment_anchor"))
+        if marker not in assigned_markers or marker in assigned_turn_indices:
+            continue
+        index = _resolve_turn_index(annotation.get("turn_index"), turns)
+        if index is None:
+            continue
+        quote = normalize_space(annotation.get("support_quote"))
+        turn_text = normalize_space(turns[index].get("text"))
+        speaker = normalize_space(turns[index].get("speaker"))
+        evidence_surface = f"{speaker}: {turn_text}" if speaker else turn_text
+        event = event_by_id.get(anchor_to_event.get(marker, ""))
+        quote_exact = bool(quote and normalize_text(quote) in normalize_text(turn_text))
+        if not quote_exact or not isinstance(event, dict) or not _event_lexical_supported(
+            event,
+            evidence_surface,
+        ):
+            continue
+        assigned_turn_indices[marker] = index
+    unsupported = set(assigned_markers) - set(assigned_turn_indices)
+    if unsupported:
+        return {
+            "pass": False,
+            "reason": "unsupported_segment_alignment",
+            "unsupported_markers": sorted(unsupported),
+            "sidecar_quote_normalization": quote_normalization,
+        }
+    if len(set(assigned_turn_indices.values())) != len(assigned_turn_indices):
+        return {"pass": False, "reason": "segment_required_events_share_turn"}
+
+    graph_fact_isolation_audit = audit_formal_dialogue_segment_graph_fact_isolation(
+        turns,
+        assigned_markers=assigned_markers,
+        anchor_to_event=anchor_to_event,
+        current_event_plan=current_event_plan,
+        marker_to_exact_claim=marker_to_exact_claim or {},
+    )
+    if graph_fact_isolation_audit.get("pass") is not True:
+        first_violation = (graph_fact_isolation_audit.get("violations") or [{}])[0]
+        return {
+            "pass": False,
+            "reason": first_violation.get("reason")
+            or "segment_graph_fact_isolation_failed",
+            "turn_indices": sorted(
+                {
+                    int(item["turn_index"])
+                    for item in graph_fact_isolation_audit.get("violations") or []
+                    if isinstance(item, dict)
+                    and isinstance(item.get("turn_index"), int)
+                }
+            ),
+            "graph_fact_isolation_audit": graph_fact_isolation_audit,
+        }
+
+    clean_turns = strip_alignment_anchors_from_dialogue(turns)
+    meta_ok, meta_details = assert_no_meta_leakage(clean_turns)
+    if not meta_ok:
+        return {"pass": False, "reason": "segment_meta_leak", "meta_details": meta_details}
+    if count_anchor_leakage_in_turns(clean_turns, anchor_to_event):
+        return {"pass": False, "reason": "segment_anchor_leak"}
+    duplicate_audit = audit_formal_dialogue_segment_turn_duplicates(
+        turns,
+        frozen_prefix_turns,
+        duplicate_marker_to_exact_claim or marker_to_exact_claim or {},
+    )
+    if duplicate_audit["exact_duplicate_pair_count"]:
+        exact_pairs = duplicate_audit["exact_duplicate_pairs"]
+        has_within_segment_pair = any(
+            pair.get("right_scope") == "segment" for pair in exact_pairs
+        )
+        return {
+            "pass": False,
+            "reason": (
+                "segment_exact_duplicate_turn"
+                if has_within_segment_pair
+                else "frozen_prefix_turn_repeated"
+            ),
+            "turn_indices": sorted({int(pair["left_index"]) for pair in exact_pairs}),
+            "duplicate_pairs": exact_pairs,
+            "turn_duplicate_audit": duplicate_audit,
+        }
+    if duplicate_audit["near_duplicate_pair_count"]:
+        near_pairs = duplicate_audit["near_duplicate_pairs"]
+        return {
+            "pass": False,
+            "reason": "segment_near_duplicate_turn",
+            "turn_indices": sorted({int(pair["left_index"]) for pair in near_pairs}),
+            "near_duplicate_pairs": near_pairs,
+            "turn_duplicate_audit": duplicate_audit,
+        }
+    if duplicate_audit["phrase_containment_pair_count"]:
+        phrase_pairs = duplicate_audit["phrase_containment_pairs"]
+        return {
+            "pass": False,
+            "reason": "segment_phrase_containment_duplicate_turn",
+            "turn_indices": sorted({int(pair["left_index"]) for pair in phrase_pairs}),
+            "phrase_containment_pairs": phrase_pairs,
+            "turn_duplicate_audit": duplicate_audit,
+        }
+    opening_diversity_audit = audit_formal_dialogue_segment_opening_diversity(
+        turns,
+        accepted_appended_turns or [],
+        duplicate_marker_to_exact_claim or marker_to_exact_claim or {},
+    )
+    if opening_diversity_audit.get("pass") is not True:
+        return {
+            "pass": False,
+            "reason": opening_diversity_audit.get("reason"),
+            "opening_diversity_audit": opening_diversity_audit,
+            "turn_duplicate_audit": duplicate_audit,
+        }
+    return {
+        "pass": True,
+        "reason": "ok",
+        "marked_turns": turns,
+        "clean_turns": clean_turns,
+        "seen_markers": sorted(seen),
+        "assigned_turn_indices": assigned_turn_indices,
+        "expected_turn_count": expected_turn_count,
+        "actual_turn_count": len(turns),
+        "assigned_marker_occurrence_counts": {
+            marker: int(marker_occurrences.get(marker, 0))
+            for marker in sorted(assigned_markers)
+        },
+        "neutral_sidecar_normalization": neutral_sidecar_normalization,
+        "sidecar_quote_normalization": quote_normalization,
+        "graph_fact_isolation_audit": graph_fact_isolation_audit,
+        "turn_duplicate_audit": duplicate_audit,
+        "opening_diversity_audit": opening_diversity_audit,
+    }
+
+
+def _formal_segment_exact_claim_map(
+    assigned_items: Iterable[dict[str, Any]],
+) -> dict[str, str]:
+    """Bind each assigned marker to the exact claim the API must copy into new text."""
+
+    marker_to_claim: dict[str, str] = {}
+    for item in assigned_items:
+        if not isinstance(item, dict):
+            continue
+        marker = normalize_space(item.get("marker"))
+        claim = normalize_space(item.get("natural_support_claim_to_include"))
+        if marker and claim:
+            marker_to_claim[marker] = claim
+    return marker_to_claim
+
+
+def _formal_claim_surface_component(value: Any, *, lowercase_initial: bool = False) -> str:
+    """Render one graph fact component without exposing structured schema syntax."""
+
+    if value is None or isinstance(value, dict):
+        return ""
+    if isinstance(value, (list, tuple, set)):
+        rendered_items = [
+            _formal_claim_surface_component(item)
+            for item in value
+        ]
+        rendered_items = [item for item in rendered_items if item]
+        if not rendered_items:
+            return ""
+        if len(rendered_items) == 1:
+            rendered = rendered_items[0]
+        elif len(rendered_items) == 2:
+            rendered = f"{rendered_items[0]} and {rendered_items[1]}"
+        else:
+            rendered = f"{', '.join(rendered_items[:-1])}, and {rendered_items[-1]}"
+    else:
+        raw = str(value)
+        # API graph entities and slots sometimes use snake_case identifiers. They are
+        # semantic labels, but the underscores are not natural solver-visible prose.
+        raw = re.sub(r"(?<=\w)_(?=\w)", " ", raw)
+        rendered = sanitize_internal_text(raw)
+    rendered = normalize_space(rendered)
+    if lowercase_initial and rendered and str(value)[:1].islower():
+        rendered = rendered[:1].lower() + rendered[1:]
+    return rendered
+
+
+def _formal_canonical_exact_claim(
+    event: dict[str, Any],
+    *,
+    event_by_id: dict[str, dict[str, Any]] | None = None,
+) -> str:
+    """Build a natural claim that explicitly carries the validator's fact fields."""
+
+    entity = _formal_claim_surface_component(event.get("entity"), lowercase_initial=True)
+    slot = _formal_claim_surface_component(event.get("slot"), lowercase_initial=True)
+    value = _formal_claim_surface_component(
+        event.get("dialogue_value")
+        if event.get("dialogue_value") is not None
+        else event.get("value")
+    )
+    if not (entity and slot and value):
+        return ""
+
+    membership = event.get("set_membership")
+    if isinstance(membership, dict) and isinstance(membership.get("included"), bool):
+        condition = _formal_claim_surface_component(
+            membership.get("condition"),
+            lowercase_initial=True,
+        )
+        if condition:
+            inclusion = (
+                "qualifies for" if membership["included"] else "does not qualify for"
+            )
+            claim = (
+                f"Regarding {entity}, {value} {inclusion} the {slot} list "
+                f"under the condition that {condition}."
+            )
+        else:
+            inclusion = (
+                "is included in"
+                if membership["included"]
+                else "is not included in"
+            )
+            claim = f"Regarding {entity}, {value} {inclusion} the {slot} list."
+    else:
+        status = normalize_space(event.get("status") or "active")
+        if status == "restored":
+            claim = f"Regarding {entity}, the {slot} has been restored to {value}."
+        else:
+            claim = f"Regarding {entity}, the {slot} is {value}."
+
+    status = normalize_space(event.get("status") or "active")
+    status_suffix = _status_natural_suffix(status)
+    if status_suffix:
+        claim = _append_distinct_natural_contract_surfaces(claim, [status_suffix])
+
+    scope_surface = _dialogue_scope_surface(event.get("scope"))
+    dependency_surfaces: list[str] = []
+    raw_dependencies = event.get("depends_on")
+    if isinstance(raw_dependencies, list) and isinstance(event_by_id, dict):
+        dependency_surfaces = [
+            _dialogue_dependency_surface(event_by_id[dependency_id])
+            for dependency_id in (
+                normalize_space(raw_dependency)
+                for raw_dependency in raw_dependencies
+            )
+            if dependency_id in event_by_id
+        ]
+    if not dependency_surfaces and isinstance(
+        event.get("dependency_facts_to_express"), list
+    ):
+        dependency_surfaces = [
+            normalize_space(surface)
+            for surface in event["dependency_facts_to_express"]
+            if normalize_space(surface)
+        ]
+    claim = _append_distinct_natural_contract_surfaces(
+        claim,
+        [scope_surface, *dependency_surfaces],
+    )
+
+    return sanitize_internal_text(claim)
+
+
+def formal_segment_exact_claim_preflight(
+    current_event_plan: dict[str, Any],
+    dialogue_plan: dict[str, Any],
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Validate or canonically complete every exact claim before any segment API call."""
+
+    validated_plan = copy.deepcopy(dialogue_plan)
+    source_by_id = {
+        normalize_space(event.get("event_instance_id")): event
+        for event in current_event_plan.get("events") or []
+        if isinstance(event, dict) and normalize_space(event.get("event_instance_id"))
+    }
+    provenance: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    validated_claim_map: dict[str, str] = {}
+    original_accept_count = 0
+    canonical_rewrite_count = 0
+    required_event_count = 0
+    comparison_operation = normalize_space(current_event_plan.get("operation")) == "comparison"
+
+    for prompt_event in validated_plan.get("events") or []:
+        if not isinstance(prompt_event, dict) or prompt_event.get("required") is False:
+            continue
+        required_event_count += 1
+        event_id = normalize_space(prompt_event.get("event_instance_id"))
+        marker = normalize_space(prompt_event.get("marker"))
+        source_event = source_by_id.get(event_id)
+        original_claim = normalize_space(prompt_event.get("dialogue_support_claim"))
+        original_meta_clean = False
+        original_lexical_supported = False
+        if isinstance(source_event, dict) and original_claim:
+            original_meta_clean, _ = assert_no_meta_leakage([{"text": original_claim}])
+            original_lexical_supported = _event_lexical_supported(source_event, original_claim)
+
+        source_fact_value = (
+            source_event.get("value") if isinstance(source_event, dict) else None
+        )
+        prefer_canonical_integer_comparison = (
+            comparison_operation
+            and isinstance(source_fact_value, int)
+            and not isinstance(source_fact_value, bool)
+        )
+        prefer_canonical_reasoning_contract = bool(
+            isinstance(source_event, dict)
+            and (
+                source_event.get("depends_on")
+                or isinstance(source_event.get("scope"), dict)
+                and bool(source_event.get("scope"))
+                or isinstance(source_event.get("set_membership"), dict)
+            )
+        )
+
+        validated_claim = ""
+        claim_source = ""
+        canonical_claim = ""
+        canonical_meta_clean = False
+        canonical_lexical_supported = False
+        if isinstance(source_event, dict) and (
+            prefer_canonical_integer_comparison
+            or prefer_canonical_reasoning_contract
+            or not (original_meta_clean and original_lexical_supported)
+        ):
+            canonical_claim = _formal_canonical_exact_claim(
+                source_event,
+                event_by_id=source_by_id,
+            )
+            if canonical_claim:
+                canonical_meta_clean, _ = assert_no_meta_leakage(
+                    [{"text": canonical_claim}]
+                )
+                canonical_lexical_supported = _event_lexical_supported(
+                    source_event,
+                    canonical_claim,
+                )
+        if canonical_meta_clean and canonical_lexical_supported:
+            validated_claim = canonical_claim
+            claim_source = "canonical_entity_slot_value_status"
+            canonical_rewrite_count += 1
+            canonical_status = normalize_space(source_event.get("status") or "active")
+            canonical_suffix = _formal_status_suffix_surface(canonical_status)
+            if canonical_suffix and normalize_text(canonical_suffix) in normalize_text(
+                canonical_claim
+            ):
+                prompt_event["local_claim_transform_provenance"] = {
+                    "schema_version": FORMAL_LOCAL_SPAN_PROVENANCE_VERSION,
+                    "source": "local_canonical_status_suffix",
+                    "status": canonical_status,
+                    "suffix_appended": True,
+                    "suffix_sha256": hashlib.sha256(
+                        canonical_suffix.casefold().encode("utf-8")
+                    ).hexdigest(),
+                    "suffix_char_count": len(canonical_suffix),
+                    "claim_sha256": hashlib.sha256(
+                        normalize_space(canonical_claim).casefold().encode("utf-8")
+                    ).hexdigest(),
+                }
+        elif original_meta_clean and original_lexical_supported:
+            validated_claim = original_claim
+            claim_source = "original_dialogue_support_claim"
+            original_accept_count += 1
+
+        entry = {
+            "event_instance_id": event_id,
+            "fact_id": normalize_space(prompt_event.get("fact_id")),
+            "marker": marker,
+            "status": normalize_space(
+                source_event.get("status") if isinstance(source_event, dict) else ""
+            ),
+            "original_claim": original_claim,
+            "original_meta_clean": original_meta_clean,
+            "original_lexical_supported": original_lexical_supported,
+            "canonical_claim": canonical_claim or None,
+            "canonical_meta_clean": canonical_meta_clean,
+            "canonical_lexical_supported": canonical_lexical_supported,
+            "validated_claim": validated_claim or None,
+            "claim_source": claim_source or None,
+            "claim_changed": bool(validated_claim and validated_claim != original_claim),
+        }
+        provenance.append(entry)
+        if not (source_event and marker and validated_claim):
+            failure_reason = (
+                "source_event_missing"
+                if not isinstance(source_event, dict)
+                else "marker_missing"
+                if not marker
+                else "no_meta_clean_lexically_supported_claim"
+            )
+            failures.append(
+                {
+                    "event_instance_id": event_id,
+                    "fact_id": normalize_space(prompt_event.get("fact_id")),
+                    "marker": marker,
+                    "reason": failure_reason,
+                }
+            )
+            continue
+        prompt_event["dialogue_support_claim"] = validated_claim
+        validated_claim_map[marker] = validated_claim
+
+    diagnostics = {
+        "schema_version": FORMAL_SEGMENT_EXACT_CLAIM_PREFLIGHT_VERSION,
+        "pass": not failures and required_event_count > 0,
+        "graph_snapshot_hash": normalize_space(current_event_plan.get("graph_snapshot_hash")),
+        "required_event_count": required_event_count,
+        "validated_event_count": len(validated_claim_map),
+        "original_claim_accept_count": original_accept_count,
+        "canonical_claim_rewrite_count": canonical_rewrite_count,
+        "failure_count": len(failures),
+        "validated_claim_map_sha256": hashlib.sha256(
+            json.dumps(
+                validated_claim_map,
+                ensure_ascii=False,
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest(),
+        "claim_provenance": provenance,
+        "failures": failures,
+    }
+    if not diagnostics["pass"]:
+        return None, diagnostics
+    return validated_plan, diagnostics
+
+
+def _formal_bounded_opening_prefix(value: Any) -> str:
+    tokens = _normalize_formal_segment_turn_text(value).split()
+    if len(tokens) not in FORMAL_SEGMENT_OPENING_PREFIX_TOKEN_LENGTHS:
+        return ""
+    return " ".join(tokens)
+
+
+def _formal_extend_forbidden_opening_prefixes(
+    target: list[str],
+    candidates: Iterable[Any],
+) -> None:
+    for candidate in candidates:
+        prefix = _formal_bounded_opening_prefix(candidate)
+        if not prefix or prefix in target:
+            continue
+        if len(target) >= FORMAL_DIALOGUE_FORBIDDEN_OPENING_PREFIX_LIMIT:
+            return
+        target.append(prefix)
+
+
+def _formal_failed_candidate_opening_prefixes(
+    payload: dict[str, Any] | None,
+    validation: dict[str, Any],
+    marker_to_exact_claim: dict[str, str],
+) -> list[str]:
+    """Extract only bounded candidate openings; never replay failed turn prose."""
+
+    turns = _as_dialogue_list(
+        payload.get("appended_dialogue_turns_segment")
+        if isinstance(payload, dict)
+        else None
+    )
+    candidate_indices: set[int] = {
+        int(index)
+        for index in validation.get("turn_indices") or []
+        if isinstance(index, int) and index >= 0
+    }
+    for pair_key in (
+        "duplicate_pairs",
+        "near_duplicate_pairs",
+        "phrase_containment_pairs",
+    ):
+        for pair in validation.get(pair_key) or []:
+            if not isinstance(pair, dict):
+                continue
+            for side in ("left", "right"):
+                index = pair.get(f"{side}_index")
+                if pair.get(f"{side}_scope") == "segment" and isinstance(index, int):
+                    candidate_indices.add(index)
+
+    prefixes: list[str] = []
+    for index in sorted(candidate_indices):
+        if index < 0 or index >= len(turns) or not isinstance(turns[index], dict):
+            continue
+        body_tokens, _ = _formal_segment_opening_comparison_body(
+            turns[index],
+            marker_to_exact_claim,
+        )
+        for width in FORMAL_SEGMENT_OPENING_PREFIX_TOKEN_LENGTHS:
+            if len(body_tokens) >= width:
+                _formal_extend_forbidden_opening_prefixes(
+                    prefixes,
+                    [" ".join(body_tokens[:width])],
+                )
+    return prefixes
+
+
+def compact_formal_dialogue_retry_context(
+    retry_source: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Keep outer-retry diagnostics while excluding every generated text payload."""
+
+    if not isinstance(retry_source, dict):
+        return None
+    if (
+        retry_source.get("schema_version")
+        == FORMAL_DIALOGUE_COMPACT_RETRY_CONTEXT_VERSION
+        and retry_source.get("raw_failure_text_included") is False
+    ):
+        return copy.deepcopy(retry_source)
+
+    source = (
+        retry_source.get("dialogue_meta")
+        if isinstance(retry_source.get("dialogue_meta"), dict)
+        else retry_source
+    )
+    last_failure = (
+        source.get("last_failure")
+        if isinstance(source.get("last_failure"), dict)
+        else {}
+    )
+    retry_diversity = (
+        source.get("retry_diversity_diagnostics")
+        if isinstance(source.get("retry_diversity_diagnostics"), dict)
+        else {}
+    )
+    forbidden_openings: list[str] = []
+    _formal_extend_forbidden_opening_prefixes(
+        forbidden_openings,
+        list(last_failure.get("forbidden_opening_prefixes") or [])
+        + list(retry_diversity.get("forbidden_opening_prefixes") or []),
+    )
+    raw_previous_error = normalize_space(retry_source.get("previous_error"))
+    raw_reason = normalize_space(
+        last_failure.get("reason")
+        or source.get("error_type")
+        or source.get("reason")
+        or retry_source.get("reason")
+    )
+    reason = (
+        raw_reason.casefold()
+        if re.fullmatch(r"[A-Za-z0-9_:\-]{1,96}", raw_reason)
+        else "formal_dialogue_retry"
+    )
+    context = {
+        "schema_version": FORMAL_DIALOGUE_COMPACT_RETRY_CONTEXT_VERSION,
+        "reason": reason,
+        "failed_segment_index": (
+            source.get("failed_segment_index")
+            if isinstance(source.get("failed_segment_index"), int)
+            else last_failure.get("segment_index")
+            if isinstance(last_failure.get("segment_index"), int)
+            else None
+        ),
+        "failed_segment_attempt": (
+            last_failure.get("segment_attempt")
+            if isinstance(last_failure.get("segment_attempt"), int)
+            else None
+        ),
+        "segment_api_call_count": int(source.get("segment_api_call_count") or 0),
+        "last_retry_generation_id": normalize_space(
+            last_failure.get("retry_generation_id")
+        )
+        or None,
+        "forbidden_opening_prefixes": forbidden_openings,
+        "previous_error_sha256": (
+            hashlib.sha256(raw_previous_error.casefold().encode("utf-8")).hexdigest()
+            if raw_previous_error
+            else None
+        ),
+        "raw_reason_sha256": (
+            hashlib.sha256(raw_reason.casefold().encode("utf-8")).hexdigest()
+            if raw_reason
+            else None
+        ),
+        "raw_failure_text_included": False,
+        "raw_payload_included": False,
+    }
+    context["context_sha256"] = hashlib.sha256(
+        json.dumps(
+            context,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return context
+
+
+def _formal_segment_retry_contract(
+    last_failure: dict[str, Any] | None,
+    assigned_items: Iterable[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Turn alignment failures into a marker-specific regeneration contract."""
+
+    if not isinstance(last_failure, dict):
+        return None
+    reason = normalize_space(last_failure.get("reason"))
+    if reason in {
+        "frozen_prefix_turn_repeated",
+        "segment_exact_duplicate_turn",
+        "segment_near_duplicate_turn",
+        "segment_phrase_containment_duplicate_turn",
+    }:
+        duplicate_pairs = copy.deepcopy(
+            last_failure.get("duplicate_pairs")
+            or last_failure.get("near_duplicate_pairs")
+            or last_failure.get("phrase_containment_pairs")
+            or []
+        )
+        return {
+            "reason": reason,
+            "regenerate_entire_uncommitted_segment": True,
+            "repeated_turn_indices": copy.deepcopy(last_failure.get("turn_indices") or []),
+            "duplicate_pairs": duplicate_pairs,
+            "forbidden_opening_prefixes": copy.deepcopy(
+                last_failure.get("forbidden_opening_prefixes") or []
+            ),
+            "duplicate_audit_schema_version": FORMAL_SEGMENT_TURN_DUPLICATE_AUDIT_VERSION,
+            "required_repairs": [
+                "Regenerate the entire uncommitted segment as a completely new segment; do not silently delete or patch only the flagged turns.",
+                "Do not copy, quote, paraphrase closely, or expand any prior accepted turn or another turn in this segment.",
+                "Do not begin any returned turn with a normalized 3-4 token string listed in forbidden_opening_prefixes.",
+                "Keep only continuity of topic and frozen facts. Every returned turn must contribute distinct semantic information using new wording and sentence structure.",
+                "Return the full requested multi-turn segment, not a correction note or a single replacement turn.",
+            ],
+        }
+    if reason in {
+        "segment_opening_prefix_concentration",
+        "cumulative_opening_prefix_concentration",
+    }:
+        opening_audit = (
+            last_failure.get("opening_diversity_audit")
+            if isinstance(last_failure.get("opening_diversity_audit"), dict)
+            else {}
+        )
+        return {
+            "reason": reason,
+            "regenerate_entire_uncommitted_segment": True,
+            "opening_diversity_audit_schema_version": (
+                FORMAL_SEGMENT_OPENING_DIVERSITY_AUDIT_VERSION
+            ),
+            "rejected_opening_prefixes": copy.deepcopy(
+                (opening_audit or {}).get("rejected_prefixes") or []
+            ),
+            "forbidden_opening_prefixes": copy.deepcopy(
+                last_failure.get("forbidden_opening_prefixes") or []
+            ),
+            "required_repairs": [
+                "Regenerate the entire uncommitted segment; do not delete only the turns sharing an opening.",
+                "Use varied opening constructions, sentence syntax, discourse functions, and topic transitions across the complete segment.",
+                "Do not cycle through frames such as 'I'm going to ...', 'I think ...', or 'That's ...'.",
+                "Do not begin any returned turn with a normalized 3-4 token string listed in forbidden_opening_prefixes.",
+                "Keep every assigned evidence turn equal to its exact claim and add no body text to that marked turn; exact claims are excluded from the opening audit.",
+                "Return the full requested multi-turn segment and preserve every existing graph, alignment, support-quote, and length requirement.",
+            ],
+        }
+    if reason in {
+        "marked_turn_text_not_exact_claim",
+        "neutral_graph_fact_surface_exposure",
+    }:
+        isolation_audit = (
+            last_failure.get("graph_fact_isolation_audit")
+            if isinstance(last_failure.get("graph_fact_isolation_audit"), dict)
+            else {}
+        )
+        return {
+            "reason": reason,
+            "regenerate_entire_uncommitted_segment": True,
+            "graph_fact_isolation_audit_schema_version": (
+                FORMAL_SEGMENT_GRAPH_FACT_ISOLATION_AUDIT_VERSION
+            ),
+            "rejected_turn_indices": copy.deepcopy(
+                last_failure.get("turn_indices") or []
+            ),
+            "violation_count": int(isolation_audit.get("violation_count") or 0),
+            "raw_rejected_turn_text_replayed": False,
+            "required_repairs": [
+                "Regenerate the entire uncommitted segment; never patch or delete only a flagged turn.",
+                "A marked evidence turn's text must equal its mapped exact natural support claim character-for-character and contain no prefix, suffix, explanation, or extra sentence.",
+                "A neutral turn must not state or paraphrase any tracked entity together with its tracked value, or together with its tracked slot and status; keep neutral context independent of every frozen graph fact.",
+                "Preserve the exact requested turn count and every assigned marker and support-quote contract.",
+            ],
+        }
+    if reason == "segment_turn_count_mismatch":
+        expected_turn_count = last_failure.get("expected_turn_count")
+        actual_turn_count = last_failure.get("actual_turn_count")
+        expected_turn_count = (
+            int(expected_turn_count)
+            if isinstance(expected_turn_count, int)
+            and not isinstance(expected_turn_count, bool)
+            and expected_turn_count > 0
+            else None
+        )
+        actual_turn_count = (
+            int(actual_turn_count)
+            if isinstance(actual_turn_count, int)
+            and not isinstance(actual_turn_count, bool)
+            and actual_turn_count >= 0
+            else None
+        )
+        assigned_marker_turn_count = len(
+            _formal_segment_exact_claim_map(assigned_items)
+        )
+        neutral_turn_count = (
+            max(0, expected_turn_count - assigned_marker_turn_count)
+            if expected_turn_count is not None
+            else None
+        )
+        return {
+            "reason": reason,
+            "regenerate_entire_uncommitted_segment": True,
+            "expected_turn_count": expected_turn_count,
+            "actual_turn_count": actual_turn_count,
+            "assigned_marker_turn_count": assigned_marker_turn_count,
+            "required_neutral_turn_count": neutral_turn_count,
+            "single_item_schema_example_forbidden": True,
+            "required_repairs": [
+                "Discard the incomplete array and regenerate the entire uncommitted segment; do not return only the assigned marked support turns.",
+                "Return exactly segment.requested_turns complete turn objects inside appended_dialogue_turns_segment, with neither fewer nor more objects.",
+                "Use one distinct turn for each assigned marker, then add the required number of substantive neutral turns with alignment_anchors=[] and support_quotes={} so the final array length is exact.",
+                "Count every array item before returning the JSON object. Do not return a one-item schema illustration, correction note, ellipsis, placeholder, or abbreviated continuation.",
+            ],
+        }
+    if reason in {"segment_payload_missing", "empty_dialogue_segment"}:
+        return {
+            "reason": reason,
+            "regenerate_entire_uncommitted_segment": True,
+            "required_repairs": [
+                "Return one JSON object whose appended_dialogue_turns_segment value is the complete requested list of new turns.",
+                "Do not return a single turn object, a correction note, or an alternate wrapper key.",
+                "Preserve every assigned marker contract in the regenerated full segment.",
+            ],
+        }
+
+    if reason in {"invalid_segment_anchor", "unexpected_segment_anchor"}:
+        allowed_markers = sorted(_formal_segment_exact_claim_map(assigned_items))
+        invalid_values = [
+            normalize_space(item)
+            for item in (
+                last_failure.get("invalid_markers")
+                or last_failure.get("unexpected_markers")
+                or []
+            )
+            if normalize_space(item)
+        ]
+        return {
+            "reason": reason,
+            "regenerate_entire_uncommitted_segment": True,
+            "allowed_exact_marker_strings": allowed_markers,
+            "invalid_or_unexpected_marker_count": len(invalid_values),
+            "invalid_or_unexpected_marker_sha256": hashlib.sha256(
+                json.dumps(
+                    invalid_values,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest(),
+            "invalid_marker_text_replayed": False,
+            "silent_anchor_normalization_forbidden": True,
+            "required_repairs": [
+                "Regenerate the entire uncommitted segment and use only the exact strings in allowed_exact_marker_strings as alignment marker values.",
+                "For a support turn, alignment_anchors must be exactly [its assigned marker] and support_quotes may contain exactly that marker key only.",
+                "For every neutral turn, set alignment_anchors=[] and support_quotes={}.",
+                "Names, places, geographic regions, numeric tokens, dates, quantities, graph values, and dialogue facts are never marker strings and must not appear in alignment_anchors or support_quotes keys.",
+                "Do not silently normalize, rename, infer, or delete an invalid marker; regenerate the complete segment with the allowed exact marker strings.",
+            ],
+        }
+
+    marker_key = {
+        "missing_segment_anchor": "missing_markers",
+        "unsupported_segment_alignment": "unsupported_markers",
+    }.get(reason)
+    if marker_key is None:
+        return None
+
+    marker_to_claim = _formal_segment_exact_claim_map(assigned_items)
+    failed_markers = [
+        normalize_space(marker)
+        for marker in last_failure.get(marker_key) or []
+        if normalize_space(marker) in marker_to_claim
+    ]
+    if not failed_markers:
+        failed_markers = list(marker_to_claim)
+    failed_claims = {
+        marker: marker_to_claim[marker]
+        for marker in failed_markers
+    }
+    return {
+        "reason": reason,
+        "regenerate_entire_uncommitted_segment": True,
+        "failed_markers": failed_markers,
+        "failed_marker_to_exact_natural_support_claim": failed_claims,
+        "required_repairs": [
+            "For each failed marker, create a distinct NEW turn; do not quote or reuse any parent or accepted-prefix turn.",
+            "Set that new turn's entire text equal to its mapped exact natural support claim character-for-character; do not add a prefix, suffix, explanation, or extra sentence.",
+            "Preserve every decimal integer in the mapped claim as the same digit characters; never spell it as a number word or change its sign.",
+            "When a third-person mapped claim names a person or entity, use a different dialogue participant as speaker; never let the named subject speak it or convert it to first person.",
+            "Set that turn's alignment_anchors to exactly [marker].",
+            "Set support_quotes[marker] to exactly the mapped claim, with no paraphrase, shortening, or surrounding text.",
+            "Never use a parent-context or frozen-prefix quote as support_quotes evidence.",
+        ],
+    }
+
+
+def call_api_formal_segmented_dialogue_expansion(
+    current_event_plan_with_anchors: dict[str, Any],
+    seed_row: dict[str, Any],
+    policy: dict[str, Any],
+    args: argparse.Namespace,
+    *,
+    parent_context: dict[str, Any],
+    parent_dialogue_source: str,
+    parent_turn_count: int,
+    min_added_turns: int,
+    min_added_tokens: int,
+    length_guard_parent_baseline_tokens: int = 0,
+    dialogue_attempt_index: int = 1,
+    prior_failure_context: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Generate an immutable chain of API-native dialogue-only append segments."""
+
+    anchor_to_event = current_event_plan_with_anchors.get("current_anchor_to_event_instance_id")
+    if not isinstance(anchor_to_event, dict) or not anchor_to_event:
+        return None, {
+            "used": False,
+            "call_kind": "api_formal_segmented_dialogue",
+            "error_type": "missing_current_anchor_map",
+        }
+    dialogue_plan, exact_claim_preflight = formal_segment_exact_claim_preflight(
+        current_event_plan_with_anchors,
+        sanitize_event_plan_for_dialogue_api(current_event_plan_with_anchors),
+    )
+    if not isinstance(dialogue_plan, dict):
+        return None, {
+            "used": False,
+            "call_kind": "api_formal_segmented_dialogue",
+            "error_type": "formal_segment_exact_claim_preflight_failed",
+            "segment_api_call_count": 0,
+            "attempts": 0,
+            "exact_claim_preflight": exact_claim_preflight,
+        }
+    checklist = [
+        {
+            "event_instance_id": event.get("event_instance_id"),
+            "fact_id": event.get("fact_id"),
+            "marker": normalize_space(event.get("marker")),
+            "natural_support_claim_to_include": event.get("dialogue_support_claim"),
+            "status_meaning": event.get("status_meaning"),
+            "dependency_facts_to_express": copy.deepcopy(
+                event.get("dependency_facts_to_express") or []
+            ),
+            "scope_fact_to_express": event.get("scope_fact_to_express"),
+            "membership_fact_to_express": event.get(
+                "membership_fact_to_express"
+            ),
+        }
+        for event in dialogue_plan.get("events") or []
+        if isinstance(event, dict)
+        and event.get("required") is not False
+        and normalize_space(event.get("marker"))
+    ]
+    checklist_by_marker = {normalize_space(item.get("marker")): item for item in checklist}
+    all_marker_to_exact_claim = _formal_segment_exact_claim_map(checklist)
+    local_parent_audit_exempt_spans = formal_local_parent_audit_exempt_spans(
+        dialogue_plan
+    )
+    stage64_target = (
+        policy.get("stage64_target")
+        if isinstance(policy, dict) and isinstance(policy.get("stage64_target"), dict)
+        else {}
+    )
+    stage64_operation = normalize_space(
+        stage64_target.get("qa_operation")
+        or current_event_plan_with_anchors.get("operation")
+        or current_event_plan_with_anchors.get("qa_operation")
+    )
+    evidence_layout_plan = _stage64_evidence_layout_plan(
+        checklist,
+        current_event_plan=current_event_plan_with_anchors,
+        qa_operation=stage64_operation,
+        item_difficulty_target=(
+            policy.get("item_difficulty_target")
+            or policy.get("boundary_item_difficulty_target")
+        ),
+    )
+    parent_turns, _ = parent_dialogue_turns_from_row(seed_row)
+    formal_parent_context = build_formal_nonverbatim_parent_context(
+        parent_turns,
+        parent_context,
+    )
+    compact_prior_failure = compact_formal_dialogue_retry_context(
+        prior_failure_context
+    )
+    tokenizer_path = normalize_space(
+        getattr(args, "solver_tokenizer", None)
+        or getattr(args, "tokenizer_path", None)
+        or getattr(args, "base_model", None)
+    )
+    parent_tokens, parent_token_mode = dialogue_tokens_for_turns(parent_turns, tokenizer_path)
+    effective_parent_baseline = max(parent_tokens, int(length_guard_parent_baseline_tokens or 0))
+    required_new_tokens = max(
+        int(min_added_tokens or 0),
+        effective_parent_baseline - parent_tokens + int(min_added_tokens or 0),
+    )
+    target_tokens = required_new_tokens + FORMAL_DIALOGUE_TOKEN_MARGIN
+    max_segments = min(
+        FORMAL_DIALOGUE_MAX_SEGMENTS,
+        max(
+            3,
+            int(
+                getattr(
+                    args,
+                    "formal_dialogue_max_segments",
+                    FORMAL_DIALOGUE_MAX_SEGMENTS,
+                )
+                or FORMAL_DIALOGUE_MAX_SEGMENTS
+            ),
+        ),
+    )
+    marker_cap = FORMAL_DIALOGUE_MAX_MARKERS_PER_SEGMENT
+    marker_capacity_diagnostics = formal_segment_marker_capacity_diagnostics(
+        evidence_layout_plan,
+        max_segments=max_segments,
+        marker_cap=marker_cap,
+    )
+    if marker_capacity_diagnostics.get("pass") is not True:
+        return None, {
+            "used": False,
+            "call_kind": "api_formal_segmented_dialogue",
+            "error_type": "insufficient_formal_marker_segment_capacity",
+            "failure_reason": marker_capacity_diagnostics.get("failure_reason"),
+            "segment_api_call_count": 0,
+            "attempts": 0,
+            "marker_capacity_diagnostics": marker_capacity_diagnostics,
+            "marker_schedule_records": [],
+            "marker_scheduler_summary": formal_segment_marker_scheduler_summary(
+                marker_capacity_diagnostics,
+                [],
+                [],
+            ),
+            "exact_claim_preflight": exact_claim_preflight,
+        }
+    target_segment_tokens = max(
+        256,
+        int(getattr(args, "formal_dialogue_segment_target_tokens", FORMAL_DIALOGUE_SEGMENT_TARGET_TOKENS) or FORMAL_DIALOGUE_SEGMENT_TARGET_TOKENS),
+    )
+    segment_max_output_tokens = max(
+        1024,
+        min(
+            FORMAL_DIALOGUE_SEGMENT_MAX_OUTPUT_TOKENS,
+            int(getattr(args, "challenger_max_tokens", FORMAL_DIALOGUE_SEGMENT_MAX_OUTPUT_TOKENS) or FORMAL_DIALOGUE_SEGMENT_MAX_OUTPUT_TOKENS),
+        ),
+    )
+    max_segment_attempts = max(
+        FORMAL_DIALOGUE_MIN_SEGMENT_VALIDATION_ATTEMPTS,
+        int(getattr(args, "max_llm_retries", 1) or 0) + 1,
+    )
+    graph_snapshot_hash = normalize_space(current_event_plan_with_anchors.get("graph_snapshot_hash"))
+    prefix_hash = _formal_dialogue_prefix_hash(
+        graph_snapshot_hash=graph_snapshot_hash,
+        parent_dialogue_turns=parent_turns,
+    )
+    initial_prefix_hash = prefix_hash
+    appended_marked: list[dict[str, Any]] = []
+    appended_clean: list[dict[str, Any]] = []
+    emitted_markers: set[str] = set()
+    segment_records: list[dict[str, Any]] = []
+    marker_schedule_records: list[dict[str, Any]] = []
+    accepted_turn_duplicate_audits: list[dict[str, Any]] = []
+    accepted_opening_diversity_audits: list[dict[str, Any]] = []
+    api_call_count = 0
+    api_attempt_count = 0
+    usage_totals: Counter[str] = Counter()
+    prompt_token_estimates: list[int] = []
+    parent_prompt_audits: list[dict[str, Any]] = []
+    accepted_prefix_prompt_audits: list[dict[str, Any]] = []
+    last_failure: dict[str, Any] | None = None
+
+    for segment_index in range(max_segments):
+        segment_attempt_limit = max_segment_attempts
+        if segment_index >= FORMAL_DIALOGUE_LATE_RETRY_START_SEGMENT_INDEX:
+            segment_attempt_limit = max(
+                segment_attempt_limit,
+                FORMAL_DIALOGUE_LATE_SEGMENT_VALIDATION_ATTEMPTS,
+            )
+        forbidden_opening_prefixes: list[str] = []
+        if (
+            isinstance(compact_prior_failure, dict)
+            and compact_prior_failure.get("failed_segment_index") == segment_index
+        ):
+            _formal_extend_forbidden_opening_prefixes(
+                forbidden_opening_prefixes,
+                compact_prior_failure.get("forbidden_opening_prefixes") or [],
+            )
+        cumulative_tokens, _ = dialogue_tokens_for_turns(appended_clean, tokenizer_path)
+        marker_schedule = formal_segment_marker_schedule(
+            evidence_layout_plan,
+            emitted_markers,
+            cumulative_tokens=cumulative_tokens,
+            target_tokens=target_tokens,
+            segment_index=segment_index,
+            max_segments=max_segments,
+            marker_cap=marker_cap,
+        )
+        marker_schedule_records.append(copy.deepcopy(marker_schedule))
+        if marker_schedule.get("pass") is not True:
+            return None, {
+                "used": False,
+                "call_kind": "api_formal_segmented_dialogue",
+                "error_type": "formal_marker_schedule_failed",
+                "failed_segment_index": segment_index,
+                "failure_reason": marker_schedule.get("failure_reason"),
+                "segment_api_call_count": api_call_count,
+                "attempts": api_attempt_count,
+                "segment_records": segment_records,
+                "marker_capacity_diagnostics": marker_capacity_diagnostics,
+                "marker_schedule_records": marker_schedule_records,
+                "marker_scheduler_summary": formal_segment_marker_scheduler_summary(
+                    marker_capacity_diagnostics,
+                    marker_schedule_records,
+                    emitted_markers,
+                ),
+                "exact_claim_preflight": exact_claim_preflight,
+            }
+        assigned_items = [
+            _formal_segment_claim_only_prompt_item(
+                checklist_by_marker[normalize_space(item.get("marker"))]
+            )
+            for item in marker_schedule.get("assigned_items") or []
+            if normalize_space(item.get("marker")) in checklist_by_marker
+        ]
+        assigned_markers = {normalize_space(item.get("marker")) for item in assigned_items}
+        marker_to_exact_claim = _formal_segment_exact_claim_map(assigned_items)
+        required_marked_turn_shapes = [
+            {
+                "marker": marker,
+                "text_must_equal": marker_to_exact_claim[marker],
+                "alignment_anchors_must_equal": [marker],
+                "support_quotes_must_equal": {
+                    marker: marker_to_exact_claim[marker]
+                },
+                "must_appear_in_exactly_one_turn": True,
+            }
+            for marker in sorted(marker_to_exact_claim)
+        ]
+        remaining_tokens = max(0, target_tokens - cumulative_tokens)
+        requested_segment_tokens = min(target_segment_tokens, max(384, remaining_tokens + 96))
+        requested_turns = max(
+            FORMAL_DIALOGUE_SEGMENT_MIN_TURNS,
+            min(
+                FORMAL_DIALOGUE_SEGMENT_MAX_TURNS,
+                (
+                    requested_segment_tokens
+                    + FORMAL_DIALOGUE_SEGMENT_TARGET_TOKENS_PER_TURN
+                    - 1
+                )
+                // FORMAL_DIALOGUE_SEGMENT_TARGET_TOKENS_PER_TURN,
+            ),
+        )
+        segment_prompt = {
+            "task": "formal current_method API-native immutable appended dialogue segment",
+            "requirements": [
+                "Return only a new dialogue segment. Never reproduce, rewrite, summarize, or replace the parent or any accepted prefix turn.",
+                "Return exactly one JSON object with exactly one top-level key: appended_dialogue_turns_segment. Its value must be an array of turn objects; never return one bare turn object, qa_proposal, a final answer, or a full dialogue.",
+                "output_schema is a description, not output to copy. Return the actual appended_dialogue_turns_segment array; never emit value_type, exact_item_count, or item_schema as response fields.",
+                f"Write about {requested_segment_tokens} substantive dialogue tokens across exactly {requested_turns} natural turns; do not return fewer or more turns.",
+                "Each neutral turn should usually contain 3-5 natural sentences and contribute a different concrete detail. A marked evidence turn is the sole exception: it must contain only its exact mapped claim. Do not use filler, repeated recap templates, or short acknowledgements.",
+                "Every returned turn must be textually distinct from every other turn in this segment and from every prior accepted appended turn; never copy an old turn and add a sentence to disguise it.",
+                "Do not restate, closely paraphrase, summarize, or extend prior accepted turns. Each neutral turn must add genuinely new semantic information with new wording and sentence structure.",
+                "Vary turn openings, sentence syntax, discourse functions, and topic progression throughout this segment and across the accepted appended dialogue.",
+                "Do not cycle through templated frames such as 'I'm going to ...', 'I think ...', or 'That's ...'; repeated 3-4 token openings will cause the entire segment to be rejected.",
+                "Continue with new turns using only the digest-only accepted_prefix_context speaker structure and frozen graph facts. Accepted-prefix prose is intentionally unavailable; never reconstruct or guess it.",
+                "Only this segment's assigned_anchor_realization_checklist markers may appear in alignment_anchors/support_quotes.",
+                "Never invent marker names, numbered placeholders, descriptive placeholder text, or empty-string markers. Every nonempty alignment_anchors value and every support_quotes key must be copied byte-for-byte from segment.allowed_markers.",
+                "For every assigned marker, set one NEW natural support turn's entire text equal to its mapped exact natural support claim character-for-character. Do not add a prefix, suffix, explanation, or extra sentence; the claim cannot exist only in support_quotes.",
+                "The mapped exact claim already naturalizes every dependency, observer+permission scope, and membership condition/inclusion decision required by its checklist item. Preserve those natural clauses exactly; never replace them with IDs or schema field names.",
+                "Preserve every decimal integer in the mapped exact claim as the same digit characters, including its sign; never spell a digit value as a number word.",
+                "If a third-person mapped exact claim names a person or entity, that named subject must not be the turn's speaker. Have a different dialogue participant state the unchanged third-person claim; never convert it to first person.",
+                "Use a distinct support turn for every marker. That turn's alignment_anchors must be exactly [marker], and support_quotes[marker] must equal the mapped exact claim character-for-character.",
+                "Each assigned marker must appear in exactly one returned turn. Every other neutral turn must use alignment_anchors: [] and support_quotes: {}, and must not state any tracked entity together with its tracked value or together with its tracked slot and status.",
+                "The marked support turn and support quote must be newly written in this segment. Never copy a support quote from compact_parent_context, the parent dialogue, or an accepted prefix.",
+                "Do not emit or mention markers assigned to another segment. Neutral segments may contain no alignment markers.",
+                "Do not introduce a new value for any tracked entity or slot. Neutral turns may add only non-answer-bearing social or logistical context.",
+                "Do not expose graph, schema, anchor, marker, event id, dataset, or round terminology in dialogue text.",
+            ],
+            "frozen_graph": {
+                "graph_snapshot_hash": graph_snapshot_hash,
+                "fact_plan": _formal_segment_fact_plan(dialogue_plan, assigned_markers),
+            },
+            "frozen_prefix": {
+                "prefix_hash": prefix_hash,
+                "parent_dialogue_source": parent_dialogue_source,
+                "parent_turn_count": parent_turn_count,
+                "accepted_appended_turn_count": len(appended_clean),
+                "accepted_appended_tokens": cumulative_tokens,
+                "target_appended_tokens": target_tokens,
+                "remaining_tokens": remaining_tokens,
+                "accepted_prefix_context": (
+                    build_formal_nonverbatim_accepted_prefix_context(
+                        appended_clean
+                    )
+                ),
+                "accepted_prefix_turn_text_included": False,
+            },
+            "segment": {
+                "segment_index": segment_index,
+                "segment_validation_attempt_limit": segment_attempt_limit,
+                "requested_dialogue_tokens": requested_segment_tokens,
+                "requested_turns": requested_turns,
+                "assigned_anchor_realization_checklist": assigned_items,
+                "allowed_markers": sorted(assigned_markers),
+                "marker_to_exact_natural_support_claim": marker_to_exact_claim,
+                "required_marked_turn_shapes": required_marked_turn_shapes,
+                "neutral_turn_fields": {
+                    "alignment_anchors": [],
+                    "support_quotes": {},
+                },
+                "marker_schedule_contract": formal_segment_marker_prompt_contract(
+                    marker_schedule
+                ),
+                "exact_claim_realization_contract": {
+                    "new_turn_text_must_equal_exact_claim": True,
+                    "extra_marked_turn_text_forbidden": True,
+                    "support_quote_must_equal_exact_claim": True,
+                    "decimal_integer_digit_surface_must_be_preserved": True,
+                    "third_person_named_subject_must_not_be_speaker": True,
+                    "one_distinct_new_turn_per_marker": True,
+                    "parent_or_prefix_quote_forbidden": True,
+                },
+                "graph_fact_isolation_contract": {
+                    "schema_version": FORMAL_SEGMENT_GRAPH_FACT_ISOLATION_AUDIT_VERSION,
+                    "marked_turn_text_must_equal_exact_claim": True,
+                    "neutral_entity_plus_tracked_value_forbidden": True,
+                    "neutral_entity_plus_slot_plus_status_forbidden": True,
+                    "entire_uncommitted_segment_retried_on_failure": True,
+                },
+                "turn_duplicate_contract": {
+                    "schema_version": FORMAL_SEGMENT_TURN_DUPLICATE_AUDIT_VERSION,
+                    "normalized_exact_duplicate_forbidden": True,
+                    "near_duplicate_or_phrase_containment_forbidden": True,
+                    "segment_internal_comparison_required": True,
+                    "accepted_prefix_comparison_required": True,
+                    "entire_uncommitted_segment_retried_on_failure": True,
+                    "silent_turn_deletion_forbidden": True,
+                    "each_turn_must_add_new_semantic_information": True,
+                },
+                "opening_diversity_contract": {
+                    "schema_version": FORMAL_SEGMENT_OPENING_DIVERSITY_AUDIT_VERSION,
+                    "normalized_prefix_token_lengths": list(
+                        FORMAL_SEGMENT_OPENING_PREFIX_TOKEN_LENGTHS
+                    ),
+                    "candidate_segment_minimum_count": (
+                        FORMAL_SEGMENT_OPENING_SEGMENT_MIN_COUNT
+                    ),
+                    "cumulative_appended_minimum_count": (
+                        FORMAL_SEGMENT_OPENING_CUMULATIVE_MIN_COUNT
+                    ),
+                    "maximum_allowed_share": FORMAL_SEGMENT_OPENING_MAX_SHARE,
+                    "validated_exact_claim_prefix_removed_before_audit": True,
+                    "short_or_empty_body_is_diagnostic_only": True,
+                    "entire_uncommitted_segment_retried_on_failure": True,
+                    "token_length_credit_before_pass_forbidden": True,
+                },
+            },
+            "compact_parent_context": formal_parent_context,
+            "output_schema": {
+                "appended_dialogue_turns_segment": {
+                    "value_type": "array",
+                    "exact_item_count": requested_turns,
+                    "item_schema": {
+                        "speaker": "string",
+                        "text": "new natural dialogue text only",
+                        "alignment_anchors": [],
+                        "support_quotes": {},
+                    },
+                },
+            },
+        }
+        accepted_validation: dict[str, Any] | None = None
+        accepted_payload: dict[str, Any] | None = None
+        accepted_meta: dict[str, Any] | None = None
+        for segment_attempt in range(1, segment_attempt_limit + 1):
+            prompt_for_attempt = copy.deepcopy(segment_prompt)
+            retry_generation_id = stable_hash(
+                {
+                    "version": FORMAL_DIALOGUE_RETRY_VARIATION_VERSION,
+                    "generation_seed": int(getattr(args, "seed", 0) or 0),
+                    "graph_snapshot_hash": graph_snapshot_hash,
+                    "prefix_hash": prefix_hash,
+                    "dialogue_attempt_index": int(dialogue_attempt_index),
+                    "segment_index": segment_index,
+                    "segment_attempt": segment_attempt,
+                },
+                length=24,
+            )
+            previous_failure_reason = normalize_space(
+                (last_failure or {}).get("reason")
+            )
+            outer_targeted_failure_reason = ""
+            if (
+                segment_attempt == 1
+                and isinstance(compact_prior_failure, dict)
+                and compact_prior_failure.get("failed_segment_index") == segment_index
+            ):
+                outer_targeted_failure_reason = normalize_space(
+                    compact_prior_failure.get("reason")
+                )
+            retry_temperature_reason = (
+                previous_failure_reason
+                if previous_failure_reason in FORMAL_DIALOGUE_TEMPERATURE_RETRY_REASONS
+                else outer_targeted_failure_reason
+                if outer_targeted_failure_reason
+                in FORMAL_DIALOGUE_TEMPERATURE_RETRY_REASONS
+                else ""
+            )
+            diversity_retry_reason = (
+                retry_temperature_reason
+                if retry_temperature_reason
+                in FORMAL_DIALOGUE_DIVERSITY_RETRY_REASONS
+                else ""
+            )
+            structural_retry_reason = (
+                retry_temperature_reason
+                if retry_temperature_reason
+                in FORMAL_DIALOGUE_STRUCTURAL_RETRY_REASONS
+                else ""
+            )
+            temperature_override = (
+                max(
+                    float(getattr(args, "challenger_temperature", 0.25)),
+                    FORMAL_DIALOGUE_DIVERSITY_RETRY_TEMPERATURE,
+                )
+                if retry_temperature_reason
+                else None
+            )
+            prompt_for_attempt["retry_variation_contract"] = {
+                "schema_version": FORMAL_DIALOGUE_RETRY_VARIATION_VERSION,
+                "retry_generation_id": retry_generation_id,
+                "dialogue_attempt_index": int(dialogue_attempt_index),
+                "segment_attempt": segment_attempt,
+                "retry_temperature_reason": retry_temperature_reason or None,
+                "structural_retry_reason": structural_retry_reason or None,
+                "retry_generation_id_has_no_dialogue_semantics": True,
+                "retry_generation_id_must_not_appear_in_output": True,
+                "forbidden_opening_prefixes": copy.deepcopy(
+                    forbidden_opening_prefixes
+                ),
+                "forbidden_opening_prefix_limit": (
+                    FORMAL_DIALOGUE_FORBIDDEN_OPENING_PREFIX_LIMIT
+                ),
+                "forbidden_opening_prefix_token_lengths": list(
+                    FORMAL_SEGMENT_OPENING_PREFIX_TOKEN_LENGTHS
+                ),
+                "do_not_begin_any_turn_with_forbidden_opening_prefix": True,
+            }
+            if compact_prior_failure:
+                prompt_for_attempt["outer_dialogue_retry_context"] = copy.deepcopy(
+                    compact_prior_failure
+                )
+            if last_failure:
+                previous_failure_for_prompt = copy.deepcopy(last_failure)
+                if normalize_space(last_failure.get("reason")) in {
+                    "invalid_segment_anchor",
+                    "unexpected_segment_anchor",
+                }:
+                    raw_invalid_markers = previous_failure_for_prompt.pop(
+                        "invalid_markers", []
+                    )
+                    raw_unexpected_markers = previous_failure_for_prompt.pop(
+                        "unexpected_markers", []
+                    )
+                    invalid_values = [
+                        normalize_space(item)
+                        for item in (
+                            list(raw_invalid_markers or [])
+                            + list(raw_unexpected_markers or [])
+                        )
+                        if normalize_space(item)
+                    ]
+                    previous_failure_for_prompt[
+                        "invalid_or_unexpected_marker_count"
+                    ] = len(invalid_values)
+                    previous_failure_for_prompt[
+                        "invalid_marker_text_replayed"
+                    ] = False
+                prompt_for_attempt["previous_segment_validation_error"] = (
+                    previous_failure_for_prompt
+                )
+                retry_contract = _formal_segment_retry_contract(last_failure, assigned_items)
+                if retry_contract:
+                    prompt_for_attempt["segment_alignment_repair_contract"] = retry_contract
+            parent_prompt_audit = audit_formal_parent_prompt_verbatim_exposure(
+                prompt_for_attempt,
+                parent_turns,
+                local_exempt_spans=local_parent_audit_exempt_spans,
+            )
+            parent_prompt_audits.append(parent_prompt_audit)
+            if parent_prompt_audit.get("pass") is not True:
+                parent_prompt_audit_summary = formal_parent_prompt_audit_summary(
+                    formal_parent_context,
+                    parent_prompt_audits,
+                    validated_parent_turn_count=len(parent_turns),
+                )
+                return None, {
+                    "used": False,
+                    "call_kind": "api_formal_segmented_dialogue",
+                    "error_type": "formal_parent_verbatim_prompt_exposure",
+                    "failed_segment_index": segment_index,
+                    "failed_segment_attempt": segment_attempt,
+                    "segment_api_call_count": api_call_count,
+                    "attempts": api_attempt_count,
+                    "segment_records": segment_records,
+                    "parent_context_provenance": parent_prompt_audit_summary,
+                    "exact_claim_preflight": exact_claim_preflight,
+                }
+            accepted_prefix_prompt_audit = (
+                audit_formal_accepted_prefix_prompt_verbatim_exposure(
+                    prompt_for_attempt,
+                    appended_clean,
+                    local_exempt_spans=(
+                        list(local_parent_audit_exempt_spans)
+                        + formal_current_exact_claim_audit_exempt_spans(
+                            prompt_for_attempt,
+                            exact_claim_preflight.get("claim_provenance") or [],
+                            assigned_markers,
+                        )
+                    ),
+                )
+            )
+            accepted_prefix_prompt_audits.append(accepted_prefix_prompt_audit)
+            if accepted_prefix_prompt_audit.get("pass") is not True:
+                return None, {
+                    "used": False,
+                    "call_kind": "api_formal_segmented_dialogue",
+                    "error_type": "formal_accepted_prefix_verbatim_prompt_exposure",
+                    "failed_segment_index": segment_index,
+                    "failed_segment_attempt": segment_attempt,
+                    "segment_api_call_count": api_call_count,
+                    "attempts": api_attempt_count,
+                    "segment_records": segment_records,
+                    "accepted_prefix_prompt_audit": (
+                        accepted_prefix_prompt_audit
+                    ),
+                    "exact_claim_preflight": exact_claim_preflight,
+                }
+            payload, segment_meta = call_raw_json_api(
+                args,
+                prompt_for_attempt,
+                system_prompt=(
+                    "You are a strict JSON-only append-only dialogue segment writer. "
+                    "Return only new turns for this segment and never return QA. "
+                    "The output_schema is descriptive only: return an actual appended_dialogue_turns_segment array "
+                    "containing exactly segment.requested_turns complete turn objects; never copy item_schema or return only one example item. "
+                    "For every assigned marker, set its own new turn.text equal verbatim to the mapped exact natural support claim "
+                    "character-for-character; add no prefix, suffix, explanation, or extra sentence, and never place the claim only in support_quotes. "
+                    "Keep every decimal integer as the same signed digit surface and never spell it as a number word. "
+                    "If a third-person claim names a person or entity, a different participant must speak the unchanged "
+                    "claim; the named subject cannot be speaker and the claim cannot be converted to first person. "
+                    "set alignment_anchors to exactly that marker, and set support_quotes[marker] to exactly that claim. "
+                    "Never use parent or accepted-prefix text as a support quote. Neutral turns must not state a tracked entity together with its tracked value or together with its tracked slot and status."
+                    " Every turn must add new semantic information and use new wording; never repeat, closely paraphrase, "
+                    "or extend another returned turn or any prior accepted turn."
+                    " Vary how turns begin and how sentences advance the topic; do not cycle through 'I'm going to', "
+                    "'I think', or 'That's' opening templates."
+                ),
+                required_keys=("appended_dialogue_turns_segment",),
+                call_kind="api_formal_dialogue_segment",
+                max_tokens_override=segment_max_output_tokens,
+                max_retries_override=0,
+                temperature_override=temperature_override,
+            )
+            segment_prompt_tokens = estimate_json_tokens(prompt_for_attempt)
+            segment_meta["prompt_tokens_estimate"] = segment_prompt_tokens
+            segment_meta["parent_prompt_audit"] = copy.deepcopy(
+                parent_prompt_audit
+            )
+            segment_meta["accepted_prefix_prompt_audit"] = copy.deepcopy(
+                accepted_prefix_prompt_audit
+            )
+            segment_meta["internal_retry_disabled_for_parent_audit"] = True
+            segment_meta["retry_generation_id"] = retry_generation_id
+            segment_meta["dialogue_attempt_index"] = int(dialogue_attempt_index)
+            segment_meta["segment_attempt"] = segment_attempt
+            segment_meta["diversity_retry_reason"] = diversity_retry_reason or None
+            segment_meta["structural_retry_reason"] = structural_retry_reason or None
+            segment_meta["retry_temperature_reason"] = retry_temperature_reason or None
+            segment_meta["temperature_override"] = temperature_override
+            segment_meta.setdefault(
+                "effective_temperature",
+                float(
+                    temperature_override
+                    if temperature_override is not None
+                    else getattr(args, "challenger_temperature", 0.25)
+                ),
+            )
+            segment_meta["forbidden_opening_prefixes"] = copy.deepcopy(
+                forbidden_opening_prefixes
+            )
+            prompt_token_estimates.append(segment_prompt_tokens)
+            api_call_count += 1
+            api_attempt_count += int(segment_meta.get("attempts") or 0)
+            for key, value in (segment_meta.get("usage") or {}).items():
+                if isinstance(value, (int, float)):
+                    usage_totals[key] += value
+            validation = validate_formal_dialogue_segment(
+                payload,
+                expected_turn_count=requested_turns,
+                assigned_markers=assigned_markers,
+                anchor_to_event=anchor_to_event,
+                current_event_plan=current_event_plan_with_anchors,
+                frozen_prefix_turns=parent_turns + appended_marked,
+                accepted_appended_turns=appended_marked,
+                marker_to_exact_claim=marker_to_exact_claim,
+                duplicate_marker_to_exact_claim=all_marker_to_exact_claim,
+            )
+            if validation.get("pass") is True:
+                segment_token_count, segment_token_mode = dialogue_tokens_for_turns(
+                    validation.get("clean_turns") or [],
+                    tokenizer_path,
+                )
+                minimum_segment_tokens = min(
+                    384,
+                    max(192, int(requested_segment_tokens * 0.25)),
+                )
+                validation["segment_token_count"] = int(segment_token_count)
+                validation["segment_token_mode"] = segment_token_mode
+                validation["minimum_segment_tokens"] = minimum_segment_tokens
+                if int(segment_token_count) < minimum_segment_tokens:
+                    validation["pass"] = False
+                    validation["reason"] = "segment_token_shortfall"
+            record = {
+                "segment_index": segment_index,
+                "segment_attempt": segment_attempt,
+                "prefix_hash_before": prefix_hash,
+                "assigned_markers": sorted(assigned_markers),
+                "marker_schedule": copy.deepcopy(marker_schedule),
+                "meta": copy.deepcopy(segment_meta),
+                "payload": copy.deepcopy(payload),
+                "validation": copy.deepcopy(validation),
+            }
+            segment_records.append(record)
+            if segment_meta.get("used") and validation.get("pass") is True:
+                accepted_validation = validation
+                accepted_payload = payload
+                accepted_meta = segment_meta
+                last_failure = None
+                break
+            last_failure = {
+                "segment_index": segment_index,
+                "segment_attempt": segment_attempt,
+                "api_used": bool(segment_meta.get("used")),
+                "reason": validation.get("reason") or segment_meta.get("error_type") or "segment_api_failed",
+                "retry_generation_id": retry_generation_id,
+            }
+            for detail_key in (
+                "missing_markers",
+                "unsupported_markers",
+                "invalid_markers",
+                "unexpected_markers",
+                "turn_indices",
+                "expected_turn_count",
+                "actual_turn_count",
+                "segment_token_count",
+                "minimum_segment_tokens",
+                "missing_top_level_keys",
+                "unexpected_top_level_keys",
+                "marker_occurrence_counts",
+            ):
+                if detail_key in validation:
+                    last_failure[detail_key] = copy.deepcopy(validation[detail_key])
+            for pair_key in (
+                "duplicate_pairs",
+                "near_duplicate_pairs",
+                "phrase_containment_pairs",
+            ):
+                pairs = validation.get(pair_key)
+                if isinstance(pairs, list):
+                    last_failure[pair_key] = copy.deepcopy(pairs[:12])
+                    last_failure[f"{pair_key}_total_count"] = len(pairs)
+            duplicate_audit = validation.get("turn_duplicate_audit")
+            if isinstance(duplicate_audit, dict):
+                last_failure["turn_duplicate_audit"] = {
+                    key: copy.deepcopy(duplicate_audit.get(key))
+                    for key in (
+                        "schema_version",
+                        "pass",
+                        "exact_duplicate_pair_count",
+                        "near_duplicate_pair_count",
+                        "phrase_containment_pair_count",
+                        "audit_sha256",
+                    )
+                }
+            opening_diversity_audit = validation.get("opening_diversity_audit")
+            if isinstance(opening_diversity_audit, dict):
+                last_failure["opening_diversity_audit"] = {
+                    key: copy.deepcopy(opening_diversity_audit.get(key))
+                    for key in (
+                        "schema_version",
+                        "pass",
+                        "reason",
+                        "rejected_prefix_count",
+                        "rejected_prefixes",
+                        "audit_sha256",
+                    )
+                }
+                _formal_extend_forbidden_opening_prefixes(
+                    forbidden_opening_prefixes,
+                    [
+                        rejected.get("normalized_prefix")
+                        for rejected in (
+                            opening_diversity_audit.get("rejected_prefixes") or []
+                        )
+                        if isinstance(rejected, dict)
+                    ],
+                )
+            _formal_extend_forbidden_opening_prefixes(
+                forbidden_opening_prefixes,
+                _formal_failed_candidate_opening_prefixes(
+                    payload,
+                    validation,
+                    all_marker_to_exact_claim,
+                ),
+            )
+            last_failure["forbidden_opening_prefixes"] = copy.deepcopy(
+                forbidden_opening_prefixes
+            )
+        if not accepted_validation or not accepted_payload or not accepted_meta:
+            return None, {
+                "used": False,
+                "call_kind": "api_formal_segmented_dialogue",
+                "error_type": "formal_dialogue_segment_failed",
+                "failed_segment_index": segment_index,
+                "last_failure": last_failure,
+                "segment_api_call_count": api_call_count,
+                "attempts": api_attempt_count,
+                "segment_records": segment_records,
+                "marker_capacity_diagnostics": marker_capacity_diagnostics,
+                "marker_schedule_records": marker_schedule_records,
+                "marker_scheduler_summary": formal_segment_marker_scheduler_summary(
+                    marker_capacity_diagnostics,
+                    marker_schedule_records,
+                    emitted_markers,
+                ),
+                "accepted_prefix_context_provenance": (
+                    formal_accepted_prefix_prompt_audit_summary(
+                        accepted_prefix_prompt_audits
+                    )
+                ),
+                "retry_diversity_diagnostics": {
+                    "schema_version": FORMAL_DIALOGUE_RETRY_VARIATION_VERSION,
+                    "forbidden_opening_prefixes": copy.deepcopy(
+                        forbidden_opening_prefixes
+                    ),
+                    "forbidden_opening_prefix_count": len(
+                        forbidden_opening_prefixes
+                    ),
+                    "raw_failed_turn_text_included": False,
+                    "late_retry_start_segment_index": (
+                        FORMAL_DIALOGUE_LATE_RETRY_START_SEGMENT_INDEX
+                    ),
+                    "segment_validation_attempt_limit": segment_attempt_limit,
+                },
+                "exact_claim_preflight": exact_claim_preflight,
+            }
+
+        segment_marked = copy.deepcopy(accepted_validation["marked_turns"])
+        segment_clean = copy.deepcopy(accepted_validation["clean_turns"])
+        accepted_duplicate_audit = accepted_validation.get("turn_duplicate_audit")
+        if not isinstance(accepted_duplicate_audit, dict) or accepted_duplicate_audit.get("pass") is not True:
+            return None, {
+                "used": False,
+                "call_kind": "api_formal_segmented_dialogue",
+                "error_type": "formal_segment_turn_duplicate_audit_missing_or_failed",
+                "failed_segment_index": segment_index,
+                "segment_records": segment_records,
+                "turn_duplicate_audit": copy.deepcopy(accepted_duplicate_audit),
+                "exact_claim_preflight": exact_claim_preflight,
+            }
+        accepted_turn_duplicate_audits.append(copy.deepcopy(accepted_duplicate_audit))
+        accepted_opening_diversity_audit = accepted_validation.get(
+            "opening_diversity_audit"
+        )
+        if (
+            not isinstance(accepted_opening_diversity_audit, dict)
+            or accepted_opening_diversity_audit.get("pass") is not True
+        ):
+            return None, {
+                "used": False,
+                "call_kind": "api_formal_segmented_dialogue",
+                "error_type": "formal_segment_opening_diversity_audit_missing_or_failed",
+                "failed_segment_index": segment_index,
+                "segment_records": segment_records,
+                "opening_diversity_audit": copy.deepcopy(
+                    accepted_opening_diversity_audit
+                ),
+                "exact_claim_preflight": exact_claim_preflight,
+            }
+        accepted_opening_diversity_audits.append(
+            copy.deepcopy(accepted_opening_diversity_audit)
+        )
+        prefix_hash_after = stable_hash(
+            {
+                "protocol": "formal_api_native_segmented_dialogue_v1",
+                "prefix_hash_before": prefix_hash,
+                "segment_index": segment_index,
+                "segment_marked_turns": segment_marked,
+            },
+            length=24,
+        )
+        segment_records[-1]["prefix_hash_after"] = prefix_hash_after
+        appended_marked.extend(segment_marked)
+        appended_clean.extend(segment_clean)
+        emitted_markers.update(assigned_markers)
+        prefix_hash = prefix_hash_after
+        cumulative_tokens, _ = dialogue_tokens_for_turns(appended_clean, tokenizer_path)
+        if (
+            cumulative_tokens >= target_tokens
+            and len(appended_clean) >= int(min_added_turns or 0)
+            and emitted_markers.issuperset(anchor_to_event)
+        ):
+            marker_scheduler_summary = formal_segment_marker_scheduler_summary(
+                marker_capacity_diagnostics,
+                marker_schedule_records,
+                emitted_markers,
+            )
+            turn_duplicate_audit_summary = formal_segment_turn_duplicate_audit_summary(
+                accepted_turn_duplicate_audits
+            )
+            opening_diversity_audit_summary = (
+                formal_segment_opening_diversity_audit_summary(
+                    accepted_opening_diversity_audits
+                )
+            )
+            if turn_duplicate_audit_summary.get("pass") is not True:
+                return None, {
+                    "used": False,
+                    "call_kind": "api_formal_segmented_dialogue",
+                    "error_type": "formal_dialogue_turn_duplicate_audit_summary_invalid",
+                    "segment_records": segment_records,
+                    "turn_duplicate_audit_summary": turn_duplicate_audit_summary,
+                    "exact_claim_preflight": exact_claim_preflight,
+                }
+            if opening_diversity_audit_summary.get("pass") is not True:
+                return None, {
+                    "used": False,
+                    "call_kind": "api_formal_segmented_dialogue",
+                    "error_type": "formal_dialogue_opening_diversity_audit_summary_invalid",
+                    "segment_records": segment_records,
+                    "opening_diversity_audit_summary": (
+                        opening_diversity_audit_summary
+                    ),
+                    "exact_claim_preflight": exact_claim_preflight,
+                }
+            if (
+                marker_scheduler_summary.get("all_markers_assigned_once_under_cap")
+                is not True
+                or (
+                    marker_scheduler_summary.get(
+                        "difficulty_evidence_placement_applicable"
+                    )
+                    is True
+                    and marker_scheduler_summary.get(
+                        "difficulty_evidence_placement_pass"
+                    )
+                    is not True
+                )
+            ):
+                return None, {
+                    "used": False,
+                    "call_kind": "api_formal_segmented_dialogue",
+                    "error_type": "formal_marker_scheduler_summary_invalid",
+                    "segment_records": segment_records,
+                    "marker_capacity_diagnostics": marker_capacity_diagnostics,
+                    "marker_schedule_records": marker_schedule_records,
+                    "marker_scheduler_summary": marker_scheduler_summary,
+                    "exact_claim_preflight": exact_claim_preflight,
+                }
+            prefix_hash_chain_verified = verify_formal_dialogue_prefix_hash_chain(
+                initial_prefix_hash,
+                segment_records,
+                prefix_hash,
+            )
+            if not prefix_hash_chain_verified:
+                return None, {
+                    "used": False,
+                    "call_kind": "api_formal_segmented_dialogue",
+                    "error_type": "formal_dialogue_prefix_hash_chain_invalid",
+                    "segment_records": segment_records,
+                    "final_prefix_hash": prefix_hash,
+                    "marker_capacity_diagnostics": marker_capacity_diagnostics,
+                    "marker_schedule_records": marker_schedule_records,
+                    "marker_scheduler_summary": marker_scheduler_summary,
+                    "exact_claim_preflight": exact_claim_preflight,
+                }
+            parent_context_provenance = formal_parent_prompt_audit_summary(
+                formal_parent_context,
+                parent_prompt_audits,
+                validated_parent_turn_count=len(parent_turns),
+            )
+            accepted_prefix_context_provenance = (
+                formal_accepted_prefix_prompt_audit_summary(
+                    accepted_prefix_prompt_audits
+                )
+            )
+            if (
+                parent_context_provenance.get("schema_version")
+                != FORMAL_PARENT_CONTEXT_SCHEMA_VERSION
+                or parent_context_provenance.get("prompt_audit_schema_version")
+                != FORMAL_PARENT_PROMPT_AUDIT_VERSION
+                or parent_context_provenance.get("parent_prompt_audit_verified")
+                is not True
+                or int(
+                    parent_context_provenance.get(
+                        "parent_verbatim_exposure_count"
+                    )
+                    or 0
+                )
+                != 0
+                or not normalize_space(
+                    parent_context_provenance.get("audit_sha256")
+                )
+                or int(
+                    parent_context_provenance.get("audited_prompt_count") or 0
+                )
+                != int(api_call_count)
+                or parent_context_provenance.get(
+                    "internal_retry_disabled_for_parent_audit"
+                )
+                is not True
+            ):
+                return None, {
+                    "used": False,
+                    "call_kind": "api_formal_segmented_dialogue",
+                    "error_type": "formal_parent_prompt_audit_summary_invalid",
+                    "segment_records": segment_records,
+                    "parent_context_provenance": parent_context_provenance,
+                    "exact_claim_preflight": exact_claim_preflight,
+                }
+            if (
+                accepted_prefix_context_provenance.get("schema_version")
+                != FORMAL_ACCEPTED_PREFIX_CONTEXT_SCHEMA_VERSION
+                or accepted_prefix_context_provenance.get(
+                    "prompt_audit_schema_version"
+                )
+                != FORMAL_ACCEPTED_PREFIX_PROMPT_AUDIT_VERSION
+                or accepted_prefix_context_provenance.get(
+                    "current_exact_claim_exemption_schema_version"
+                )
+                != FORMAL_CURRENT_EXACT_CLAIM_EXEMPTION_VERSION
+                or accepted_prefix_context_provenance.get(
+                    "accepted_prefix_prompt_audit_verified"
+                )
+                is not True
+                or int(
+                    accepted_prefix_context_provenance.get(
+                        "accepted_prefix_verbatim_exposure_count"
+                    )
+                    or 0
+                )
+                != 0
+                or int(
+                    accepted_prefix_context_provenance.get(
+                        "audited_prompt_count"
+                    )
+                    or 0
+                )
+                != int(api_call_count)
+                or accepted_prefix_context_provenance.get(
+                    "raw_accepted_prefix_text_recorded"
+                )
+                is not False
+                or not normalize_space(
+                    accepted_prefix_context_provenance.get("summary_sha256")
+                )
+            ):
+                return None, {
+                    "used": False,
+                    "call_kind": "api_formal_segmented_dialogue",
+                    "error_type": (
+                        "formal_accepted_prefix_prompt_audit_summary_invalid"
+                    ),
+                    "segment_records": segment_records,
+                    "accepted_prefix_context_provenance": (
+                        accepted_prefix_context_provenance
+                    ),
+                    "exact_claim_preflight": exact_claim_preflight,
+                }
+            return {
+                "appended_dialogue_turns": appended_marked,
+                "event_alignment_proposal": [],
+                "segmented_dialogue_protocol": {
+                    "version": "formal_api_native_segmented_dialogue_v1",
+                    "final_prefix_hash": prefix_hash,
+                    "segment_count": segment_index + 1,
+                    "qa_deferred_until_final_alignment": True,
+                    "exact_claim_preflight_schema_version": (
+                        FORMAL_SEGMENT_EXACT_CLAIM_PREFLIGHT_VERSION
+                    ),
+                    "neutral_sidecar_normalizer_schema_version": (
+                        FORMAL_SEGMENT_NEUTRAL_SIDECAR_NORMALIZER_VERSION
+                    ),
+                    "validated_claim_map_sha256": exact_claim_preflight.get(
+                        "validated_claim_map_sha256"
+                    ),
+                    "marker_scheduler_summary": marker_scheduler_summary,
+                    "turn_duplicate_audit_summary": turn_duplicate_audit_summary,
+                    "opening_diversity_audit_schema_version": (
+                        FORMAL_SEGMENT_OPENING_DIVERSITY_AUDIT_VERSION
+                    ),
+                    "opening_diversity_audit_summary": (
+                        opening_diversity_audit_summary
+                    ),
+                    "parent_context_provenance": parent_context_provenance,
+                    "accepted_prefix_context_provenance": (
+                        accepted_prefix_context_provenance
+                    ),
+                },
+            }, {
+                "used": True,
+                "call_kind": "api_formal_segmented_dialogue",
+                "segmented": True,
+                "attempts": api_attempt_count,
+                "segment_api_call_count": api_call_count,
+                "segment_count": segment_index + 1,
+                "segment_records": segment_records,
+                "marker_capacity_diagnostics": marker_capacity_diagnostics,
+                "marker_schedule_records": marker_schedule_records,
+                "marker_scheduler_summary": marker_scheduler_summary,
+                "turn_duplicate_audit_summary": turn_duplicate_audit_summary,
+                "opening_diversity_audit_summary": opening_diversity_audit_summary,
+                "parent_context_provenance": parent_context_provenance,
+                "accepted_prefix_context_provenance": (
+                    accepted_prefix_context_provenance
+                ),
+                "dialogue_attempt_index": int(dialogue_attempt_index),
+                "retry_generation_ids": [
+                    normalize_space((record.get("meta") or {}).get("retry_generation_id"))
+                    for record in segment_records
+                    if isinstance(record, dict)
+                    and normalize_space(
+                        (record.get("meta") or {}).get("retry_generation_id")
+                    )
+                ],
+                "retry_temperature_override_count": sum(
+                    1
+                    for record in segment_records
+                    if isinstance(record, dict)
+                    and (record.get("meta") or {}).get("temperature_override")
+                    is not None
+                ),
+                "diversity_temperature_override_count": sum(
+                    1
+                    for record in segment_records
+                    if isinstance(record, dict)
+                    and normalize_space(
+                        (record.get("meta") or {}).get(
+                            "diversity_retry_reason"
+                        )
+                    )
+                ),
+                "structural_temperature_override_count": sum(
+                    1
+                    for record in segment_records
+                    if isinstance(record, dict)
+                    and normalize_space(
+                        (record.get("meta") or {}).get(
+                            "structural_retry_reason"
+                        )
+                    )
+                ),
+                "late_retry_start_segment_index": (
+                    FORMAL_DIALOGUE_LATE_RETRY_START_SEGMENT_INDEX
+                ),
+                "late_segment_validation_attempts": (
+                    FORMAL_DIALOGUE_LATE_SEGMENT_VALIDATION_ATTEMPTS
+                ),
+                "usage": dict(usage_totals),
+                "finish_reason": "segmented_complete",
+                "prompt_tokens_estimate": round(
+                    sum(prompt_token_estimates) / len(prompt_token_estimates),
+                    4,
+                ) if prompt_token_estimates else None,
+                "parent_context_turns": ((parent_context.get("diagnostics") or {}).get("parent_context_turns") if isinstance(parent_context.get("diagnostics"), dict) else None),
+                "parent_context_tokens_estimate": ((parent_context.get("diagnostics") or {}).get("parent_context_tokens_estimate") if isinstance(parent_context.get("diagnostics"), dict) else None),
+                "parent_dialogue_tokens": parent_tokens,
+                "parent_token_count_mode": parent_token_mode,
+                "length_guard_effective_parent_baseline_tokens": effective_parent_baseline,
+                "required_new_tokens": required_new_tokens,
+                "target_tokens_with_margin": target_tokens,
+                "api_native_appended_tokens": cumulative_tokens,
+                "api_native_appended_turn_count": len(appended_clean),
+                "emitted_markers": sorted(emitted_markers),
+                "final_prefix_hash": prefix_hash,
+                "prefix_hash_chain_verified": prefix_hash_chain_verified,
+                "qa_deferred_until_final_alignment": True,
+                "exact_claim_preflight": exact_claim_preflight,
+            }
+
+    cumulative_tokens, _ = dialogue_tokens_for_turns(appended_clean, tokenizer_path)
+    return None, {
+        "used": False,
+        "call_kind": "api_formal_segmented_dialogue",
+        "error_type": "insufficient_api_native_segmented_dialogue",
+        "segment_api_call_count": api_call_count,
+        "attempts": api_attempt_count,
+        "segment_records": segment_records,
+        "marker_capacity_diagnostics": marker_capacity_diagnostics,
+        "marker_schedule_records": marker_schedule_records,
+        "marker_scheduler_summary": formal_segment_marker_scheduler_summary(
+            marker_capacity_diagnostics,
+            marker_schedule_records,
+            emitted_markers,
+        ),
+        "required_new_tokens": required_new_tokens,
+        "target_tokens_with_margin": target_tokens,
+        "api_native_appended_tokens": cumulative_tokens,
+        "api_native_appended_turn_count": len(appended_clean),
+        "missing_markers": sorted(set(anchor_to_event) - emitted_markers),
+        "final_prefix_hash": prefix_hash,
+        "parent_context_provenance": formal_parent_prompt_audit_summary(
+            formal_parent_context,
+            parent_prompt_audits,
+            validated_parent_turn_count=len(parent_turns),
+        ),
+        "accepted_prefix_context_provenance": (
+            formal_accepted_prefix_prompt_audit_summary(
+                accepted_prefix_prompt_audits
+            )
+        ),
+        "retry_diversity_diagnostics": {
+            "schema_version": FORMAL_DIALOGUE_RETRY_VARIATION_VERSION,
+            "raw_failed_turn_text_included": False,
+            "late_retry_start_segment_index": (
+                FORMAL_DIALOGUE_LATE_RETRY_START_SEGMENT_INDEX
+            ),
+            "late_segment_validation_attempts": (
+                FORMAL_DIALOGUE_LATE_SEGMENT_VALIDATION_ATTEMPTS
+            ),
+        },
+        "exact_claim_preflight": exact_claim_preflight,
+    }
+
+
 def call_api_graph_conditioned_dialogue_expansion(
     current_event_plan_with_anchors: dict[str, Any],
     seed_row: dict[str, Any],
@@ -3092,19 +12074,38 @@ def call_api_graph_conditioned_dialogue_expansion(
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     dialogue_plan = sanitize_event_plan_for_dialogue_api(current_event_plan_with_anchors)
     sanitized_seed_context = sanitize_seed_context_for_dialogue_api(seed_row)
+    stage64_qa_mode = bool(isinstance(policy, dict) and policy.get("qa_operation_answer_type_diversification"))
+    stage64_target = policy.get("stage64_target") if isinstance(policy, dict) and isinstance(policy.get("stage64_target"), dict) else {}
     anchor_realization_checklist = [
         {
+            "event_instance_id": event.get("event_instance_id"),
             "fact_id": event.get("fact_id"),
             "marker": event.get("marker"),
             "natural_support_claim_to_include": event.get("dialogue_support_claim"),
             "status_meaning": event.get("status_meaning"),
+            "dependency_facts_to_express": copy.deepcopy(
+                event.get("dependency_facts_to_express") or []
+            ),
+            "scope_fact_to_express": event.get("scope_fact_to_express"),
+            "membership_fact_to_express": event.get(
+                "membership_fact_to_express"
+            ),
         }
         for event in dialogue_plan.get("events") or []
         if isinstance(event, dict) and event.get("required") is not False
     ]
+    evidence_layout_plan = _stage64_evidence_layout_plan(
+        anchor_realization_checklist,
+        current_event_plan=current_event_plan_with_anchors,
+        qa_operation=stage64_target.get("qa_operation"),
+        item_difficulty_target=(
+            (policy or {}).get("item_difficulty_target")
+            or (policy or {}).get("boundary_item_difficulty_target")
+        ),
+    )
     easy_mode_scaffold = _is_easy_curriculum(policy)
     natural_dialogue_scaffold = []
-    for index, item in enumerate(anchor_realization_checklist):
+    for index, item in enumerate(anchor_realization_checklist if not stage64_qa_mode else []):
         marker = item.get("marker")
         claim = normalize_space(item.get("natural_support_claim_to_include"))
         if not (marker and claim):
@@ -3146,18 +12147,29 @@ def call_api_graph_conditioned_dialogue_expansion(
             f"{max(effective_required_new_tokens + 384, 1400)} new approximate tokens. "
             "Use enough substantive new turns to create a genuinely longer conversation; do not rely on short filler."
         )
-    stage64_qa_mode = bool(isinstance(policy, dict) and policy.get("qa_operation_answer_type_diversification"))
-    stage64_target = policy.get("stage64_target") if isinstance(policy, dict) and isinstance(policy.get("stage64_target"), dict) else {}
+    stage64_difficulty_target, stage64_difficulty_contract = _stage64_prompt_difficulty_contract(
+        policy,
+        stage64_target.get("qa_operation"),
+    )
+    stage64_reasoning_contract = _stage64_reasoning_contract_from_target(
+        stage64_target
+    )
     if stage64_qa_mode:
         target_operation = normalize_space(stage64_target.get("qa_operation"))
         preferred_answer_type = normalize_space(stage64_target.get("preferred_answer_type"))
+        canonical_qa_subtype = STAGE64_CANONICAL_QA_SUBTYPES.get(target_operation)
+        expected_answer_projection = STAGE64_ANSWER_PROJECTION_BY_OPERATION.get(
+            target_operation
+        )
         target_clause = (
             f" Use qa_operation={target_operation!r} for this sample."
             if target_operation
             else ""
         )
         answer_type_clause = (
-            f" Prefer answer_type={preferred_answer_type!r} if the current graph facts support it; otherwise choose another allowed answer_type."
+            " Ignore preferred_answer_type='YesNo' for bridge and choose a concrete non-YesNo answer type."
+            if target_operation == "bridge" and preferred_answer_type == "YesNo"
+            else f" You MUST use answer_type={preferred_answer_type!r}. If the frozen graph cannot support that exact type, fail this sample instead of drifting to another answer type."
             if preferred_answer_type
             else ""
         )
@@ -3170,14 +12182,33 @@ def call_api_graph_conditioned_dialogue_expansion(
         qa_schema: dict[str, Any] = {
             "question_type": "single_choice",
             "qa_operation": target_operation or list(STAGE64_QA_OPERATIONS),
-            "qa_subtype": "short subtype string, e.g. final_state, before_after, entity_to_event, scope_yesno, explicit_count_lookup",
+            "qa_subtype": (
+                f"exactly {canonical_qa_subtype!r}"
+                if canonical_qa_subtype
+                else "operation-compatible short subtype string"
+            ),
+            **(
+                {
+                    field: copy.deepcopy(stage64_reasoning_contract[field])
+                    for field in STAGE64_REASONING_TARGET_FIELDS
+                }
+                if stage64_reasoning_contract is not None
+                else {}
+            ),
             "answer_type": (
-                f"one string from {list(STAGE64_ANSWER_TYPES)}; prefer {preferred_answer_type}"
+                f"one non-YesNo string from {list(STAGE64_ANSWER_TYPES)}"
+                if target_operation == "bridge" and preferred_answer_type == "YesNo"
+                else
+                f"exactly {preferred_answer_type!r}; do not substitute another allowed type"
                 if preferred_answer_type
                 else list(STAGE64_ANSWER_TYPES)
             ),
             "answer_format": "single_choice_mcq",
-            "question": "natural MCQ question; avoid ambiguous pronouns such as it/they/them/this",
+            "question": (
+                "a concrete question naming both compared entities and containing the literal word 'compare' or 'difference'"
+                if target_operation == "comparison"
+                else "natural MCQ question; avoid ambiguous pronouns such as it/they/them/this"
+            ),
             "question_text": "same as question",
             "options": [
                 {
@@ -3196,12 +12227,49 @@ def call_api_graph_conditioned_dialogue_expansion(
                 "answer_source": "graph_anchor",
                 "qa_operation": "same as qa_operation",
                 "qa_subtype": "same as qa_subtype",
+                **(
+                    {
+                        field: copy.deepcopy(stage64_reasoning_contract[field])
+                        for field in STAGE64_REASONING_TARGET_FIELDS
+                    }
+                    if stage64_reasoning_contract is not None
+                    else {}
+                ),
                 "answer_type": "same as answer_type",
                 "reasoning_anchor_path": ["event_instance_id or marker references"],
                 "required_anchor_refs": ["event_instance_id or marker references"],
                 "supporting_anchor_refs": ["event_instance_id or marker references"],
                 "gold_anchor_refs": ["event_instance_id or marker references"],
                 "distractor_anchor_refs": ["event_instance_id or marker references"],
+                "dependency_closure_refs": [
+                    "the complete operation-specific dependency/reasoning closure"
+                ],
+                "filter_predicate": (
+                    {
+                        "condition": "exact shared membership condition",
+                        "included": True,
+                    }
+                    if target_operation == "count"
+                    else {
+                        "observer": "exact scoped observer",
+                        "permission": "exact scoped permission",
+                        "condition": "exact scoped condition",
+                    }
+                    if target_operation == "visibility"
+                    else "omit for operations without filtering"
+                ),
+                "cause_direction": (
+                    "cause_to_effect"
+                    if target_operation == "cause_consequence"
+                    else "omit unless cause_consequence"
+                ),
+                "cause_source_ref": (
+                    "unique earlier cause event reference"
+                    if target_operation == "cause_consequence"
+                    else "omit unless cause_consequence"
+                ),
+                "answer_projection": expected_answer_projection
+                or "operation-specific answer projection",
                 "gold_answer": "text of the gold option",
                 "normalized_gold_answer": "lowercase normalized gold answer text",
             },
@@ -3229,13 +12297,29 @@ def call_api_graph_conditioned_dialogue_expansion(
             length_instruction,
             "Make appended turns substantive: each turn should usually contain 2-4 natural sentences, not short acknowledgements.",
             "Write appended turns that naturally continue the existing conversation and express every required current graph event.",
-            "The natural_dialogue_scaffold is already valid and natural. Preserve every scaffold turn exactly in appended_dialogue_turns.",
-            "You may add neutral setup/closing turns, but do not delete, merge, paraphrase, or unanchor scaffold turns.",
-            "For each checklist item, include the natural_support_claim_to_include text verbatim in at least one dialogue turn.",
-            "Use one separate dialogue turn for each checklist item; do not merge multiple checklist items into one support turn.",
-            "The support turn may be simple and direct; correctness is more important than literary style.",
+            *(
+                [
+                    "No deterministic fact-table scaffold will be inserted into the solver-visible dialogue. The API-appended dialogue itself must naturally carry every checklist fact.",
+                    "Do not copy the anchor_realization_checklist as a block of adjacent fact statements. Paraphrase each natural_support_claim_to_include naturally without changing its truth.",
+                    "For each checklist item, naturally express every dependency_facts_to_express clause, the observer and permission in scope_fact_to_express, and the condition plus included/excluded decision in membership_fact_to_express. Never speak event IDs, marker values, dependency field names, scope schema, or membership schema.",
+                    "Use evidence_layout_plan as a placement-only schedule: realize its marker_refs naturally in the requested early, middle, and later regions, but never render the plan, marker, or checklist language as dialogue text.",
+                    "Use one support turn per required checklist item by default. A natural turn may support exactly two closely related required items, but never three; keep at least 75 percent as many distinct evidence turns as required events and do not exceed evidence_layout_plan.maximum_shared_turn_reduction.",
+                    "Disperse required evidence across the early, middle, and later portions of appended_dialogue_turns: its first-to-last evidence span must cover at least 35 percent of appended turns.",
+                    "Do not place more than half of required evidence turns in the final quarter of appended_dialogue_turns, and do not make more than half of the required evidence turns one consecutive run.",
+                    "The support_quote for each marker must be an exact quote from its natural evidence turn, not necessarily the checklist wording.",
+                ]
+                if stage64_qa_mode
+                else [
+                    "The natural_dialogue_scaffold is already valid and natural. Preserve every scaffold turn exactly in appended_dialogue_turns.",
+                    "You may add neutral setup/closing turns, but do not delete, merge, paraphrase, or unanchor scaffold turns.",
+                    "For each checklist item, include the natural_support_claim_to_include text verbatim in at least one dialogue turn.",
+                    "The natural_support_claim_to_include already contains any required dependency, observer+permission scope, and membership condition/included-or-excluded semantics. Preserve the entire claim; never replace those clauses with IDs or schema words.",
+                    "Use one separate dialogue turn for each checklist item; do not merge multiple checklist items into one support turn.",
+                    "The support turn may be simple and direct; correctness is more important than literary style.",
+                ]
+            ),
             "Attach that fact's marker to the same turn via alignment_anchors and support_quotes.",
-            "Set support_quotes[marker] to the exact natural support claim you included.",
+            "Set support_quotes[marker] to an exact quote from the same marked dialogue turn.",
             "For required graph events, sidecar alignment_anchors/support_quotes are enough; event_alignment_proposal may be an empty list when sidecars cover all required markers.",
             "Do not invent event_alignment_proposal entries for neutral/context turns.",
             "Use sidecar alignment_anchors/support_quotes; inline [[ANCHOR]] markers are only a fallback.",
@@ -3256,6 +12340,86 @@ def call_api_graph_conditioned_dialogue_expansion(
                     "For non-YesNo Stage64 QA, provide exactly four options A-D. For YesNo Stage64 QA, provide exactly two options A-B.",
                     "qa_proposal.options is mandatory and must be a JSON array of option objects. Never omit options.",
                     "Every option must include id, text, answer_type, source_event_instance_id, anchor_ref, and truth_value.",
+                    "Every options[].text must be non-empty and unique after case, punctuation, and whitespace normalization. Never copy the gold text into a distractor. Minimal-pair distractors with genuinely different dates, counts, entities, or states are allowed.",
+                    "Each option text must be an answer value, not a restatement of the question. Number options must be numeric values, DateOrTime options must be dates/times, and YesNo options must be exactly Yes/No.",
+                    "Use a concrete semantic graph slot, never raw_qa or raw_qa_*. For non-YesNo questions, at least one distractor must compete with the gold on the same entity or semantic slot.",
+                    "Make the item hard for the fixed Stage2 solver through same-slot updates, one-hop-preserving bridge alternatives, close counts/dates, wrong visibility scope, or plausible cause/effect swaps. Do not use unrelated facts as distractors.",
+                    f"The requested item_difficulty_target is {stage64_difficulty_target!r}; follow stage64_item_difficulty_contract exactly.",
+                    stage64_difficulty_contract["qa"],
+                    *(
+                        [stage64_difficulty_contract["operation_qa"]]
+                        if stage64_difficulty_contract.get("operation_qa")
+                        else []
+                    ),
+                    "The qa_operation label must describe the actual question. comparison must explicitly compare; visibility must ask who can know/see/access; count must require counting; cause_consequence must ask about a cause or result; bridge must require at least two anchors.",
+                    *(
+                        [
+                            f"Set qa_proposal.qa_subtype and query_plan.qa_subtype exactly to {canonical_qa_subtype!r} for qa_operation={target_operation!r}. Do not use any other qa_operation name as a subtype."
+                        ]
+                        if canonical_qa_subtype
+                        else []
+                    ),
+                    *(
+                        [
+                            "The reasoning target identity is immutable: qa_proposal and query_plan must each echo reasoning_subtype, reasoning_template, hop_count, and hard_negative_strategy exactly as supplied; changing one is a hard failure.",
+                            f"Use at least {stage64_reasoning_contract['hop_count']} distinct graph-grounded entries in query_plan.reasoning_anchor_path and realize hard_negative_strategy={stage64_reasoning_contract['hard_negative_strategy']!r} with close, operation-compatible distractors.",
+                            "query_plan.dependency_closure_refs must contain the complete graph closure required by reasoning_template, not merely enough unrelated references to reach hop_count.",
+                            f"Set query_plan.answer_projection exactly to {expected_answer_projection!r}; it must describe the operation's derived answer rather than a copied support sentence.",
+                            *(
+                                [
+                                    "For this temporal item, a plain latest-time lookup is forbidden. The natural question must explicitly require resolving cancellation, outdated information, or report/belief validity before choosing the current value; do not make max time or the largest date sufficient by itself."
+                                ]
+                                if stage64_reasoning_contract.get(
+                                    "forbid_max_time_shortcut"
+                                )
+                                else []
+                            ),
+                        ]
+                        if stage64_reasoning_contract is not None
+                        else []
+                    ),
+                    *(
+                        [
+                            "For comparison, the user-facing question MUST name both compared entities and contain the literal word 'compare' or 'difference'. A lookup about only one person and a plain 'How many' count question are invalid.",
+                            "For comparison, answer_type MUST be Number. Ask for the absolute difference between the two explicit integer values; never infer a number from qualitative values.",
+                            "For comparison, query_plan.reasoning_anchor_path, required_anchor_refs, supporting_anchor_refs, and gold_anchor_refs MUST each contain exactly the same two graph events, one event for each entity in the unique comparable pair.",
+                            "For comparison, gold and gold_answer_text MUST equal abs(left.value-right.value). Return four distinct integer options, with at least two distractors within 2 of the derived answer.",
+                        ]
+                        if target_operation == "comparison"
+                        else []
+                    ),
+                    *(
+                        [
+                            "For count, the question MUST name the exact set, concrete entity, and semantic slot/membership condition represented by event set_membership metadata.",
+                            "For count, reasoning_anchor_path, required_anchor_refs, and supporting_anchor_refs MUST each cite every candidate member in one shared set_id/entity/slot group (at least six distinct values, with at least two included and two excluded). Gold must equal the number whose included flag is true.",
+                            "For count, query_plan.filter_predicate must copy the shared natural membership condition and set included to JSON true.",
+                            "For count, return exactly four nearby distinct integer option texts; include the derived count, at least one lower value, and at least one higher value.",
+                        ]
+                        if target_operation == "count"
+                        else []
+                    ),
+                    *(
+                        [
+                            "For visibility, query_plan.filter_predicate must copy the unique permission event's observer, permission, and condition exactly; all three dimensions are required.",
+                        ]
+                        if target_operation == "visibility"
+                        else []
+                    ),
+                    *(
+                        [
+                            "For cause_consequence, query_plan.cause_direction must be exactly 'cause_to_effect', cause_source_ref must identify the unique earlier cause, and dependency_closure_refs must include both cause and effect.",
+                        ]
+                        if target_operation == "cause_consequence"
+                        else []
+                    ),
+                    *(
+                        [
+                            "For relation_lookup, the question MUST ask for the relation value of the entity established by the binder, not a direct isolated lookup. query_plan.dependency_closure_refs and reasoning_anchor_path must include exactly the binder E1 and relation E2 closure, while E3 and E4 are close same-entity and wrong-entity distractor roles.",
+                            f"For relation_lookup, answer_type MUST equal the frozen preferred_answer_type={preferred_answer_type!r}; if the graph cannot support that concrete type, reject the sample instead of silently changing the type.",
+                        ]
+                        if target_operation == "relation_lookup"
+                        else []
+                    ),
                     "qa_proposal.gold must be a JSON array containing exactly one option id such as [\"A\"], never an event id, marker, or answer text.",
                     "Use exactly one gold option. Do not include raw_qa, gold, correct answer, answer key, anchor, marker, graph, event_instance, or internal slot names in the user-facing question/options.",
                     "Do not include solver-visible template phrases in qa_proposal.question, question_text, gold_answer_text, or options[].text: latest confirmed detail(s), confirmed detail(s), most recent confirmed detail(s), final active state, confirmed active state, current graph, graph anchor, event instance, marker, anchor, raw_qa.",
@@ -3264,6 +12428,14 @@ def call_api_graph_conditioned_dialogue_expansion(
                     "Every question must name a concrete entity/person/place/object and ask for a concrete relation, date, count, visibility scope, cause, comparison, or consequence.",
                     "For temporal_state_update, ask about the concrete person/place/object and the latest real-world fact from the dialogue; do not ask generic questions like which event is settled as true, which event is currently settled as true, which option reflects the state after all updates, or which statement is correct.",
                     "For temporal_state_update, the question must be concrete, e.g. 'After the later correction, what place did Audrey settle on for the dogs?' Never use 'Which event...', 'currently settled as true', 'settled as true', 'final active state', or 'state after all updates'.",
+                    "For temporal_state_update, the gold option and at least two distractors MUST cite three graph events with the exact same entity and exact same slot and three semantically distinct graph values. Do not use an unrelated slot as one of those two distractors.",
+                    (
+                        "For temporal_state_update, exactly one same-slot source event may be active/restored. It is the gold source and MUST have a lower time_index than a later same-slot invalid event realizing the requested hard_negative_strategy; both the reasoning path and distractor references must include that later invalid event. The maximum-time event must not be gold."
+                        if stage64_reasoning_contract is not None
+                        and stage64_reasoning_contract.get("forbid_max_time_shortcut")
+                        else "For temporal_state_update, exactly one same-slot source event may be active/restored. The gold source_event_instance_id must be that unique current event and it must have the highest time_index; every earlier same-slot candidate must be non-active."
+                    ),
+                    "For temporal_state_update, write each option as its source event's answer value. Never append parenthetical status annotations such as '(restored after cancellation)' or '(expired assumption)' to disguise repeated values or distinguish two otherwise identical answers.",
                     "qa_proposal.gold must always be option labels only, such as ['A'] or ['D']; never put a marker, anchor_ref, event_instance_id, or answer text in gold.",
                 ]
                 if stage64_qa_mode
@@ -3273,6 +12445,7 @@ def call_api_graph_conditioned_dialogue_expansion(
         ],
         "sanitized_dialogue_fact_plan": dialogue_plan,
         "anchor_realization_checklist": anchor_realization_checklist,
+        "evidence_layout_plan": evidence_layout_plan if stage64_qa_mode else {},
         "natural_dialogue_scaffold": natural_dialogue_scaffold,
         "compact_parent_context": {
             "parent_dialogue_digest": parent_context.get("parent_dialogue_digest"),
@@ -3294,6 +12467,13 @@ def call_api_graph_conditioned_dialogue_expansion(
         },
         "sanitized_seed_context": sanitized_seed_context,
         "stage64_target": copy.deepcopy(stage64_target) if stage64_qa_mode else {},
+        "stage64_reasoning_target_contract": (
+            copy.deepcopy(stage64_reasoning_contract)
+            if stage64_qa_mode and stage64_reasoning_contract is not None
+            else None
+        ),
+        "item_difficulty_target": stage64_difficulty_target if stage64_qa_mode else None,
+        "stage64_item_difficulty_contract": stage64_difficulty_contract if stage64_qa_mode else None,
         "retry_context": retry_context or {},
         "banned_dialogue_terms": list(BANNED_SOLVER_VISIBLE_TERMS),
         "output_schema": {
@@ -3366,6 +12546,13 @@ def required_anchor_repair_items(
                     "marker": marker,
                     "natural_support_claim_to_include": event.get("dialogue_support_claim"),
                     "status_meaning": event.get("status_meaning"),
+                    "dependency_facts_to_express": copy.deepcopy(
+                        event.get("dependency_facts_to_express") or []
+                    ),
+                    "scope_fact_to_express": event.get("scope_fact_to_express"),
+                    "membership_fact_to_express": event.get(
+                        "membership_fact_to_express"
+                    ),
                     "currently_missing": event_id in missing_ids or proposals_by_event.get(event_id, 0) == 0,
                 }
             )
@@ -3382,12 +12569,17 @@ def call_api_alignment_repair(
     parent_context: dict[str, Any],
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     repair_items = required_anchor_repair_items(current_event_plan_with_anchors, alignment_result, raw_alignment_proposal)
+    evidence_layout_plan = _stage64_evidence_layout_plan(repair_items)
     prompt = {
         "task": "repair only appended dialogue alignment",
         "requirements": [
             "Minimally patch appended_dialogue_turns only; do not rewrite the parent dialogue.",
             "Keep valid appended turns unchanged whenever possible.",
             "Add or revise only turns needed to support missing current events or fix contradictions.",
+            "If evidence_dispersion failed, move or naturally rewrite marked support turns so required evidence spans early, middle, and later appended turns rather than one consecutive block or a tail fact table.",
+            "Follow evidence_layout_plan as a placement-only schedule; never expose marker refs or plan language in dialogue text.",
+            "For evidence dispersion, use one support turn per required event by default. A natural turn may support exactly two closely related events, never three; distinct evidence turns must be at least 75 percent of required events (rounded up).",
+            "Span at least 35 percent of appended turns, keep the longest consecutive evidence run at or below half the required events, and keep at most half the evidence in the final quarter.",
             "Generate alignment only for newly appended turns.",
             "Do not reference anchors that were not provided and do not invent anchors.",
             "Every required current event must be naturally expressed in at least one appended turn.",
@@ -3403,8 +12595,10 @@ def call_api_alignment_repair(
             "unsupported_alignment_count": alignment_result.get("unsupported_alignment_count"),
             "contradiction_count": alignment_result.get("contradiction_count"),
             "anchor_leakage_count": alignment_result.get("anchor_leakage_count"),
+            "evidence_dispersion": copy.deepcopy(alignment_result.get("evidence_dispersion") or {}),
         },
         "required_anchor_repair_items": repair_items,
+        "evidence_layout_plan": evidence_layout_plan,
         "compact_parent_context": {
             "parent_dialogue_digest": parent_context.get("parent_dialogue_digest"),
             "selected_relevant_parent_turns": parent_context.get("selected_relevant_parent_turns"),
@@ -3458,6 +12652,11 @@ def _stage64_event_candidates_for_prompt(
     event_to_anchor = current_event_plan_with_anchors.get("current_event_instance_to_anchor")
     if not isinstance(event_to_anchor, dict):
         event_to_anchor = {}
+    source_event_by_instance_id = {
+        normalize_space(event.get("event_instance_id")): event
+        for event in current_event_plan_with_anchors.get("events") or []
+        if isinstance(event, dict) and normalize_space(event.get("event_instance_id"))
+    }
     rows: list[dict[str, Any]] = []
     for event in dialogue_plan.get("events") or []:
         if not isinstance(event, dict):
@@ -3466,17 +12665,31 @@ def _stage64_event_candidates_for_prompt(
         marker = normalize_space(event.get("marker") or event_to_anchor.get(event_id))
         if not event_id:
             continue
+        source_event = source_event_by_instance_id.get(event_id) or {}
         rows.append(
             {
                 "event_instance_id": event_id,
+                "source_event_id": normalize_space(source_event.get("event_id")) or None,
                 "marker": marker,
                 "entity": normalize_space(event.get("entity")),
                 "slot": normalize_space(event.get("slot")),
-                "status": normalize_space(event.get("status")),
+                "value": copy.deepcopy(source_event.get("value")),
+                "status": normalize_space(source_event.get("status")),
+                "time_index": copy.deepcopy(source_event.get("time_index")),
+                "previous_value": copy.deepcopy(source_event.get("previous_value")),
+                "depends_on": copy.deepcopy(source_event.get("depends_on"))
+                if isinstance(source_event.get("depends_on"), list)
+                else [],
+                "scope": copy.deepcopy(source_event.get("scope"))
+                if isinstance(source_event.get("scope"), dict)
+                else None,
+                "set_membership": copy.deepcopy(source_event.get("set_membership"))
+                if isinstance(source_event.get("set_membership"), dict)
+                else None,
                 "answer_candidate_text": normalize_space(
                     event.get("dialogue_support_claim")
-                    or event.get("value")
-                    or event.get("dialogue_value")
+                    or source_event.get("dialogue_value")
+                    or source_event.get("value")
                 ),
                 "evidence_turn_ids": _turn_ids_for_event(event, current_alignment),
             }
@@ -3501,6 +12714,199 @@ def _stage64_compact_appended_turns_for_prompt(appended_dialogue_turns: list[dic
     return compact[-80:]
 
 
+def derive_unique_count_contract(
+    current_event_plan: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Freeze the sole complete count set using durable event instance IDs."""
+
+    count_set = _stage64_unique_validated_count_set(current_event_plan)
+    raw_events = current_event_plan.get("events") if isinstance(current_event_plan, dict) else None
+    if count_set is None or not isinstance(raw_events, list):
+        return None
+
+    event_ids = [normalize_space(event.get("event_instance_id")) for event in raw_events]
+    raw_entities = [normalize_space(event.get("entity")) for event in raw_events]
+    raw_slots = [normalize_space(event.get("slot")) for event in raw_events]
+    raw_conditions = [
+        normalize_space(event["set_membership"].get("condition"))
+        if isinstance(event.get("set_membership"), dict)
+        else ""
+        for event in raw_events
+    ]
+    if (
+        any(not event_id for event_id in event_ids)
+        or len(set(event_ids)) != len(event_ids)
+        or event_ids != list(count_set["event_instance_ids"])
+        or any(not entity for entity in raw_entities)
+        or len(set(raw_entities)) != 1
+        or any(not slot for slot in raw_slots)
+        or len(set(raw_slots)) != 1
+        or any(not condition for condition in raw_conditions)
+        or len(set(raw_conditions)) != 1
+    ):
+        return None
+
+    included_ids = [
+        event_id
+        for event_id, event in zip(event_ids, raw_events)
+        if event["set_membership"]["included"] is True
+    ]
+    excluded_ids = [
+        event_id
+        for event_id, event in zip(event_ids, raw_events)
+        if event["set_membership"]["included"] is False
+    ]
+    if (
+        included_ids != list(count_set["included_event_instance_ids"])
+        or excluded_ids != list(count_set["excluded_event_instance_ids"])
+    ):
+        return None
+
+    contract: dict[str, Any] = {
+        "schema_version": STAGE64_COUNT_GRAPH_CONTRACT_VERSION,
+        "set_id": count_set["set_id"],
+        "normalized_set_id": count_set["normalized_set_id"],
+        "entity": raw_entities[0],
+        "normalized_entity": count_set["entity"],
+        "slot": raw_slots[0],
+        "normalized_slot": count_set["slot"],
+        "condition": raw_conditions[0],
+        "normalized_condition": stage64_quality.normalized_option_text(
+            raw_conditions[0]
+        ),
+        "event_instance_ids": event_ids,
+        "included_event_instance_ids": included_ids,
+        "excluded_event_instance_ids": excluded_ids,
+        "member_count": int(count_set["member_count"]),
+        "expected_included_count": int(count_set["included_count"]),
+        "excluded_count": int(count_set["excluded_count"]),
+    }
+    contract["contract_sha256"] = _stage64_json_sha256(contract)
+    return contract
+
+
+def derive_unique_comparison_contract(
+    current_event_plan: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Derive the sole durable integer-comparison pair without mutating the graph."""
+
+    raw_events = current_event_plan.get("events") if isinstance(current_event_plan, dict) else None
+    if not isinstance(raw_events, list) or not all(isinstance(event, dict) for event in raw_events):
+        return None
+
+    grouped: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    for event in raw_events:
+        normalized_slot = stage64_quality.normalized_option_text(event.get("slot"))
+        time_index = event.get("time_index")
+        if (
+            normalized_slot
+            and isinstance(time_index, int)
+            and not isinstance(time_index, bool)
+        ):
+            grouped.setdefault((normalized_slot, time_index), []).append(event)
+
+    valid_pairs: list[tuple[str, int, list[dict[str, Any]]]] = []
+    for (normalized_slot, time_index), group in grouped.items():
+        active = [
+            event
+            for event in group
+            if str(event.get("status") or "").casefold()
+            in stage64_quality.ACTIVE_STATUSES
+        ]
+        values = [event.get("value") for event in active]
+        entities = {
+            stage64_quality.normalized_option_text(event.get("entity"))
+            for event in active
+        }
+        if (
+            len(active) == 2
+            and len(entities - {""}) == 2
+            and all(
+                isinstance(value, int) and not isinstance(value, bool)
+                for value in values
+            )
+            and values[0] != values[1]
+        ):
+            valid_pairs.append((normalized_slot, time_index, active))
+    if len(valid_pairs) != 1:
+        return None
+
+    normalized_slot, time_index, pair = valid_pairs[0]
+    left, right = pair
+    left_id = normalize_space(left.get("event_instance_id"))
+    right_id = normalize_space(right.get("event_instance_id"))
+    left_entity = normalize_space(left.get("entity"))
+    right_entity = normalize_space(right.get("entity"))
+    if (
+        not left_id
+        or not right_id
+        or left_id == right_id
+        or not left_entity
+        or not right_entity
+    ):
+        return None
+
+    all_event_ids = [
+        normalize_space(event.get("event_instance_id")) for event in raw_events
+    ]
+    if any(not event_id for event_id in all_event_ids) or len(set(all_event_ids)) != len(
+        all_event_ids
+    ):
+        return None
+    primary_ids = [left_id, right_id]
+    primary_id_set = set(primary_ids)
+    context_ids = [
+        event_id for event_id in all_event_ids if event_id not in primary_id_set
+    ]
+    left_value = int(left["value"])
+    right_value = int(right["value"])
+    time_disambiguation_dimensions: list[dict[str, Any]] = []
+    for pair_event in pair:
+        entity = stage64_quality.normalized_option_text(pair_event.get("entity"))
+        entity_time_indices = sorted(
+            {
+                event.get("time_index")
+                for event in raw_events
+                if stage64_quality.normalized_option_text(event.get("entity"))
+                == entity
+                and stage64_quality.normalized_option_text(event.get("slot"))
+                == normalized_slot
+                and isinstance(event.get("time_index"), int)
+                and not isinstance(event.get("time_index"), bool)
+            }
+        )
+        if len(entity_time_indices) > 1:
+            time_disambiguation_dimensions.append(
+                {
+                    "entity": normalize_space(pair_event.get("entity")),
+                    "normalized_slot": normalized_slot,
+                    "time_indices": entity_time_indices,
+                }
+            )
+    contract: dict[str, Any] = {
+        "schema_version": STAGE64_COMPARISON_GRAPH_CONTRACT_VERSION,
+        "left_event_instance_id": left_id,
+        "right_event_instance_id": right_id,
+        "event_instance_ids": primary_ids,
+        "primary_event_instance_ids": primary_ids,
+        "context_event_instance_ids": context_ids,
+        "left_entity": left_entity,
+        "right_entity": right_entity,
+        "entities": [left_entity, right_entity],
+        "slot": normalized_slot,
+        "normalized_slot": normalized_slot,
+        "time_index": time_index,
+        "left_value": left_value,
+        "right_value": right_value,
+        "values": [left_value, right_value],
+        "expected_absolute_difference": abs(left_value - right_value),
+        "requires_natural_time_qualifier": bool(time_disambiguation_dimensions),
+        "time_disambiguation_dimensions": time_disambiguation_dimensions,
+    }
+    contract["contract_sha256"] = _stage64_json_sha256(contract)
+    return contract
+
+
 def call_api_stage64_qa_repair(
     current_event_plan_with_anchors: dict[str, Any],
     current_alignment: dict[str, Any],
@@ -3509,42 +12915,400 @@ def call_api_stage64_qa_repair(
     failure_reason: str,
     appended_dialogue_turns: list[dict[str, Any]],
     args: argparse.Namespace,
+    *,
+    item_difficulty_target: str | None = None,
+    mode: str = "repair",
+    frozen_dependencies: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     target_operation = normalize_space((stage64_target or {}).get("qa_operation")) if isinstance(stage64_target, dict) else ""
     preferred_answer_type = normalize_space((stage64_target or {}).get("preferred_answer_type")) if isinstance(stage64_target, dict) else ""
+    stage64_reasoning_contract = _stage64_reasoning_contract_from_target(
+        stage64_target
+    )
+    canonical_qa_subtype = STAGE64_CANONICAL_QA_SUBTYPES.get(target_operation)
+    expected_answer_projection = STAGE64_ANSWER_PROJECTION_BY_OPERATION.get(
+        target_operation
+    )
     required_answer_types = sorted(STAGE64_OPERATION_REQUIRED_ANSWER_TYPES.get(target_operation) or [])
+    normalized_difficulty_target, difficulty_contract = _stage64_prompt_difficulty_contract(
+        item_difficulty_target,
+        target_operation,
+    )
+    initial_final_generation = normalize_space(mode) == "final_generation"
+    temporal_graph_contract = (
+        derive_unique_temporal_state_update_contract(
+            current_event_plan_with_anchors,
+            stage64_target,
+        )
+        if target_operation == "temporal_state_update"
+        else None
+    )
+    if target_operation == "temporal_state_update" and temporal_graph_contract is None:
+        raise NativeGraphDialogueReject(
+            "stage64 temporal_state_update final QA requires one frozen unique "
+            "temporal_state_update_graph_contract"
+        )
+    count_graph_contract = (
+        derive_unique_count_contract(current_event_plan_with_anchors)
+        if target_operation == "count"
+        else None
+    )
+    if target_operation == "count" and count_graph_contract is None:
+        raise NativeGraphDialogueReject(
+            "stage64 count final QA requires one frozen unique count_graph_contract"
+        )
+    comparison_graph_contract = (
+        derive_unique_comparison_contract(current_event_plan_with_anchors)
+        if target_operation == "comparison"
+        else None
+    )
+    if target_operation == "comparison" and comparison_graph_contract is None:
+        raise NativeGraphDialogueReject(
+            "stage64 comparison final QA requires one frozen unique comparison_graph_contract"
+        )
+    temporal_output_options: list[dict[str, Any]] | None = None
+    temporal_contract_requirements: list[str] = []
+    temporal_answer_type: str | None = None
+    temporal_question_example: str | None = None
+    if (
+        target_operation == "temporal_state_update"
+        and temporal_graph_contract is not None
+    ):
+        temporal_answer_type = (
+            preferred_answer_type
+            if preferred_answer_type in STAGE64_ANSWER_TYPES
+            and preferred_answer_type != "YesNo"
+            else "AttributeValue"
+        )
+        temporal_question_example = (
+            (
+                "After disregarding the canceled proposal and resolving the other updates, "
+                if stage64_reasoning_contract
+                and stage64_reasoning_contract["hard_negative_strategy"]
+                == "same_slot_canceled_value"
+                else "After accounting for the outdated information and resolving the other updates, "
+                if stage64_reasoning_contract
+                and stage64_reasoning_contract["hard_negative_strategy"]
+                == "same_slot_outdated_value"
+                else "After separating reports or beliefs from committed updates, "
+                if stage64_reasoning_contract
+                and stage64_reasoning_contract["hard_negative_strategy"]
+                == "same_slot_report_or_belief_value"
+                else ""
+            )
+            + f"what is the current {re.sub(r'[_-]+', ' ', str(temporal_graph_contract['slot'])).strip()} "
+            f"of {temporal_graph_contract['entity']}?"
+        )
+        chain_ids = temporal_graph_contract["event_instance_ids"]
+        distractor_ids = temporal_graph_contract["distractor_event_instance_ids"]
+        current_id = temporal_graph_contract["current_event_instance_id"]
+        current_index = int(temporal_graph_contract["current_array_index"])
+        current_label = LETTERS[current_index]
+        value_surfaces = temporal_graph_contract["value_surfaces"]
+        current_value_surface = temporal_graph_contract["current_value_surface"]
+        temporal_output_options = [
+            {
+                "id": label,
+                "text": value_surfaces[index],
+                "answer_type": temporal_answer_type,
+                "truth_value": index == current_index,
+                "source_event_instance_id": chain_ids[index],
+                "anchor_ref": chain_ids[index],
+                "anchor_kind": "event",
+            }
+            for index, label in enumerate("ABCD")
+        ]
+        temporal_contract_requirements = [
+            "The frozen temporal_state_update_graph_contract is authoritative for both initial final QA generation and every repair; never infer another chain from event markers or previous_qa_proposal.",
+            f"The user-facing question must name the concrete entity {temporal_graph_contract['entity']!r}, the semantic slot {temporal_graph_contract['slot']!r}, and explicitly ask for its current/latest value without exposing graph metadata.",
+            f"Write an actual solver-facing question, not a schema instruction or description. A valid concrete form is {temporal_question_example!r}; question and question_text must be byte-identical and end with '?'.",
+            f"Emit options A-D in the frozen chronological chain order. Their text fields must equal these four exact graph value surfaces, with no support-claim paraphrase or annotation: {json.dumps(value_surfaces, ensure_ascii=False)}.",
+            f"For every option, source_event_instance_id and anchor_ref must both equal the same durable event_instance_id at that option's position: {json.dumps(chain_ids, ensure_ascii=False)}. Never emit a marker or short event_id in any option or reference list.",
+            f"All four options must explicitly include JSON boolean truth_value. Only option {current_label} (the unique active/current event) is true; every other option is false.",
+            f"qa_proposal.gold must be {json.dumps([current_label])}. qa_proposal.gold_answer_text, query_plan.gold_answer, and query_plan.normalized_gold_answer must identify the current graph value {current_value_surface!r}; the current source is durable event_instance_id {current_id!r}. The maximum-time option is deliberately not gold when forbid_max_time_shortcut is true.",
+            f"query_plan.reasoning_anchor_path, required_anchor_refs, and supporting_anchor_refs must each contain exactly all four durable chain IDs in chronological order: {json.dumps(chain_ids, ensure_ascii=False)}.",
+            f"query_plan.gold_anchor_refs must contain exactly the current durable ID: {json.dumps([current_id], ensure_ascii=False)}. query_plan.distractor_anchor_refs must contain exactly the three non-current durable IDs: {json.dumps(distractor_ids, ensure_ascii=False)}.",
+            f"anchor_refs.support must contain exactly all four durable chain IDs; anchor_refs.gold must contain exactly {json.dumps([current_id], ensure_ascii=False)}; anchor_refs.distractors must contain exactly {json.dumps(distractor_ids, ensure_ascii=False)}.",
+            *(
+                [
+                    f"The reasoning path and distractor references must include the later target-strategy invalid event IDs {json.dumps(temporal_graph_contract['later_strategy_event_instance_ids'], ensure_ascii=False)}; omitting them is a hard failure."
+                ]
+                if temporal_graph_contract.get("forbid_max_time_shortcut")
+                else []
+            ),
+            "Even when previous_qa_proposal mixes a source_event_instance_id with a marker belonging to another event, rebuild every option and reference group from temporal_state_update_graph_contract.",
+            "temporal_state_update_graph_contract is internal generation metadata and must never appear in solver-visible question, question_text, option text, or gold_answer_text.",
+        ]
+    comparison_output_options: list[dict[str, Any]] | None = None
+    comparison_contract_requirements: list[str] = []
+    if target_operation == "comparison" and comparison_graph_contract is not None:
+        pair_ids = comparison_graph_contract["primary_event_instance_ids"]
+        entities = comparison_graph_contract["entities"]
+        comparison_slot = comparison_graph_contract["normalized_slot"]
+        expected_difference = comparison_graph_contract["expected_absolute_difference"]
+        context_ids = comparison_graph_contract["context_event_instance_ids"]
+        comparison_output_options = [
+            {
+                "id": label,
+                "text": str(value),
+                "answer_type": "Number",
+                "truth_value": label == "A",
+                "source_event_instance_id": pair_ids[index % 2],
+                "anchor_ref": pair_ids[index % 2],
+                "anchor_kind": "event",
+            }
+            for index, (label, value) in enumerate(
+                zip(
+                    "ABCD",
+                    (
+                        expected_difference,
+                        expected_difference - 1,
+                        expected_difference + 1,
+                        expected_difference + 2,
+                    ),
+                )
+            )
+        ]
+        comparison_contract_requirements = [
+            "The frozen comparison_graph_contract is authoritative for both initial final QA generation and every repair; do not infer a different pair from previous_qa_proposal.",
+            f"The user-facing question must name both primary entities exactly as real-world entities: {entities[0]!r} and {entities[1]!r}; ask for their absolute difference without exposing the contract or any event ID.",
+            f"The question must explicitly name the sole primary pair's semantic slot {comparison_slot!r} in natural language. Preserve every substantive normalized slot word, although natural word order and inflection may vary; never substitute a neighboring context slot.",
+            *(
+                [
+                    "Because at least one primary entity has multiple graph times for this same slot, the question must include a natural, solver-visible timing qualifier grounded in the dialogue, such as current, latest, earlier, previous, or initial. Never expose 'time_index', an internal numeric position, or graph chronology metadata."
+                ]
+                if comparison_graph_contract["requires_natural_time_qualifier"]
+                else []
+            ),
+            f"query_plan.reasoning_anchor_path, required_anchor_refs, supporting_anchor_refs, and gold_anchor_refs must each contain exactly these two primary event_instance_id values and no others: {json.dumps(pair_ids, ensure_ascii=False)}.",
+            f"anchor_refs.support and anchor_refs.gold must each contain exactly the same two primary event_instance_id values: {json.dumps(pair_ids, ensure_ascii=False)}.",
+            f"The single gold option text, qa_proposal.gold_answer_text, query_plan.gold_answer, and query_plan.normalized_gold_answer must each equal the exact derived absolute difference {expected_difference}; qa_proposal.gold remains the one label pointing to that option.",
+            f"Return exactly four distinct nearby nonnegative integer option texts containing {expected_difference}, with at least one value lower than {expected_difference} and at least one value higher than {expected_difference}.",
+            f"Context event IDs must never substitute for either primary ID in reasoning/required/supporting/gold refs. The context IDs are: {json.dumps(context_ids, ensure_ascii=False)}.",
+            "Even when previous_qa_proposal selected a context pair or happened to produce the same numeric difference, rebuild the question, primary reference groups, gold fields, and options from comparison_graph_contract.",
+            "comparison_graph_contract is internal generation metadata and must never appear in solver-visible question, question_text, option text, or gold_answer_text.",
+        ]
+    count_output_options: list[dict[str, Any]] | None = None
+    count_contract_requirements: list[str] = []
+    if target_operation == "count" and count_graph_contract is not None:
+        set_event_ids = count_graph_contract["event_instance_ids"]
+        included_ids = count_graph_contract["included_event_instance_ids"]
+        excluded_ids = count_graph_contract["excluded_event_instance_ids"]
+        expected_count = count_graph_contract["expected_included_count"]
+        count_output_options = [
+            {
+                "id": label,
+                "text": str(value),
+                "answer_type": "Number",
+                "truth_value": label == "A",
+                "source_event_instance_id": set_event_ids[index],
+                "anchor_ref": set_event_ids[index],
+                "anchor_kind": "event",
+            }
+            for index, (label, value) in enumerate(
+                zip(
+                    "ABCD",
+                    (
+                        expected_count,
+                        expected_count - 1,
+                        expected_count + 1,
+                        expected_count + 2,
+                    ),
+                )
+            )
+        ]
+        count_contract_requirements = [
+            "The frozen count_graph_contract is authoritative for both initial final QA generation and every repair; do not recount a subset and do not infer a different set from previous_qa_proposal.",
+            f"The user-facing question must clearly name the concrete entity {count_graph_contract['entity']!r}, the semantic slot {count_graph_contract['slot']!r}, and the exact shared membership condition {count_graph_contract['condition']!r}. Naturalize underscores and word order, but preserve every substantive dimension word.",
+            "The question must ask how many members satisfy that inclusion condition. It must be self-contained and must not say 'based on the conversation', 'in the conversation', 'according to the information provided', or use similarly generic evidence-oriented wording.",
+            f"query_plan.reasoning_anchor_path, required_anchor_refs, and supporting_anchor_refs must each contain exactly all count-set event_instance_id values and no others: {json.dumps(set_event_ids, ensure_ascii=False)}.",
+            f"anchor_refs.support must contain exactly the same complete count-set event_instance_id list: {json.dumps(set_event_ids, ensure_ascii=False)}.",
+            f"query_plan.gold_anchor_refs and anchor_refs.gold must each contain exactly the included member event_instance_id values, because those events jointly support the derived count: {json.dumps(included_ids, ensure_ascii=False)}.",
+            f"query_plan.distractor_anchor_refs and anchor_refs.distractors must contain only count-set IDs; use the excluded member IDs as the canonical evidence list: {json.dumps(excluded_ids, ensure_ascii=False)}.",
+            f"The single gold option text, qa_proposal.gold_answer_text, query_plan.gold_answer, and query_plan.normalized_gold_answer must each equal the exact graph-derived included count {expected_count}; qa_proposal.gold remains the one label pointing to that option.",
+            f"Return exactly four distinct nearby nonnegative integer option texts containing {expected_count}, with at least one value lower than {expected_count} and at least one value higher than {expected_count}.",
+            "Even when previous_qa_proposal uses a fluent but generic question or declares a different count, rebuild the QA fields from count_graph_contract. Never preserve or rationalize the previous wrong gold.",
+            "count_graph_contract is internal generation metadata and must never appear in solver-visible question, question_text, option text, or gold_answer_text.",
+        ]
     prompt = {
-        "task": "repair Stage64 qa_proposal only",
+        "task": (
+            "generate Stage64 final qa_proposal after frozen dialogue alignment"
+            if initial_final_generation
+            else "repair Stage64 qa_proposal only"
+        ),
         "requirements": [
-            "Do not rewrite dialogue. Do not invent new graph facts. Return JSON only.",
+            (
+                "The graph, appended dialogue, and alignment hashes are frozen. Generate QA only; do not rewrite dialogue or invent graph facts."
+                if initial_final_generation
+                else "Do not rewrite dialogue. Do not invent new graph facts. Return JSON only."
+            ),
             "Return exactly one key: qa_proposal.",
-            "The previous qa_proposal failed local validation. Fix only the QA schema, operation, answer type, options, gold, query_plan, and anchor_refs.",
+            "Inside qa_proposal, always emit top-level question_type, qa_operation, qa_subtype, question, and question_text. Never omit these fields even when query_plan contains the same information; question and question_text must be byte-identical.",
+            "Set qa_proposal.question_type exactly to 'single_choice'. question_type is the MCQ schema type and must never equal or repeat qa_proposal.answer_type such as Number, LocationOrScope, or AttributeValue.",
+            (
+                "This is the first and only QA generation step for the frozen dialogue. Build the QA schema, operation, answer type, options, gold, query_plan, and anchor_refs now."
+                if initial_final_generation
+                else "The previous qa_proposal failed local validation. Fix only the QA schema, operation, answer type, options, gold, query_plan, and anchor_refs."
+            ),
             "Use only event_instance_id or marker values listed in event_candidates as graph references.",
             "For non-YesNo answers, provide exactly four options A-D. For YesNo, provide exactly two options A-B.",
             "Every option must include id, text, answer_type, source_event_instance_id, anchor_ref, anchor_kind, and truth_value.",
+            "Every option text must be unique after case, punctuation, and whitespace normalization. Never duplicate the gold answer under another label; preserve meaningful minimal differences in dates, counts, entities, or states.",
+            "Each option must be an answer value rather than a copied question. Number options are numeric values, DateOrTime options are dates/times, and YesNo options are exactly Yes/No.",
+            "Use semantic graph slots only; never use raw_qa or raw_qa_*. At least one non-YesNo distractor must share the gold entity or semantic slot, and unrelated facts are invalid distractors.",
+            "The qa_operation must match the actual reasoning in the question. bridge/comparison/count/cause_consequence must cite at least two reasoning anchors.",
+            f"The requested item_difficulty_target is {normalized_difficulty_target!r}; preserve that difficulty while fixing the invalid schema.",
+            difficulty_contract["qa"],
+            *(
+                [difficulty_contract["operation_qa"]]
+                if difficulty_contract.get("operation_qa")
+                else []
+            ),
             "gold must be an array with exactly one option id, such as [\"A\"].",
+            "qa_proposal.gold must equal an array containing exactly the id of the sole option whose truth_value is the JSON boolean true; every other option truth_value must be the JSON boolean false.",
+            "qa_proposal.gold_answer_text is mandatory and must exactly equal the text of the sole truth_value=true option; query_plan.gold_answer and query_plan.normalized_gold_answer must name that same answer value.",
             "query_plan.answer_source must be graph_anchor, and query_plan qa_operation / qa_subtype / answer_type must match qa_proposal.",
+            *(
+                [
+                    "The reasoning target identity is immutable. qa_proposal and query_plan must each contain reasoning_subtype, reasoning_template, hop_count, and hard_negative_strategy with values byte-for-byte/equality identical to target.",
+                    f"query_plan.reasoning_anchor_path must resolve at least {stage64_reasoning_contract['hop_count']} distinct required events for reasoning_template={stage64_reasoning_contract['reasoning_template']!r}.",
+                    "query_plan.dependency_closure_refs must resolve the complete operation-specific reasoning closure implied by reasoning_template; unrelated refs cannot satisfy hop_count.",
+                    f"query_plan.answer_projection must be exactly {expected_answer_projection!r} and must stay consistent with qa_operation and answer_type.",
+                    *(
+                        [
+                            "This temporal target forbids a max-time-only shortcut. The repaired question must naturally mention and require resolving the relevant canceled, outdated, report, or belief validity condition; a bare current/latest value lookup is invalid."
+                        ]
+                        if stage64_reasoning_contract.get(
+                            "forbid_max_time_shortcut"
+                        )
+                        else []
+                    ),
+                ]
+                if stage64_reasoning_contract is not None
+                else []
+            ),
             "Do not include raw_qa, Q:, A:, current graph, graph anchor, anchor, marker, event instance, latest confirmed detail, final active state, or schema language in the user-facing question or options.",
             "If target.qa_operation is a string, qa_proposal.qa_operation must exactly equal it. Do not keep the previous qa_operation when the validator says it mismatched the target.",
+            *(
+                [
+                    f"Set qa_proposal.qa_subtype and query_plan.qa_subtype exactly to {canonical_qa_subtype!r}. Do not use any qa_operation label as the subtype."
+                ]
+                if canonical_qa_subtype
+                else []
+            ),
+            *(
+                [
+                    "For comparison, rewrite the question so it names both compared entities and contains the literal word 'compare' or 'difference'. Do not return a one-entity lookup or a plain count question.",
+                    "For comparison, answer_type must be Number and the question must ask for the absolute difference between the two explicit JSON integer values in one same-slot, same-time active pair.",
+                    "For comparison, reasoning_anchor_path, required_anchor_refs, supporting_anchor_refs, and gold_anchor_refs must each contain exactly those same two event_candidates, one for each side.",
+                    "Gold must equal abs(left.value-right.value). Return four distinct integer options with at least two distractors within 2 of the derived answer. If the graph lacks this pair, QA-only repair cannot make it valid.",
+                ]
+                if target_operation == "comparison"
+                else []
+            ),
+            *comparison_contract_requirements,
+            *(
+                [
+                    "For count, the question must name the exact set plus its concrete entity and semantic slot/membership condition from event_candidates.",
+                    "For count, reasoning_anchor_path, required_anchor_refs, and supporting_anchor_refs must each cite every candidate in one shared set_id/entity/slot group, including at least six distinct values with at least two included and two excluded.",
+                    "For count, gold must equal the exact number of cited candidates whose set_membership.included is true; use four nearby distinct integer options with at least one below and one above that count.",
+                    "For count, query_plan.filter_predicate must copy the shared membership condition exactly and set included to JSON true.",
+                ]
+                if target_operation == "count"
+                else []
+            ),
+            *(
+                [
+                    "For visibility, query_plan.filter_predicate must exactly preserve the unique scoped event's observer, permission, and condition.",
+                ]
+                if target_operation == "visibility"
+                else []
+            ),
+            *(
+                [
+                    "For cause_consequence, query_plan.cause_direction must be exactly 'cause_to_effect', cause_source_ref must identify the unique earlier cause, and dependency_closure_refs must include cause plus effect.",
+                ]
+                if target_operation == "cause_consequence"
+                else []
+            ),
+            *(
+                [
+                    "For relation_lookup, repair the question as a binder-conditioned relation query: the answer must be the relation value for the entity established by E1, not a direct isolated lookup. Keep query_plan.dependency_closure_refs and reasoning_anchor_path exactly on the E1->E2 closure; use E3 and E4 only as close same-entity and wrong-entity distractors.",
+                    f"For relation_lookup, answer_type MUST remain the frozen preferred_answer_type={preferred_answer_type!r}; reject the proposal if that concrete type is unsupported rather than changing the target.",
+                ]
+                if target_operation == "relation_lookup"
+                else []
+            ),
+            *count_contract_requirements,
             "All options must use exactly the same answer_type as qa_proposal.answer_type. If one option has a different answer_type, rewrite the whole option set around one consistent answer_type.",
             "Name concrete people/entities/places/objects in the question; avoid generic questions like which event is settled as true.",
             "Never write generic user-facing QA language such as 'in the conversation', 'which event', 'which fact', 'which statement', 'which option', 'settled as true', or 'currently settled as true'.",
             "A good repaired question names the entity and asks for the concrete slot value, e.g. 'Who is the only person who can see Tim's archive-shelf report?' or 'What did Melanie create for a local church?'.",
             "A bad repaired question asks about metadata, e.g. 'Which event is currently settled as true?' or 'Which fact in the conversation is correct?'.",
+            *temporal_contract_requirements,
             "If qa_operation is temporal_state_update, ask for the concrete latest real-world detail about a named entity. Never write 'Which event...', 'currently settled as true', 'settled as true', 'final active state', 'state after all updates', or 'which statement is correct'.",
+            "If qa_operation is temporal_state_update, rebuild the option set so the gold plus at least two distractors cite three event_candidates with the exact same entity and exact same slot and three semantically distinct graph values. Unrelated slots do not satisfy this requirement.",
+            (
+                "If qa_operation is temporal_state_update, exactly one same-slot source may be active/restored. It is the gold source and MUST precede the later target-strategy invalid same-slot update; include that later invalid event in both reasoning and distractor references, and never use the maximum-time event as gold."
+                if stage64_reasoning_contract is not None
+                and stage64_reasoning_contract.get("forbid_max_time_shortcut")
+                else "If qa_operation is temporal_state_update, exactly one same-slot source may be active/restored. The gold source_event_instance_id must be that unique current event and must have the highest time_index; every earlier same-slot source must be non-active."
+            ),
+            "If qa_operation is temporal_state_update, each option text must be its source event's answer value. Never add parenthetical status annotations such as '(restored after cancellation)' or '(expired assumption)' to disguise a repeated graph value.",
             "qa_proposal.gold must be option labels only, such as [\"A\"] or [\"D\"]; never put a marker, anchor_ref, event_instance_id, or answer text in gold.",
         ],
         "validator_failure_reason": failure_reason,
+        "frozen_dependencies": copy.deepcopy(frozen_dependencies or {}),
         "target": {
             "qa_operation": target_operation or list(STAGE64_QA_OPERATIONS),
             "preferred_answer_type": preferred_answer_type or None,
+            **(
+                {
+                    field: copy.deepcopy(stage64_reasoning_contract[field])
+                    for field in STAGE64_REASONING_TARGET_FIELDS
+                }
+                if stage64_reasoning_contract is not None
+                else {}
+            ),
+            **(
+                {"forbid_max_time_shortcut": True}
+                if stage64_reasoning_contract is not None
+                and stage64_reasoning_contract.get("forbid_max_time_shortcut")
+                else {}
+            ),
             "required_answer_types": required_answer_types,
+            "required_qa_subtype": canonical_qa_subtype,
+            "item_difficulty_target": normalized_difficulty_target,
             "answer_type_rule": (
-                f"Must use one of {required_answer_types}."
+                "Must choose a non-YesNo answer type for bridge, even when YesNo was preferred."
+                if target_operation == "bridge" and preferred_answer_type == "YesNo"
+                else f"Must use exactly {preferred_answer_type}. Reject rather than drift if the graph cannot support it."
+                if preferred_answer_type
+                else f"Must use one of {required_answer_types}."
                 if required_answer_types
-                else f"Prefer {preferred_answer_type}, but choose another allowed answer_type if the evidence does not support it."
+                else "Must use one allowed answer_type."
             ),
         },
+        "stage64_item_difficulty_contract": difficulty_contract,
+        **(
+            {
+                "temporal_state_update_graph_contract": copy.deepcopy(
+                    temporal_graph_contract
+                )
+            }
+            if target_operation == "temporal_state_update"
+            else {}
+        ),
+        **(
+            {"comparison_graph_contract": copy.deepcopy(comparison_graph_contract)}
+            if target_operation == "comparison"
+            else {}
+        ),
+        **(
+            {"count_graph_contract": copy.deepcopy(count_graph_contract)}
+            if target_operation == "count"
+            else {}
+        ),
         "event_candidates": _stage64_event_candidates_for_prompt(current_event_plan_with_anchors, current_alignment),
         "already_validated_appended_dialogue": _stage64_compact_appended_turns_for_prompt(appended_dialogue_turns),
         "previous_qa_proposal": previous_qa_proposal if isinstance(previous_qa_proposal, dict) else {},
@@ -3554,41 +13318,235 @@ def call_api_stage64_qa_repair(
             "qa_proposal": {
                 "question_type": "single_choice",
                 "qa_operation": target_operation or "one allowed qa_operation",
-                "qa_subtype": "short subtype string",
-                "answer_type": "one allowed answer_type",
-                "answer_format": "single_choice_mcq",
-                "question": "natural MCQ question",
-                "question_text": "same as question",
-                "options": [
+                "qa_subtype": canonical_qa_subtype or "operation-compatible short subtype string",
+                **(
                     {
-                        "id": "A",
+                        field: copy.deepcopy(stage64_reasoning_contract[field])
+                        for field in STAGE64_REASONING_TARGET_FIELDS
+                    }
+                    if stage64_reasoning_contract is not None
+                    else {}
+                ),
+                "answer_type": temporal_answer_type
+                if temporal_answer_type is not None
+                else "one allowed answer_type",
+                "answer_format": "single_choice_mcq",
+                "question": (
+                    temporal_question_example
+                    if target_operation == "temporal_state_update"
+                    and temporal_graph_contract is not None
+                    else
+                    (
+                        "question naming "
+                        f"{comparison_graph_contract['left_entity']!r} and "
+                        f"{comparison_graph_contract['right_entity']!r}, explicitly naming the "
+                        f"{comparison_graph_contract['normalized_slot']!r} semantic slot, and asking for their absolute difference"
+                        + (
+                            " with a natural dialogue-grounded time qualifier"
+                            if comparison_graph_contract["requires_natural_time_qualifier"]
+                            else ""
+                        )
+                    )
+                    if target_operation == "comparison" and comparison_graph_contract is not None
+                    else "question naming both entities and containing 'compare' or 'difference'"
+                    if target_operation == "comparison"
+                    else (
+                        "self-contained natural count question naming concrete entity "
+                        f"{count_graph_contract['entity']!r}, semantic slot "
+                        f"{count_graph_contract['slot']!r}, and the inclusion membership condition "
+                        f"for set {count_graph_contract['set_id']!r}; no generic conversation/evidence wording"
+                    )
+                    if target_operation == "count" and count_graph_contract is not None
+                    else "natural MCQ question"
+                ),
+                "question_text": "same as question",
+                "options": temporal_output_options
+                if temporal_output_options is not None
+                else comparison_output_options
+                if comparison_output_options is not None
+                else count_output_options
+                if count_output_options is not None
+                else [
+                    {
+                        "id": "one unique option label from A-D",
                         "text": "option text",
                         "answer_type": "same answer_type as qa_proposal",
-                        "truth_value": True,
+                        "truth_value": "JSON boolean; true for exactly one option and false for every other option",
                         "source_event_instance_id": "event_instance_id from event_candidates",
                         "anchor_ref": "event_instance_id or marker from event_candidates",
                         "anchor_kind": "event",
                     }
                 ],
-                "gold": ["A"],
-                "gold_answer_text": "text of gold option",
+                "gold": (
+                    ["D"]
+                    if temporal_graph_contract is not None
+                    else ["A"]
+                    if comparison_graph_contract is not None
+                    or count_graph_contract is not None
+                    else ["id of the sole option whose truth_value is true"]
+                ),
+                "gold_answer_text": (
+                    temporal_graph_contract["current_value_surface"]
+                    if target_operation == "temporal_state_update"
+                    and temporal_graph_contract is not None
+                    else str(comparison_graph_contract["expected_absolute_difference"])
+                    if target_operation == "comparison" and comparison_graph_contract is not None
+                    else str(count_graph_contract["expected_included_count"])
+                    if target_operation == "count" and count_graph_contract is not None
+                    else "required exact text of the sole truth_value=true option"
+                ),
                 "query_plan": {
                     "answer_source": "graph_anchor",
                     "qa_operation": "same as qa_operation",
                     "qa_subtype": "same as qa_subtype",
+                    **(
+                        {
+                            field: copy.deepcopy(stage64_reasoning_contract[field])
+                            for field in STAGE64_REASONING_TARGET_FIELDS
+                        }
+                        if stage64_reasoning_contract is not None
+                        else {}
+                    ),
                     "answer_type": "same as answer_type",
-                    "reasoning_anchor_path": ["event_instance_id or marker refs"],
-                    "required_anchor_refs": ["event_instance_id or marker refs"],
-                    "supporting_anchor_refs": ["event_instance_id or marker refs"],
-                    "gold_anchor_refs": ["event_instance_id or marker refs"],
-                    "distractor_anchor_refs": ["event_instance_id or marker refs"],
-                    "gold_answer": "text of gold option",
-                    "normalized_gold_answer": "lowercase normalized gold answer text",
+                    "reasoning_anchor_path": (
+                        temporal_graph_contract["event_instance_ids"]
+                        if target_operation == "temporal_state_update"
+                        and temporal_graph_contract is not None
+                        else comparison_graph_contract["primary_event_instance_ids"]
+                        if target_operation == "comparison" and comparison_graph_contract is not None
+                        else count_graph_contract["event_instance_ids"]
+                        if target_operation == "count" and count_graph_contract is not None
+                        else ["event_instance_id or marker refs"]
+                    ),
+                    "required_anchor_refs": (
+                        temporal_graph_contract["event_instance_ids"]
+                        if target_operation == "temporal_state_update"
+                        and temporal_graph_contract is not None
+                        else comparison_graph_contract["primary_event_instance_ids"]
+                        if target_operation == "comparison" and comparison_graph_contract is not None
+                        else count_graph_contract["event_instance_ids"]
+                        if target_operation == "count" and count_graph_contract is not None
+                        else ["event_instance_id or marker refs"]
+                    ),
+                    "supporting_anchor_refs": (
+                        temporal_graph_contract["event_instance_ids"]
+                        if target_operation == "temporal_state_update"
+                        and temporal_graph_contract is not None
+                        else comparison_graph_contract["primary_event_instance_ids"]
+                        if target_operation == "comparison" and comparison_graph_contract is not None
+                        else count_graph_contract["event_instance_ids"]
+                        if target_operation == "count" and count_graph_contract is not None
+                        else ["event_instance_id or marker refs"]
+                    ),
+                    "gold_anchor_refs": (
+                        [temporal_graph_contract["current_event_instance_id"]]
+                        if target_operation == "temporal_state_update"
+                        and temporal_graph_contract is not None
+                        else comparison_graph_contract["primary_event_instance_ids"]
+                        if target_operation == "comparison" and comparison_graph_contract is not None
+                        else count_graph_contract["included_event_instance_ids"]
+                        if target_operation == "count" and count_graph_contract is not None
+                        else ["event_instance_id or marker refs"]
+                    ),
+                    "distractor_anchor_refs": (
+                        temporal_graph_contract["distractor_event_instance_ids"]
+                        if target_operation == "temporal_state_update"
+                        and temporal_graph_contract is not None
+                        else count_graph_contract["excluded_event_instance_ids"]
+                        if target_operation == "count" and count_graph_contract is not None
+                        else ["event_instance_id or marker refs"]
+                    ),
+                    "dependency_closure_refs": (
+                        temporal_graph_contract["event_instance_ids"]
+                        if target_operation == "temporal_state_update"
+                        and temporal_graph_contract is not None
+                        else comparison_graph_contract["primary_event_instance_ids"]
+                        if target_operation == "comparison"
+                        and comparison_graph_contract is not None
+                        else count_graph_contract["event_instance_ids"]
+                        if target_operation == "count"
+                        and count_graph_contract is not None
+                        else ["complete operation-specific dependency closure refs"]
+                    ),
+                    "filter_predicate": (
+                        {
+                            "condition": count_graph_contract["condition"],
+                            "included": True,
+                        }
+                        if target_operation == "count"
+                        and count_graph_contract is not None
+                        else {
+                            "observer": "exact scoped observer",
+                            "permission": "exact scoped permission",
+                            "condition": "exact scoped condition",
+                        }
+                        if target_operation == "visibility"
+                        else "omit for operations without filtering"
+                    ),
+                    "cause_direction": (
+                        "cause_to_effect"
+                        if target_operation == "cause_consequence"
+                        else "omit unless cause_consequence"
+                    ),
+                    "cause_source_ref": (
+                        "unique earlier cause event reference"
+                        if target_operation == "cause_consequence"
+                        else "omit unless cause_consequence"
+                    ),
+                    "answer_projection": expected_answer_projection
+                    or "operation-specific answer projection",
+                    "gold_answer": (
+                        temporal_graph_contract["current_value_surface"]
+                        if target_operation == "temporal_state_update"
+                        and temporal_graph_contract is not None
+                        else str(comparison_graph_contract["expected_absolute_difference"])
+                        if target_operation == "comparison" and comparison_graph_contract is not None
+                        else str(count_graph_contract["expected_included_count"])
+                        if target_operation == "count" and count_graph_contract is not None
+                        else "text of gold option"
+                    ),
+                    "normalized_gold_answer": (
+                        normalize_text(
+                            temporal_graph_contract["current_value_surface"]
+                        )
+                        if target_operation == "temporal_state_update"
+                        and temporal_graph_contract is not None
+                        else str(comparison_graph_contract["expected_absolute_difference"])
+                        if target_operation == "comparison" and comparison_graph_contract is not None
+                        else str(count_graph_contract["expected_included_count"])
+                        if target_operation == "count" and count_graph_contract is not None
+                        else "lowercase normalized gold answer text"
+                    ),
                 },
                 "anchor_refs": {
-                    "support": ["event_instance_id or marker refs"],
-                    "gold": ["event_instance_id or marker refs"],
-                    "distractors": ["event_instance_id or marker refs"],
+                    "support": (
+                        temporal_graph_contract["event_instance_ids"]
+                        if target_operation == "temporal_state_update"
+                        and temporal_graph_contract is not None
+                        else comparison_graph_contract["primary_event_instance_ids"]
+                        if target_operation == "comparison" and comparison_graph_contract is not None
+                        else count_graph_contract["event_instance_ids"]
+                        if target_operation == "count" and count_graph_contract is not None
+                        else ["event_instance_id or marker refs"]
+                    ),
+                    "gold": (
+                        [temporal_graph_contract["current_event_instance_id"]]
+                        if target_operation == "temporal_state_update"
+                        and temporal_graph_contract is not None
+                        else comparison_graph_contract["primary_event_instance_ids"]
+                        if target_operation == "comparison" and comparison_graph_contract is not None
+                        else count_graph_contract["included_event_instance_ids"]
+                        if target_operation == "count" and count_graph_contract is not None
+                        else ["event_instance_id or marker refs"]
+                    ),
+                    "distractors": (
+                        temporal_graph_contract["distractor_event_instance_ids"]
+                        if target_operation == "temporal_state_update"
+                        and temporal_graph_contract is not None
+                        else count_graph_contract["excluded_event_instance_ids"]
+                        if target_operation == "count" and count_graph_contract is not None
+                        else ["event_instance_id or marker refs"]
+                    ),
                 },
             }
         },
@@ -3598,14 +13556,55 @@ def call_api_stage64_qa_repair(
         args,
         prompt,
         system_prompt=(
-            "You are a strict JSON-only Stage64 QA schema repair editor. "
-            "Fix qa_proposal only. Do not rewrite dialogue. Return exactly one JSON object."
+            (
+                "You are a strict JSON-only Stage64 final QA writer. "
+                "The graph and dialogue alignment are frozen. Generate qa_proposal only."
+                if initial_final_generation
+                else "You are a strict JSON-only Stage64 QA schema repair editor. "
+                "Fix qa_proposal only. Do not rewrite dialogue."
+            )
+            + " Return exactly one JSON object."
         ),
         required_keys=("qa_proposal",),
         call_kind="api_stage64_qa_repair",
         max_tokens_override=2048,
     )
     meta["prompt_tokens_estimate"] = prompt_token_estimate
+    return proposal, meta
+
+
+def call_api_stage64_final_qa(
+    current_event_plan_with_anchors: dict[str, Any],
+    current_alignment: dict[str, Any],
+    stage64_target: dict[str, Any] | None,
+    appended_dialogue_turns: list[dict[str, Any]],
+    hashes: dict[str, str],
+    args: argparse.Namespace,
+    *,
+    item_difficulty_target: str | None = None,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    required_hashes = {"graph_snapshot_hash", "dialogue_hash", "alignment_hash"}
+    if not required_hashes.issubset(hashes) or any(not normalize_space(hashes.get(key)) for key in required_hashes):
+        return None, {
+            "used": False,
+            "call_kind": "api_stage64_final_qa",
+            "error_type": "unfrozen_final_qa_dependencies",
+            "missing_hashes": sorted(key for key in required_hashes if not normalize_space(hashes.get(key))),
+        }
+    proposal, meta = call_api_stage64_qa_repair(
+        current_event_plan_with_anchors,
+        current_alignment,
+        None,
+        stage64_target,
+        "initial_final_qa_generation_after_frozen_alignment",
+        appended_dialogue_turns,
+        args,
+        item_difficulty_target=item_difficulty_target,
+        mode="final_generation",
+        frozen_dependencies=hashes,
+    )
+    meta["call_kind"] = "api_stage64_final_qa"
+    meta["frozen_dependencies"] = copy.deepcopy(hashes)
     return proposal, meta
 
 
@@ -4102,12 +14101,23 @@ def _quote_supported(turn_text: str, support_quote: str) -> bool:
 
 
 def _event_lexical_supported(event: dict[str, Any], turn_text: str) -> bool:
-    turn_tokens = token_set(turn_text)
+    turn_tokens = _event_lexical_token_set(turn_text)
     if not turn_tokens:
         return False
-    value_tokens = token_set(event.get("dialogue_value") or event.get("value"))
-    entity_tokens = token_set(sanitize_internal_text(event.get("entity")))
-    slot_tokens = token_set(sanitize_internal_text(event.get("slot")))
+    dialogue_value = event.get("dialogue_value")
+    raw_fact_value = event.get("value")
+    fact_value = dialogue_value if dialogue_value is not None else raw_fact_value
+    if (
+        isinstance(raw_fact_value, int)
+        and not isinstance(raw_fact_value, bool)
+        and not _exact_integer_surface_supported(raw_fact_value, turn_text)
+    ):
+        return False
+    value_tokens = _event_lexical_token_set(fact_value)
+    entity_surface = sanitize_internal_text(event.get("entity"))
+    slot_surface = sanitize_internal_text(event.get("slot"))
+    entity_tokens = token_set(entity_surface)
+    slot_tokens = token_set(slot_surface)
     support_claim_tokens = token_set(
         event.get("dialogue_support_claim")
         or ((event.get("alignment_hints") or {}) if isinstance(event.get("alignment_hints"), dict) else {}).get("support_claim")
@@ -4118,8 +14128,21 @@ def _event_lexical_supported(event: dict[str, Any], turn_text: str) -> bool:
         if support_claim_tokens
         else 0.0
     )
+    numeric_only_value = bool(value_tokens) and all(token.isdigit() for token in value_tokens)
     entity_ok = not entity_tokens or bool(turn_tokens & entity_tokens)
-    slot_ok = not slot_tokens or bool(turn_tokens & slot_tokens) or value_overlap >= 0.55
+    slot_ok = (
+        not slot_tokens
+        or bool(turn_tokens & slot_tokens)
+        or (
+            value_overlap >= 0.55
+            and (not numeric_only_value or claim_overlap >= 0.42)
+        )
+    )
+    if numeric_only_value:
+        if normalize_text(entity_surface) and not entity_tokens:
+            entity_ok = False
+        if normalize_text(slot_surface) and not slot_tokens:
+            slot_ok = False
     status = str(event.get("status") or "active")
     status_ok = True
     if status in STATUS_ALIASES:
@@ -4145,6 +14168,8 @@ def verify_current_graph_dialogue_alignment(
     final_clean_dialogue: dict[str, Any],
     raw_current_alignment_proposal: dict[str, Any],
     current_anchor_to_event_instance_id: dict[str, str],
+    *,
+    require_exact_support_quote: bool = False,
 ) -> dict[str, Any]:
     turns = final_clean_dialogue.get("turns") if isinstance(final_clean_dialogue.get("turns"), list) else []
     event_by_id = {
@@ -4176,9 +14201,22 @@ def verify_current_graph_dialogue_alignment(
             continue
         turn = turns[idx]
         turn_text = str(turn.get("text") or "")
+        speaker = normalize_space(turn.get("speaker"))
+        evidence_surface = f"{speaker}: {turn_text}" if speaker else turn_text
         support_quote = normalize_space(proposal.get("support_quote"))
         event = event_by_id[event_id]
-        if not (_quote_supported(turn_text, support_quote) or _event_lexical_supported(event, turn_text)):
+        quote_supported = (
+            bool(
+                normalize_text(support_quote)
+                and normalize_text(support_quote) in normalize_text(turn_text)
+            )
+            if require_exact_support_quote
+            else _quote_supported(turn_text, support_quote)
+        )
+        if not (
+            quote_supported
+            and _event_lexical_supported(event, evidence_surface)
+        ):
             unsupported_alignment_count += 1
             continue
         entry = current_alignment.setdefault(
@@ -4251,6 +14289,144 @@ def verify_current_graph_dialogue_alignment(
     }
 
 
+def stage64_evidence_dispersion_diagnostics(
+    current_event_plan: dict[str, Any],
+    final_clean_dialogue: dict[str, Any],
+    current_alignment: dict[str, Any],
+    *,
+    parent_turn_count: int,
+) -> dict[str, Any]:
+    """Measure whether required Stage64 evidence is spread through appended turns.
+
+    One representative (earliest) appended support turn is used per required event. This
+    prevents duplicate sidecars from making a compact evidence block look dispersed.
+    """
+    turns = final_clean_dialogue.get("turns") if isinstance(final_clean_dialogue.get("turns"), list) else []
+    parent_count = max(0, min(int(parent_turn_count or 0), len(turns)))
+    appended_count = max(0, len(turns) - parent_count)
+    turn_index_by_id = {
+        str(turn.get("turn_id")): index
+        for index, turn in enumerate(turns)
+        if isinstance(turn, dict) and turn.get("turn_id") is not None
+    }
+    required_event_ids = [
+        str(event.get("event_instance_id"))
+        for event in current_event_plan.get("events") or []
+        if isinstance(event, dict)
+        and event.get("required_for_dialogue") is not False
+        and event.get("event_instance_id")
+    ]
+    representative_by_event: dict[str, int] = {}
+    support_indices_by_event: dict[str, list[int]] = {}
+    outside_appended_event_ids: list[str] = []
+    missing_event_ids: list[str] = []
+    for event_id in required_event_ids:
+        alignment = current_alignment.get(event_id) if isinstance(current_alignment.get(event_id), dict) else {}
+        absolute_indices = sorted(
+            {
+                turn_index_by_id[str(turn_id)]
+                for turn_id in alignment.get("turn_ids") or []
+                if str(turn_id) in turn_index_by_id
+            }
+        )
+        appended_indices = [index - parent_count for index in absolute_indices if index >= parent_count]
+        if not appended_indices:
+            missing_event_ids.append(event_id)
+            if absolute_indices:
+                outside_appended_event_ids.append(event_id)
+            continue
+        support_indices_by_event[event_id] = appended_indices
+        representative_by_event[event_id] = appended_indices[0]
+
+    evidence_indices = sorted(set(representative_by_event.values()))
+    required_event_ids_by_evidence_index: dict[int, set[str]] = {}
+    for event_id, indices in support_indices_by_event.items():
+        for index in indices:
+            required_event_ids_by_evidence_index.setdefault(index, set()).add(event_id)
+    required_event_count_by_evidence_index = {
+        index: len(event_ids)
+        for index, event_ids in required_event_ids_by_evidence_index.items()
+    }
+    span_turns = evidence_indices[-1] - evidence_indices[0] + 1 if evidence_indices else 0
+    max_consecutive_run = 0
+    current_run = 0
+    previous: int | None = None
+    for index in evidence_indices:
+        current_run = current_run + 1 if previous is not None and index == previous + 1 else 1
+        max_consecutive_run = max(max_consecutive_run, current_run)
+        previous = index
+
+    required_count = len(required_event_ids)
+    minimum_distinct_evidence_turns = (
+        required_count * STAGE64_EVIDENCE_MIN_DISTINCT_TURN_PERCENT + 99
+    ) // 100
+    maximum_required_events_on_one_turn = max(required_event_count_by_evidence_index.values(), default=0)
+    min_span_turns = (
+        max(3, (appended_count * STAGE64_EVIDENCE_MIN_SPAN_PERCENT + 99) // 100)
+        if required_count >= 2 and appended_count > 0
+        else 1 if required_count == 1 else 0
+    )
+    max_consecutive_allowed = max(1, (required_count + 1) // 2) if required_count else 0
+    tail_window_turns = (
+        max(3, (appended_count * STAGE64_EVIDENCE_TAIL_PERCENT + 99) // 100)
+        if appended_count
+        else 0
+    )
+    tail_start_index = max(0, appended_count - tail_window_turns)
+    tail_event_count = sum(1 for index in representative_by_event.values() if index >= tail_start_index)
+    tail_concentration = tail_event_count / required_count if required_count else 0.0
+    failures: list[str] = []
+    if missing_event_ids:
+        failures.append("required_event_missing_appended_support")
+    if required_count >= 2:
+        if len(evidence_indices) < minimum_distinct_evidence_turns:
+            failures.append("evidence_distinct_turn_coverage_too_low")
+        if maximum_required_events_on_one_turn > STAGE64_EVIDENCE_MAX_REQUIRED_EVENTS_PER_TURN:
+            failures.append("evidence_turn_required_event_overload")
+        if span_turns < min_span_turns:
+            failures.append("evidence_span_too_small")
+        if max_consecutive_run > max_consecutive_allowed:
+            failures.append("evidence_consecutive_run_too_long")
+        if tail_event_count * 100 > required_count * STAGE64_EVIDENCE_MAX_TAIL_PERCENT:
+            failures.append("evidence_tail_concentration_too_high")
+
+    return {
+        "gate_version": "stage64_evidence_dispersion_v2",
+        "pass": not failures,
+        "failures": failures,
+        "required_event_count": required_count,
+        "aligned_appended_event_count": len(representative_by_event),
+        "missing_event_instance_ids": missing_event_ids,
+        "outside_appended_event_instance_ids": outside_appended_event_ids,
+        "appended_turn_count": appended_count,
+        "representative_turn_index_by_event": representative_by_event,
+        "support_turn_indices_by_event": support_indices_by_event,
+        "distinct_evidence_turn_count": len(evidence_indices),
+        "minimum_distinct_evidence_turn_count": minimum_distinct_evidence_turns,
+        "minimum_distinct_evidence_turn_share": STAGE64_EVIDENCE_MIN_DISTINCT_TURN_PERCENT / 100,
+        "required_event_count_by_evidence_turn_index": dict(sorted(required_event_count_by_evidence_index.items())),
+        "maximum_required_events_on_one_turn": maximum_required_events_on_one_turn,
+        "maximum_required_events_per_turn_allowed": STAGE64_EVIDENCE_MAX_REQUIRED_EVENTS_PER_TURN,
+        "evidence_turn_indices": evidence_indices,
+        "evidence_span_turns": span_turns,
+        "minimum_evidence_span_turns": min_span_turns,
+        "evidence_span_share": round(span_turns / appended_count, 4) if appended_count else 0.0,
+        "max_consecutive_evidence_run": max_consecutive_run,
+        "max_consecutive_evidence_run_allowed": max_consecutive_allowed,
+        "all_required_evidence_consecutive": bool(
+            required_count >= 2
+            and len(representative_by_event) == required_count
+            and span_turns == len(evidence_indices)
+        ),
+        "tail_window_turn_count": tail_window_turns,
+        "tail_start_index": tail_start_index,
+        "tail_evidence_event_count": tail_event_count,
+        "tail_concentration": round(tail_concentration, 4),
+        "maximum_tail_concentration": STAGE64_EVIDENCE_MAX_TAIL_PERCENT / 100,
+        "all_required_evidence_in_tail": bool(required_count and tail_event_count == required_count),
+    }
+
+
 def validate_appended_dialogue_candidate(
     *,
     appended_dialogue_marked: list[dict[str, Any]],
@@ -4266,6 +14442,9 @@ def validate_appended_dialogue_candidate(
     parent_baseline_tokens: int | None = None,
     fallback_min_added_tokens: int | None = None,
     emergency_min_added_tokens: int | None = None,
+    require_evidence_dispersion: bool = False,
+    deterministic_scaffold_used: bool = False,
+    formal_mining: bool = False,
 ) -> dict[str, Any]:
     raw_alignment_proposal = parse_anchor_annotations(
         appended_dialogue_marked,
@@ -4277,15 +14456,23 @@ def validate_appended_dialogue_candidate(
     invalid = set(raw_alignment_proposal.get("invalid_anchors") or [])
     ignored_event_alignment_proposal = bool(raw_alignment_proposal.get("ignored_event_alignment_proposal"))
     appended_clean_dialogue = strip_alignment_anchors_from_dialogue(appended_dialogue_marked)
-    appended_clean_dialogue = ensure_dialogue_padding(appended_clean_dialogue)
-    appended_clean_dialogue = ensure_append_length_guard_margin(
-        parent_dialogue_turns,
-        appended_clean_dialogue,
-        min_added_turns=min_added_turns,
-        min_added_tokens=min_added_tokens,
-        tokenizer_path=tokenizer_path,
-        parent_baseline_tokens=parent_baseline_tokens,
-    )
+    api_appended_turn_count = len(appended_clean_dialogue)
+    dialogue_generic_padding_used = False
+    dialogue_length_padding_used = False
+    if not formal_mining:
+        padded_dialogue = ensure_dialogue_padding(appended_clean_dialogue)
+        dialogue_generic_padding_used = len(padded_dialogue) != len(appended_clean_dialogue)
+        appended_clean_dialogue = padded_dialogue
+        length_padded_dialogue = ensure_append_length_guard_margin(
+            parent_dialogue_turns,
+            appended_clean_dialogue,
+            min_added_turns=min_added_turns,
+            min_added_tokens=min_added_tokens,
+            tokenizer_path=tokenizer_path,
+            parent_baseline_tokens=parent_baseline_tokens,
+        )
+        dialogue_length_padding_used = len(length_padded_dialogue) != len(appended_clean_dialogue)
+        appended_clean_dialogue = length_padded_dialogue
     final_dialogue = freeze_append_only_dialogue(parent_dialogue_turns, appended_clean_dialogue, sample_index)
     length_metadata = evaluate_length_guard(
         parent_dialogue_turns,
@@ -4295,12 +14482,25 @@ def validate_appended_dialogue_candidate(
         tokenizer_path=tokenizer_path,
         parent_baseline_tokens=parent_baseline_tokens,
     )
+    dialogue_local_padding_used = dialogue_generic_padding_used or dialogue_length_padding_used
+    length_metadata.update(
+        {
+            "api_appended_turn_count": api_appended_turn_count,
+            "dialogue_generic_padding_used": dialogue_generic_padding_used,
+            "dialogue_length_padding_used": dialogue_length_padding_used,
+            "dialogue_local_padding_used": dialogue_local_padding_used,
+            "formal_mining_api_native_dialogue_only": bool(
+                formal_mining and not deterministic_scaffold_used and not dialogue_local_padding_used
+            ),
+        }
+    )
     if not length_metadata.get("length_guard_pass"):
         fallback_metadata = None
-        for fallback_name, fallback_tokens in (
+        fallback_levels = () if formal_mining else (
             ("fallback_delta", fallback_min_added_tokens),
             ("emergency_floor", emergency_min_added_tokens),
-        ):
+        )
+        for fallback_name, fallback_tokens in fallback_levels:
             if fallback_tokens is None:
                 continue
             fallback_tokens_int = int(fallback_tokens or 0)
@@ -4324,6 +14524,15 @@ def validate_appended_dialogue_candidate(
                 fallback_metadata["emergency_floor"] = emergency_min_added_tokens
                 fallback_metadata["rows_below_4000_delta_flag"] = (
                     float(fallback_metadata.get("length_guard_effective_delta_tokens") or 0) < float(min_added_tokens or 0)
+                )
+                fallback_metadata.update(
+                    {
+                        "api_appended_turn_count": api_appended_turn_count,
+                        "dialogue_generic_padding_used": dialogue_generic_padding_used,
+                        "dialogue_length_padding_used": dialogue_length_padding_used,
+                        "dialogue_local_padding_used": dialogue_local_padding_used,
+                        "formal_mining_api_native_dialogue_only": False,
+                    }
                 )
                 length_metadata = fallback_metadata
                 break
@@ -4366,10 +14575,39 @@ def validate_appended_dialogue_candidate(
         final_dialogue,
         raw_alignment_proposal,
         anchor_to_event,
+        require_exact_support_quote=formal_mining,
+    )
+    evidence_dispersion = stage64_evidence_dispersion_diagnostics(
+        current_event_plan,
+        final_dialogue,
+        alignment_result.get("current_alignment") or {},
+        parent_turn_count=len(parent_dialogue_turns),
+    )
+    alignment_result["evidence_dispersion"] = evidence_dispersion
+    formal_mining_eligible = not (
+        formal_mining and (deterministic_scaffold_used or dialogue_local_padding_used)
+    )
+    alignment_result["formal_mining_eligible"] = formal_mining_eligible
+    alignment_result["formal_mining_api_native_dialogue_only"] = bool(
+        length_metadata.get("formal_mining_api_native_dialogue_only")
+    )
+    alignment_pass = bool(alignment_result.get("coverage_pass"))
+    dispersion_pass = not require_evidence_dispersion or bool(evidence_dispersion.get("pass"))
+    candidate_pass = alignment_pass and dispersion_pass and formal_mining_eligible
+    reason = (
+        "deterministic_scaffold_not_mining_eligible"
+        if formal_mining and deterministic_scaffold_used
+        else "local_dialogue_padding_not_mining_eligible"
+        if formal_mining and dialogue_local_padding_used
+        else "dialogue_alignment"
+        if not alignment_pass
+        else "evidence_dispersion"
+        if not dispersion_pass
+        else "ok"
     )
     return {
-        "pass": bool(alignment_result.get("coverage_pass")),
-        "reason": "ok" if alignment_result.get("coverage_pass") else "dialogue_alignment",
+        "pass": candidate_pass,
+        "reason": reason,
         "raw_alignment_proposal": raw_alignment_proposal,
         "alignment_result": alignment_result,
         "final_dialogue": final_dialogue,
@@ -4378,6 +14616,13 @@ def validate_appended_dialogue_candidate(
         "invalid": invalid,
         "missing_anchors": set(anchor_to_event) - seen,
         "ignored_event_alignment_proposal": ignored_event_alignment_proposal,
+        "evidence_dispersion": evidence_dispersion,
+        "deterministic_scaffold_used": bool(deterministic_scaffold_used),
+        "dialogue_local_padding_used": dialogue_local_padding_used,
+        "formal_mining_api_native_dialogue_only": bool(
+            length_metadata.get("formal_mining_api_native_dialogue_only")
+        ),
+        "formal_mining_eligible": formal_mining_eligible,
     }
 
 
@@ -4429,8 +14674,19 @@ def compile_graph_update_from_current_event_plan(
             "evidence_turn_ids": turn_ids,
             **_deps(hashes),
         }
+        # Preserve only fields admitted by semantic_graph_v2. These are needed
+        # to re-run operation contracts on the durable clean sample.
+        for optional_field in semantic_graph_v2.OPTIONAL_EVENT_FIELDS:
+            if optional_field in {"previous_value", "evidence_turn_ids"} or optional_field not in event:
+                continue
+            event_row[optional_field] = copy.deepcopy(event[optional_field])
         events_out.append(event_row)
-        if event_row["status"] in ACTIVE_STATUSES or event_row["role"] in {"state_change", "restore"}:
+        # Compile durable graph transitions from semantic status, not from the
+        # API-proposed event type.  An event may describe a state change while
+        # still being outdated, canceled, false, or not active yet; its role
+        # must never promote that non-active statement into the current state.
+        status = str(event_row["status"])
+        if status in ACTIVE_STATUSES:
             state_changes.append(
                 {
                     "event_instance_id": event_id,
@@ -4444,7 +14700,16 @@ def compile_graph_update_from_current_event_plan(
                     **_deps(hashes),
                 }
             )
-        elif event_row["status"] in FALSE_STATUSES:
+            if status == "restored":
+                restorations.append(
+                    {
+                        "event_instance_id": event_id,
+                        "restored_state": event.get("value"),
+                        "restoration_turn_ids": turn_ids,
+                        **_deps(hashes),
+                    }
+                )
+        elif status in FALSE_STATUSES:
             final_true_state = final_active_by_slot.get((str(event.get("entity")), str(event.get("slot"))), "")
             invalidation = {
                 "event_instance_id": event_id,
@@ -4456,11 +14721,9 @@ def compile_graph_update_from_current_event_plan(
                 **_deps(hashes),
             }
             invalidations.append(invalidation)
-            if event_row["status"] == "canceled":
+            if status == "canceled":
                 cancellations.append({"event_instance_id": event_id, "cancelled_state": event.get("value"), "cancellation_turn_ids": turn_ids, **_deps(hashes)})
-            elif event_row["status"] == "restored":
-                restorations.append({"event_instance_id": event_id, "restored_state": event.get("value"), "restoration_turn_ids": turn_ids, **_deps(hashes)})
-            elif event_row["status"] == "delayed_not_active":
+            elif status == "delayed_not_active":
                 delayed_activations.append(
                     {
                         "event_instance_id": event_id,
@@ -4664,10 +14927,21 @@ def _event_option_surface_is_placeholder(event: dict[str, Any]) -> bool:
 
 
 def _parent_context_events(seed_row: dict[str, Any]) -> list[dict[str, Any]]:
+    semantic_parent = (
+        seed_row.get("semantic_parent_graph")
+        if isinstance(seed_row.get("semantic_parent_graph"), dict)
+        else {}
+    )
     graph_update = seed_row.get("graph_update") if isinstance(seed_row.get("graph_update"), dict) else {}
+    semantic_events = semantic_parent.get("events")
+    source_events = (
+        semantic_events
+        if isinstance(semantic_events, list)
+        else graph_update.get("events") or []
+    )
     events: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for event in graph_update.get("events") or []:
+    for event in source_events:
         if not isinstance(event, dict):
             continue
         candidate = copy.deepcopy(event)
@@ -4677,9 +14951,12 @@ def _parent_context_events(seed_row: dict[str, Any]) -> list[dict[str, Any]]:
         if event_id and event_id not in seen:
             seen.add(event_id)
             events.append(candidate)
-    # State-change rows sometimes carry cleaner final-state text than the event row. Add only
-    # when there is no corresponding event id.
-    for change in graph_update.get("state_changes") or []:
+    # Legacy rows can carry cleaner state-change text than their event row. Canonical
+    # parents are authoritative and must never be mixed with a legacy graph fallback.
+    legacy_state_changes = (
+        [] if isinstance(semantic_events, list) else graph_update.get("state_changes") or []
+    )
+    for change in legacy_state_changes:
         if not isinstance(change, dict):
             continue
         event_id = _event_ref_id(change)
@@ -7682,37 +17959,1346 @@ def _assert_no_stage64_solver_visible_artifact(field: str, text: Any) -> None:
             )
 
 
-def _stage64_target_for_slot(slot: int, n_samples: int) -> dict[str, str]:
-    total = max(1, int(n_samples or 1))
-    base_total = sum(STAGE64_TARGET_OPERATION_COUNTS.values())
-    quotas = {
-        key: int(value) * total // base_total
-        for key, value in STAGE64_TARGET_OPERATION_COUNTS.items()
-    }
-    while sum(quotas.values()) < total:
-        for key in STAGE64_TARGET_OPERATION_COUNTS:
-            quotas[key] += 1
-            if sum(quotas.values()) >= total:
-                break
-    cursor = int(slot or 0) % total
-    offset = 0
-    qa_operation = next(iter(STAGE64_TARGET_OPERATION_COUNTS))
-    for key in STAGE64_TARGET_OPERATION_COUNTS:
-        width = int(quotas.get(key) or 0)
-        if offset <= cursor < offset + width:
-            qa_operation = key
+def _stage64_largest_remainder_quotas(
+    weights: dict[str, Any],
+    ordered_keys: Iterable[str],
+    total: int,
+) -> dict[str, int]:
+    keys = list(ordered_keys)
+    if not keys:
+        raise ValueError("Stage64 target allocation requires at least one key")
+    count = max(0, int(total or 0))
+    positive = {key: max(0.0, float(weights.get(key) or 0.0)) for key in keys}
+    weight_sum = sum(positive.values())
+    if weight_sum <= 0.0:
+        positive = {key: 1.0 for key in keys}
+        weight_sum = float(len(keys))
+    raw = {key: positive[key] * count / weight_sum for key in keys}
+    quotas = {key: int(raw[key]) for key in keys}
+    remaining = count - sum(quotas.values())
+    order = {key: index for index, key in enumerate(keys)}
+    ranked = sorted(keys, key=lambda key: (-(raw[key] - quotas[key]), order[key]))
+    for key in ranked[:remaining]:
+        quotas[key] += 1
+    return quotas
+
+
+def _stage64_interleaved_quota_sequence(
+    quotas: dict[str, int],
+    ordered_keys: Iterable[str],
+) -> list[str]:
+    """Expand exact quotas in deterministic round-robin order.
+
+    The old allocator emitted one contiguous block per operation.  Cycling the
+    ordered keys once per round preserves the exact largest-remainder totals
+    while making every feasible prefix structurally mixed.
+    """
+
+    keys = list(ordered_keys)
+    remaining = {key: max(0, int(quotas.get(key) or 0)) for key in keys}
+    sequence: list[str] = []
+    while any(remaining.values()):
+        progressed = False
+        for key in keys:
+            if remaining[key] <= 0:
+                continue
+            sequence.append(key)
+            remaining[key] -= 1
+            progressed = True
+        if not progressed:  # pragma: no cover - defensive guard.
             break
-        offset += width
+    return sequence
+
+
+def _stage64_operation_quotas(
+    weights: dict[str, Any],
+    total: int,
+) -> dict[str, int]:
+    """Allocate exact operation quotas with one-row coverage when feasible."""
+
+    active = [
+        operation
+        for operation in STAGE64_QA_OPERATIONS
+        if float(weights.get(operation) or 0.0) > 0.0
+    ]
+    if active and total >= len(active):
+        residual = _stage64_largest_remainder_quotas(
+            weights,
+            STAGE64_QA_OPERATIONS,
+            total - len(active),
+        )
+        return {
+            operation: int(residual.get(operation) or 0)
+            + int(operation in active)
+            for operation in STAGE64_QA_OPERATIONS
+        }
+    return _stage64_largest_remainder_quotas(
+        weights,
+        STAGE64_QA_OPERATIONS,
+        total,
+    )
+
+
+def _stage64_reasoning_contract_from_target(
+    target: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Return a canonical reasoning signature, rejecting partial or drifted targets."""
+
+    if not isinstance(target, dict):
+        return None
+    present = [field for field in STAGE64_REASONING_TARGET_FIELDS if field in target]
+    if not present:
+        return None
+    missing = [field for field in STAGE64_REASONING_TARGET_FIELDS if field not in target]
+    if missing:
+        raise NativeGraphDialogueReject(
+            f"stage64 target has partial reasoning identity: missing={missing}"
+        )
+    operation = normalize_space(target.get("qa_operation"))
+    candidates = STAGE64_REASONING_TARGET_SPECS.get(operation) or ()
+    hop_count = target.get("hop_count")
+    if isinstance(hop_count, bool) or not isinstance(hop_count, int) or hop_count < 2:
+        raise NativeGraphDialogueReject(
+            f"stage64 target has invalid hop_count={hop_count!r}"
+        )
+    signature = {
+        field: copy.deepcopy(target.get(field))
+        for field in STAGE64_REASONING_TARGET_FIELDS
+    }
+    for candidate in candidates:
+        if all(signature[field] == candidate[field] for field in STAGE64_REASONING_TARGET_FIELDS):
+            expected_shortcut_policy = bool(
+                candidate.get("forbid_max_time_shortcut", False)
+            )
+            declared_shortcut_policy = bool(
+                target.get("forbid_max_time_shortcut", False)
+            )
+            if declared_shortcut_policy != expected_shortcut_policy:
+                raise NativeGraphDialogueReject(
+                    "stage64 target reasoning identity has drifted shortcut policy"
+                )
+            return copy.deepcopy(candidate)
+    raise NativeGraphDialogueReject(
+        "stage64 target reasoning identity is not a canonical candidate for "
+        f"qa_operation={operation!r}"
+    )
+
+
+def normalize_stage64_reasoning_identity_completion(
+    qa_proposal: dict[str, Any],
+    stage64_target: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Inject only omitted immutable reasoning keys from a canonical target.
+
+    An API-authored value is independent evidence: if the key exists, even with
+    a null or wrong-typed value, it must match exactly and is never overwritten.
+    A wholly absent query_plan remains absent for the unique-contract completion
+    normalizer; when the object exists, only its missing reasoning keys are added.
+    """
+
+    diagnostics: dict[str, Any] = {
+        "schema_version": STAGE64_REASONING_IDENTITY_COMPLETION_NORMALIZER_VERSION,
+        "stage64_reasoning_identity_completion_normalizer_used": False,
+        "completed_top_level_fields": [],
+        "completed_query_plan_fields": [],
+        "completed_fields": [],
+        "pre_qa_proposal_sha256": None,
+        "post_qa_proposal_sha256": None,
+        "target_reasoning_contract": None,
+        "target_reasoning_contract_sha256": None,
+        "noop_reason": None,
+    }
+    reject_prefix = "stage64 API QA reasoning identity completion normalizer"
+    if not isinstance(qa_proposal, dict):
+        raise NativeGraphDialogueReject(f"{reject_prefix} requires qa_proposal object")
+    try:
+        pre_sha256 = _stage64_json_sha256(qa_proposal)
+    except (TypeError, ValueError) as exc:
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} requires a JSON-serializable proposal"
+        ) from exc
+    diagnostics["pre_qa_proposal_sha256"] = pre_sha256
+    diagnostics["post_qa_proposal_sha256"] = pre_sha256
+
+    reasoning_contract = _stage64_reasoning_contract_from_target(stage64_target)
+    if reasoning_contract is None:
+        diagnostics["noop_reason"] = "target_has_no_reasoning_identity"
+        return qa_proposal, diagnostics
+    frozen_identity = {
+        field: copy.deepcopy(reasoning_contract[field])
+        for field in STAGE64_REASONING_TARGET_FIELDS
+    }
+    diagnostics["target_reasoning_contract"] = copy.deepcopy(frozen_identity)
+    diagnostics["target_reasoning_contract_sha256"] = _stage64_json_sha256(
+        frozen_identity
+    )
+
+    query_plan = qa_proposal.get("query_plan")
+    containers: list[tuple[str, dict[str, Any]]] = [("qa_proposal", qa_proposal)]
+    if isinstance(query_plan, dict):
+        containers.append(("query_plan", query_plan))
+    for owner, container in containers:
+        for field, expected in frozen_identity.items():
+            if field not in container:
+                continue
+            actual = container.get(field)
+            if actual != expected or type(actual) is not type(expected):
+                raise NativeGraphDialogueReject(
+                    "stage64 API QA reasoning target drift: "
+                    f"{owner}.{field}={actual!r}, expected={expected!r}"
+                )
+
+    completed_top_level_fields = [
+        field for field in STAGE64_REASONING_TARGET_FIELDS if field not in qa_proposal
+    ]
+    completed_query_plan_fields = (
+        [field for field in STAGE64_REASONING_TARGET_FIELDS if field not in query_plan]
+        if isinstance(query_plan, dict)
+        else []
+    )
+    if not completed_top_level_fields and not completed_query_plan_fields:
+        diagnostics["noop_reason"] = "reasoning_identity_already_complete"
+        return qa_proposal, diagnostics
+
+    normalized = copy.deepcopy(qa_proposal)
+    for field in completed_top_level_fields:
+        normalized[field] = copy.deepcopy(frozen_identity[field])
+    if completed_query_plan_fields:
+        normalized_query_plan = normalized["query_plan"]
+        for field in completed_query_plan_fields:
+            normalized_query_plan[field] = copy.deepcopy(frozen_identity[field])
+    completed_fields = [
+        *(f"qa_proposal.{field}" for field in completed_top_level_fields),
+        *(f"query_plan.{field}" for field in completed_query_plan_fields),
+    ]
+    diagnostics.update(
+        {
+            "stage64_reasoning_identity_completion_normalizer_used": True,
+            "completed_top_level_fields": completed_top_level_fields,
+            "completed_query_plan_fields": completed_query_plan_fields,
+            "completed_fields": completed_fields,
+            "post_qa_proposal_sha256": _stage64_json_sha256(normalized),
+            "noop_reason": None,
+        }
+    )
+    return normalized, diagnostics
+
+
+def _validate_stage64_reasoning_target_binding(
+    *,
+    stage64_target: dict[str, Any] | None,
+    qa_proposal: dict[str, Any],
+    query_plan: dict[str, Any],
+    current_event_plan: dict[str, Any],
+    resolved_reasoning_event_ids: Iterable[str],
+    resolved_distractor_event_ids: Iterable[str],
+) -> dict[str, Any] | None:
+    """Fail closed when an API proposal changes its immutable reasoning target."""
+
+    contract = _stage64_reasoning_contract_from_target(stage64_target)
+    if contract is None:
+        return None
+    for field in STAGE64_REASONING_TARGET_FIELDS:
+        expected = contract[field]
+        for owner, payload in (
+            ("qa_proposal", qa_proposal),
+            ("query_plan", query_plan),
+        ):
+            actual = payload.get(field)
+            if actual != expected or (
+                field == "hop_count"
+                and (isinstance(actual, bool) or not isinstance(actual, int))
+            ):
+                raise NativeGraphDialogueReject(
+                    "stage64 API QA reasoning target drift: "
+                    f"{owner}.{field}={actual!r}, expected={expected!r}"
+                )
+
+    reasoning_ids = [normalize_space(value) for value in resolved_reasoning_event_ids]
+    distinct_reasoning_ids = {value for value in reasoning_ids if value}
+    if len(distinct_reasoning_ids) < int(contract["hop_count"]):
+        raise NativeGraphDialogueReject(
+            "stage64 API QA reasoning target hop_count not realized: "
+            f"resolved={len(distinct_reasoning_ids)}, required={contract['hop_count']}"
+        )
+    distinct_distractor_ids = {
+        normalize_space(value)
+        for value in resolved_distractor_event_ids
+        if normalize_space(value)
+    }
+    if len(distinct_distractor_ids) < 2:
+        raise NativeGraphDialogueReject(
+            "stage64 API QA hard_negative_strategy requires at least two distinct "
+            "graph-grounded distractor events"
+        )
+
+    operation = normalize_space((stage64_target or {}).get("qa_operation"))
+    template = normalize_space(contract.get("reasoning_template"))
+    event_rows = [
+        event
+        for event in (current_event_plan.get("events") or [])
+        if isinstance(event, dict)
+    ]
+    graph_structure_issues = _stage64_reasoning_graph_target_issues(
+        current_event_plan,
+        stage64_target,
+    )
+    if graph_structure_issues:
+        raise NativeGraphDialogueReject(
+            "stage64 API QA reasoning_template graph structure not realized: "
+            f"{[issue.get('code') for issue in graph_structure_issues[:4]]}"
+        )
+    event_ids = [
+        normalize_space(event.get("event_instance_id") or event.get("event_id"))
+        for event in event_rows
+    ]
+    event_by_id = {
+        event_id: event
+        for event_id, event in zip(event_ids, event_rows)
+        if event_id
+    }
+
+    def event_dependencies(event_id: str) -> list[str]:
+        event = event_by_id.get(event_id) or {}
+        raw = event.get("depends_on")
+        if not isinstance(raw, list):
+            return []
+        return [
+            normalize_space(dependency)
+            for dependency in raw
+            if normalize_space(dependency) in event_by_id
+        ]
+
+    def dependency_closure(seed_ids: Iterable[str]) -> set[str]:
+        closure: set[str] = set()
+        pending = [event_id for event_id in seed_ids if event_id in event_by_id]
+        while pending:
+            event_id = pending.pop()
+            if event_id in closure:
+                continue
+            closure.add(event_id)
+            pending.extend(event_dependencies(event_id))
+        return closure
+
+    expected_reasoning_ids: set[str] = set()
+    if operation == "temporal_state_update":
+        chain = _stage64_unique_temporal_state_update_chain(
+            current_event_plan,
+            stage64_target,
+        )
+        if chain is not None:
+            expected_reasoning_ids = set(chain["event_instance_ids"])
+    elif operation == "bridge" and len(event_ids) >= 3:
+        expected_reasoning_ids = dependency_closure([event_ids[2]])
+        if template == "join_support_under_scope_constraint" and not any(
+            isinstance(event_by_id[event_id].get("scope"), dict)
+            and bool(event_by_id[event_id]["scope"])
+            for event_id in expected_reasoning_ids
+        ):
+            raise NativeGraphDialogueReject(
+                "stage64 bridge scope-constrained reasoning template lacks a scoped support event"
+            )
+    elif operation == "comparison":
+        comparison_contract = derive_unique_comparison_contract(current_event_plan)
+        if comparison_contract is not None:
+            expected_reasoning_ids = set(
+                comparison_contract["primary_event_instance_ids"]
+            )
+            if template == "select_time_matched_pair_then_compare":
+                primary_entities = {
+                    stage64_quality.normalized_option_text(entity)
+                    for entity in comparison_contract["entities"]
+                }
+                primary_slot = comparison_contract["normalized_slot"]
+                contrast_ids = {
+                    normalize_space(event.get("event_instance_id"))
+                    for event in event_rows
+                    if normalize_space(event.get("event_instance_id"))
+                    not in expected_reasoning_ids
+                    and stage64_quality.normalized_option_text(event.get("entity"))
+                    in primary_entities
+                    and stage64_quality.normalized_option_text(event.get("slot"))
+                    == primary_slot
+                }
+                expected_reasoning_ids.update(contrast_ids)
+    elif operation in {"visibility", "cause_consequence", "relation_lookup"}:
+        if len(event_ids) >= 2:
+            expected_reasoning_ids = dependency_closure([event_ids[1]])
+    elif operation == "count":
+        expected_reasoning_ids = {event_id for event_id in event_ids if event_id}
+
+    if not expected_reasoning_ids or not expected_reasoning_ids.issubset(
+        distinct_reasoning_ids
+    ):
+        raise NativeGraphDialogueReject(
+            "stage64 API QA reasoning_template structure not realized: "
+            f"template={template!r}, expected={sorted(expected_reasoning_ids)}, "
+            f"resolved={sorted(distinct_reasoning_ids)}"
+        )
+
+    alias_to_event_id, _unused_turn_map = _stage64_ref_maps(
+        current_event_plan,
+        {"events": []},
+        {},
+    )
+    raw_closure_refs = _stage64_str_list(
+        query_plan.get("dependency_closure_refs")
+    )
+    resolved_closure_refs = {
+        _resolve_stage64_ref(ref, alias_to_event_id) for ref in raw_closure_refs
+    }
+    if (
+        len(raw_closure_refs) != len(expected_reasoning_ids)
+        or "" in resolved_closure_refs
+        or resolved_closure_refs != expected_reasoning_ids
+    ):
+        raise NativeGraphDialogueReject(
+            "stage64 API QA query_plan.dependency_closure_refs must equal the full "
+            f"reasoning-template closure: expected={sorted(expected_reasoning_ids)}"
+        )
+
+    expected_projection = STAGE64_ANSWER_PROJECTION_BY_OPERATION.get(operation)
+    if normalize_space(query_plan.get("answer_projection")) != expected_projection:
+        raise NativeGraphDialogueReject(
+            "stage64 API QA query_plan.answer_projection is inconsistent with "
+            f"qa_operation={operation!r}: expected={expected_projection!r}"
+        )
+
+    if operation == "count":
+        conditions = {
+            normalize_space(event["set_membership"].get("condition"))
+            for event in event_rows
+            if isinstance(event.get("set_membership"), dict)
+        }
+        filter_predicate = query_plan.get("filter_predicate")
+        if (
+            len(conditions) != 1
+            or "" in conditions
+            or not isinstance(filter_predicate, dict)
+            or normalize_space(filter_predicate.get("condition"))
+            != next(iter(conditions), "")
+            or filter_predicate.get("included") is not True
+        ):
+            raise NativeGraphDialogueReject(
+                "stage64 count query_plan.filter_predicate must preserve the shared "
+                "condition and included=true decision"
+            )
+    elif operation == "visibility":
+        scope = (
+            event_rows[1].get("scope")
+            if len(event_rows) >= 2 and isinstance(event_rows[1].get("scope"), dict)
+            else {}
+        )
+        filter_predicate = query_plan.get("filter_predicate")
+        if not isinstance(filter_predicate, dict) or any(
+            normalize_space(filter_predicate.get(field))
+            != normalize_space(scope.get(field))
+            for field in ("observer", "permission", "condition")
+        ):
+            raise NativeGraphDialogueReject(
+                "stage64 visibility query_plan.filter_predicate must match the "
+                "observer, permission, and condition composition"
+            )
+    elif operation == "cause_consequence":
+        cause_source_ref = normalize_space(query_plan.get("cause_source_ref"))
+        if (
+            normalize_space(query_plan.get("cause_direction")) != "cause_to_effect"
+            or _resolve_stage64_ref(cause_source_ref, alias_to_event_id)
+            != (event_ids[0] if event_ids else "")
+        ):
+            raise NativeGraphDialogueReject(
+                "stage64 cause query_plan must declare cause_direction='cause_to_effect' "
+                "and the unique cause_source_ref"
+            )
+
+    if contract.get("forbid_max_time_shortcut"):
+        if normalize_space((stage64_target or {}).get("qa_operation")) != "temporal_state_update":
+            raise NativeGraphDialogueReject(
+                "stage64 max-time shortcut policy is only valid for temporal_state_update"
+            )
+        strategy = str(contract["hard_negative_strategy"])
+        cue_patterns = {
+            "same_slot_canceled_value": re.compile(
+                r"\b(?:cancel(?:ed|led|lation)?|called\s+off|withdrawn|void)\b",
+                re.IGNORECASE,
+            ),
+            "same_slot_outdated_value": re.compile(
+                r"\b(?:outdated|superseded|old\s+information|no\s+longer)\b",
+                re.IGNORECASE,
+            ),
+            "same_slot_report_or_belief_value": re.compile(
+                r"\b(?:report(?:ed)?|belief|assumption|rumou?r|unconfirmed)\b",
+                re.IGNORECASE,
+            ),
+        }
+        question = normalize_space(
+            qa_proposal.get("question") or qa_proposal.get("question_text")
+        )
+        cue_pattern = cue_patterns.get(strategy)
+        if cue_pattern is None or cue_pattern.search(question) is None:
+            raise NativeGraphDialogueReject(
+                "stage64 temporal reasoning target forbids max-time-only question: "
+                f"missing natural validity cue for {strategy!r}"
+            )
+        chain = _stage64_unique_temporal_state_update_chain(
+            current_event_plan,
+            stage64_target,
+        )
+        if chain is None:
+            raise NativeGraphDialogueReject(
+                "stage64 temporal hard_negative_strategy lacks one target-aware "
+                "earlier-current update chain"
+            )
+        later_invalid_ids = set(chain["later_strategy_event_instance_ids"])
+        if not later_invalid_ids:
+            raise NativeGraphDialogueReject(
+                "stage64 temporal hard_negative_strategy is not graph-verifiable: "
+                f"strategy={strategy!r}"
+            )
+        if not later_invalid_ids.issubset(distinct_reasoning_ids) or not later_invalid_ids.issubset(
+            distinct_distractor_ids
+        ):
+            raise NativeGraphDialogueReject(
+                "stage64 temporal later validity negative must occur in both the "
+                "reasoning path and distractor references: "
+                f"later_invalid_ids={sorted(later_invalid_ids)}"
+            )
+    return contract
+
+
+def _stage64_reasoning_graph_target_issues(
+    graph_payload: dict[str, Any],
+    stage64_target: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Machine-check graph prerequisites that are implied by a reasoning target."""
+
+    contract = _stage64_reasoning_contract_from_target(stage64_target)
+    if contract is None:
+        return []
+    events = graph_payload.get("events") if isinstance(graph_payload, dict) else None
+    event_rows = [event for event in (events or []) if isinstance(event, dict)]
+    issues: list[dict[str, Any]] = []
+    if len(event_rows) < int(contract["hop_count"]):
+        issues.append(
+            {
+                "code": "reasoning_target_insufficient_graph_events",
+                "path": "$.events",
+                "message": "The graph cannot realize the immutable target hop_count.",
+                "details": {
+                    "event_count": len(event_rows),
+                    "hop_count": contract["hop_count"],
+                },
+            }
+        )
+    operation = normalize_space((stage64_target or {}).get("qa_operation"))
+    event_ids = [
+        normalize_space(event.get("event_instance_id") or event.get("event_id"))
+        for event in event_rows
+    ]
+    event_id_set = {event_id for event_id in event_ids if event_id}
+
+    def dependencies(event: dict[str, Any]) -> list[str]:
+        raw = event.get("depends_on")
+        if not isinstance(raw, list):
+            return []
+        return [
+            normalize_space(dependency)
+            for dependency in raw
+            if normalize_space(dependency) in event_id_set
+        ]
+
+    def structural_issue(code: str, message: str, **details: Any) -> None:
+        issues.append(
+            {
+                "code": code,
+                "path": "$.events",
+                "message": message,
+                "details": details,
+            }
+        )
+
+    if operation == "temporal_state_update" and len(event_rows) >= 4:
+        expected = [[], [event_ids[0]], [event_ids[1]], [event_ids[2]]]
+        actual = [dependencies(event) for event in event_rows[:4]]
+        if actual != expected:
+            structural_issue(
+                "temporal_reasoning_target_dependency_chain",
+                "Every temporal successor must depend exactly on its immediate predecessor.",
+                expected=expected,
+                actual=actual,
+            )
+    elif operation == "bridge" and len(event_rows) >= 3:
+        actual = [dependencies(event) for event in event_rows[:3]]
+        if actual[0] or actual[1] or set(actual[2]) != {event_ids[0], event_ids[1]}:
+            structural_issue(
+                "bridge_reasoning_target_incomplete_closure",
+                "The bridge terminal must depend on both independent support events.",
+                expected_terminal_dependencies=[event_ids[0], event_ids[1]],
+                actual=actual,
+            )
+    elif operation == "comparison" and len(event_rows) >= 4:
+        primary = event_rows[:2]
+        contrasts = event_rows[2:4]
+        primary_entities = {
+            stage64_quality.normalized_option_text(event.get("entity"))
+            for event in primary
+        }
+        contrast_entities = {
+            stage64_quality.normalized_option_text(event.get("entity"))
+            for event in contrasts
+        }
+        primary_slot = normalize_space(primary[0].get("slot"))
+        primary_time = primary[0].get("time_index")
+        contrast_times = [event.get("time_index") for event in contrasts]
+        if (
+            len(primary_entities - {""}) != 2
+            or contrast_entities != primary_entities
+            or any(normalize_space(event.get("slot")) != primary_slot for event in contrasts)
+            or any(
+                normalize_space(event.get("status")).casefold()
+                not in semantic_graph_v2.NON_ACTIVE_STATUSES
+                for event in contrasts
+            )
+            or any(
+                isinstance(value, bool) or not isinstance(value, int)
+                for value in contrast_times
+            )
+            or len(set(contrast_times)) != 1
+            or primary_time in contrast_times
+        ):
+            structural_issue(
+                "comparison_reasoning_target_missing_two_plus_two_contrast",
+                "Comparison requires a two-primary plus two historical-contrast structure.",
+                primary_event_ids=event_ids[:2],
+                contrast_event_ids=event_ids[2:4],
+            )
+    elif operation == "visibility" and len(event_rows) >= 2:
+        permission_event = event_rows[1]
+        scope = (
+            permission_event.get("scope")
+            if isinstance(permission_event.get("scope"), dict)
+            else {}
+        )
+        required_scope = {
+            field: normalize_space(scope.get(field))
+            for field in ("observer", "permission", "condition")
+        }
+        matching_scopes = [
+            event
+            for event in event_rows
+            if isinstance(event.get("scope"), dict)
+            and all(
+                normalize_space(event["scope"].get(field)) == expected
+                for field, expected in required_scope.items()
+            )
+        ]
+        matching_scope_event_ids = [
+            normalize_space(event.get("event_instance_id") or event.get("event_id"))
+            for event in matching_scopes
+        ]
+
+        def scope_at(index: int) -> dict[str, str]:
+            if index >= len(event_rows) or not isinstance(
+                event_rows[index].get("scope"), dict
+            ):
+                return {field: "" for field in ("observer", "permission", "condition")}
+            return {
+                field: normalize_space(event_rows[index]["scope"].get(field))
+                for field in ("observer", "permission", "condition")
+            }
+
+        def is_minimal_scope_negative(index: int, changed_field: str) -> bool:
+            candidate_scope = scope_at(index)
+            return (
+                all(candidate_scope.values())
+                and candidate_scope[changed_field] != required_scope[changed_field]
+                and all(
+                    candidate_scope[field] == required_scope[field]
+                    for field in required_scope
+                    if field != changed_field
+                )
+            )
+
+        later_scopes = [scope_at(index) for index in range(5, len(event_rows))]
+        visibility_role_checks = {
+            "event_count_is_eight": len(event_rows) == 8,
+            "resource_omits_scope": "scope" not in event_rows[0],
+            "resource_omits_dependency": dependencies(event_rows[0]) == [],
+            "permission_scope_complete": all(required_scope.values()),
+            "permission_depends_only_on_resource": (
+                dependencies(permission_event) == [event_ids[0]]
+            ),
+            "wrong_observer_is_minimal_pair": is_minimal_scope_negative(2, "observer"),
+            "wrong_permission_is_minimal_pair": is_minimal_scope_negative(3, "permission"),
+            "wrong_condition_is_minimal_pair": is_minimal_scope_negative(4, "condition"),
+            "remaining_scopes_are_distinct_and_complete": (
+                len(later_scopes) == 3
+                and all(all(scope.values()) and scope != required_scope for scope in later_scopes)
+            ),
+            "permission_edge_is_unique": all(
+                dependencies(event) == ([event_ids[0]] if index == 1 else [])
+                for index, event in enumerate(event_rows)
+            ),
+            "permission_scope_is_unique": len(matching_scopes) == 1,
+        }
+        failed_constraints = [
+            name for name, passed in visibility_role_checks.items() if not passed
+        ]
+        if failed_constraints:
+            structural_issue(
+                "visibility_reasoning_target_nonunique_composition",
+                "Visibility requires one unique resource composition plus fixed observer, permission, and condition minimal-pair negatives.",
+                resource_event_id=event_ids[0],
+                permission_event_id=event_ids[1],
+                scope=required_scope,
+                exact_scope_match_count=len(matching_scopes),
+                exact_scope_match_event_ids=matching_scope_event_ids,
+                role_checks=visibility_role_checks,
+                failed_constraints=failed_constraints,
+            )
+    elif operation == "count" and event_rows:
+        conditions = [
+            normalize_space(
+                (event.get("set_membership") or {}).get("condition")
+                if isinstance(event.get("set_membership"), dict)
+                else ""
+            )
+            for event in event_rows
+        ]
+        if any(not condition for condition in conditions) or len(set(conditions)) != 1:
+            structural_issue(
+                "count_reasoning_target_missing_shared_condition",
+                "Every count member must carry the same explicit non-empty filter condition.",
+                conditions=conditions,
+            )
+    elif operation == "cause_consequence" and len(event_rows) >= 2:
+        directed_edges = [
+            (event_ids[index], dependency)
+            for index, event in enumerate(event_rows)
+            for dependency in dependencies(event)
+        ]
+        expected_edge = [(event_ids[1], event_ids[0])]
+        if directed_edges != expected_edge or not (
+            isinstance(event_rows[0].get("time_index"), int)
+            and isinstance(event_rows[1].get("time_index"), int)
+            and event_rows[0]["time_index"] < event_rows[1]["time_index"]
+        ):
+            structural_issue(
+                "cause_reasoning_target_nonunique_direction",
+                "Cause/consequence requires one unique earlier-cause to later-effect edge.",
+                expected_edges=expected_edge,
+                actual_edges=directed_edges,
+            )
+    elif operation == "relation_lookup" and len(event_rows) >= 4:
+        binder, relation, same_entity_negative, other_entity_negative = event_rows[:4]
+        actual_edges = [
+            (event_ids[index], dependency)
+            for index, event in enumerate(event_rows)
+            for dependency in dependencies(event)
+        ]
+        expected_edges = [(event_ids[1], event_ids[0])]
+        relation_role_checks = {
+            "event_count_is_eight": len(event_rows) == 8,
+            "unique_dependency_edge": actual_edges == expected_edges,
+            "binder_value_equals_relation_entity": _temporal_generation_values_equal(
+                binder.get("value"), relation.get("entity")
+            ),
+            "same_entity_negative_entity_matches_relation": (
+                normalize_space(same_entity_negative.get("entity"))
+                == normalize_space(relation.get("entity"))
+            ),
+            "same_entity_negative_slot_matches_relation": (
+                normalize_space(same_entity_negative.get("slot"))
+                == normalize_space(relation.get("slot"))
+            ),
+            "same_entity_negative_value_differs": not _temporal_generation_values_equal(
+                same_entity_negative.get("value"), relation.get("value")
+            ),
+            "other_entity_negative_entity_differs": (
+                normalize_space(other_entity_negative.get("entity"))
+                != normalize_space(relation.get("entity"))
+            ),
+            "other_entity_negative_slot_matches_relation": (
+                normalize_space(other_entity_negative.get("slot"))
+                == normalize_space(relation.get("slot"))
+            ),
+        }
+        failed_constraints = [
+            name for name, passed in relation_role_checks.items() if not passed
+        ]
+        if failed_constraints:
+            structural_issue(
+                "relation_reasoning_target_missing_binder_path",
+                "Relation lookup requires exactly one binder-to-relation dependency plus both close negative roles.",
+                role_event_ids=event_ids[:4],
+                expected_edges=expected_edges,
+                actual_edges=actual_edges,
+                role_checks=relation_role_checks,
+                failed_constraints=failed_constraints,
+            )
+    if contract.get("forbid_max_time_shortcut"):
+        strategy = str(contract["hard_negative_strategy"])
+        required_statuses = STAGE64_TEMPORAL_HARD_NEGATIVE_STATUSES.get(
+            strategy, frozenset()
+        )
+        primary = sorted(
+            event_rows[:4],
+            key=lambda event: int(event.get("time_index") or 0),
+        )
+        active_indexes = [
+            index
+            for index, event in enumerate(primary)
+            if normalize_space(event.get("status")).casefold() in ACTIVE_STATUSES
+        ]
+        later_matching = []
+        if len(active_indexes) == 1:
+            later_matching = [
+                event
+                for event in primary[active_indexes[0] + 1 :]
+                if normalize_space(event.get("status")).casefold()
+                in required_statuses
+            ]
+        if (
+            not required_statuses
+            or len(active_indexes) != 1
+            or active_indexes[0] == len(primary) - 1
+            or not later_matching
+        ):
+            issues.append(
+                {
+                    "code": "temporal_reasoning_target_missing_validity_negative",
+                    "path": "$.events",
+                    "message": (
+                        "The temporal graph lacks the status-gated same-slot hard "
+                        "negative required to forbid a max-time-only shortcut."
+                    ),
+                    "details": {
+                        "hard_negative_strategy": strategy,
+                        "required_any_status": sorted(required_statuses),
+                        "active_array_indexes": active_indexes,
+                        "later_statuses": [
+                            normalize_space(event.get("status")).casefold()
+                            for event in (
+                                primary[active_indexes[0] + 1 :]
+                                if len(active_indexes) == 1
+                                else []
+                            )
+                        ],
+                    },
+                }
+            )
+    return issues
+
+
+def _stage64_target_for_slot(
+    slot: int,
+    n_samples: int,
+    operation_shares: dict[str, Any] | None = None,
+    answer_type_shares_by_operation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    total = max(1, int(n_samples or 1))
+    controller_weights = operation_shares if isinstance(operation_shares, dict) else {}
+    use_controller = any(float(controller_weights.get(key) or 0.0) > 0.0 for key in STAGE64_QA_OPERATIONS)
+    weights = controller_weights if use_controller else STAGE64_TARGET_OPERATION_COUNTS
+    quotas = _stage64_operation_quotas(weights, total)
+    cursor = int(slot or 0) % total
+    operation_sequence = _stage64_interleaved_quota_sequence(
+        quotas,
+        STAGE64_QA_OPERATIONS,
+    )
+    if len(operation_sequence) != total:
+        raise RuntimeError(
+            "Stage64 interleaved operation allocation did not preserve exact quota"
+        )
+    qa_operation = operation_sequence[cursor]
+    operation_cursor = sum(
+        prior_operation == qa_operation
+        for prior_operation in operation_sequence[:cursor]
+    )
     required_answer_types = STAGE64_OPERATION_REQUIRED_ANSWER_TYPES.get(qa_operation)
     if required_answer_types:
         preferred_answer_type = sorted(required_answer_types)[0]
     else:
-        preferred_answer_type = STAGE64_PREFERRED_ANSWER_TYPE_CYCLE[cursor % len(STAGE64_PREFERRED_ANSWER_TYPE_CYCLE)]
+        allowed_answer_types = STAGE64_OPERATION_ANSWER_TYPE_CANDIDATES[qa_operation]
+        answer_plan = (
+            answer_type_shares_by_operation.get(qa_operation)
+            if isinstance(answer_type_shares_by_operation, dict)
+            and isinstance(answer_type_shares_by_operation.get(qa_operation), dict)
+            else {}
+        )
+        planned_answer_types = [
+            answer_type
+            for answer_type in allowed_answer_types
+            if float(answer_plan.get(answer_type) or 0.0) > 0.0
+        ]
+        if planned_answer_types:
+            answer_quotas = _stage64_largest_remainder_quotas(
+                answer_plan,
+                planned_answer_types,
+                max(1, int(quotas.get(qa_operation) or 0)),
+            )
+            answer_sequence = _stage64_interleaved_quota_sequence(
+                answer_quotas,
+                planned_answer_types,
+            )
+            preferred_answer_type = answer_sequence[
+                operation_cursor % len(answer_sequence)
+            ]
+        else:
+            preferred_answer_type = allowed_answer_types[
+                operation_cursor % len(allowed_answer_types)
+            ]
+    reasoning_specs = STAGE64_REASONING_TARGET_SPECS.get(qa_operation) or ()
+    if not reasoning_specs:
+        raise RuntimeError(
+            f"Stage64 operation {qa_operation!r} has no reasoning target candidates"
+        )
+    reasoning_target = copy.deepcopy(
+        reasoning_specs[operation_cursor % len(reasoning_specs)]
+    )
     return {
         "qa_operation": qa_operation,
         "preferred_answer_type": preferred_answer_type,
-        "target_basis": "stage64_scaled_operation_quota",
+        **reasoning_target,
+        "target_basis": (
+            "stage3_operation_controller_largest_remainder"
+            if use_controller
+            else "stage64_scaled_operation_quota"
+        ),
     }
+
+
+def _stage64_target_identity(
+    target_index: int,
+    target: dict[str, Any],
+    target_plan_sha256: str,
+) -> str:
+    payload = {
+        "schema_version": STAGE64_TARGET_IDENTITY_VERSION,
+        "target_plan_sha256": target_plan_sha256,
+        "target_index": int(target_index),
+        "stage64_target": target,
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _build_stage64_canonical_targets(
+    n_samples: int,
+    operation_shares: dict[str, Any] | None = None,
+    answer_type_shares_by_operation: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Materialize immutable Stage64 target identities before worker slots exist."""
+
+    target_payloads: list[dict[str, Any]] = []
+    for target_index in range(max(0, int(n_samples))):
+        target_payloads.append(
+            _stage64_target_for_slot(
+                target_index,
+                n_samples,
+                operation_shares,
+                answer_type_shares_by_operation,
+            )
+        )
+    plan_payload = {
+        "schema_version": STAGE64_TARGET_IDENTITY_VERSION,
+        "n_samples": max(0, int(n_samples)),
+        "stage64_targets": target_payloads,
+    }
+    target_plan_sha256 = hashlib.sha256(
+        json.dumps(
+            plan_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    targets: list[dict[str, Any]] = []
+    for target_index, target in enumerate(target_payloads):
+        targets.append(
+            {
+                "schema_version": STAGE64_TARGET_IDENTITY_VERSION,
+                "target_plan_sha256": target_plan_sha256,
+                "target_index": target_index,
+                "target_identity": _stage64_target_identity(
+                    target_index,
+                    target,
+                    target_plan_sha256,
+                ),
+                "stage64_target": copy.deepcopy(target),
+            }
+        )
+        targets[-1]["target_id"] = targets[-1]["target_identity"]
+    return targets
+
+
+def _legacy_easy_v2_caps_enabled(curriculum_mode: str, formal_stage64: bool) -> bool:
+    """Legacy qtype/skill caps do not own the formal Stage64 operation taxonomy."""
+
+    return curriculum_mode == EASY_V2_MODE and not formal_stage64
+
+
+def _strict_nonnegative_int(value: Any, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise RuntimeError(f"formal Stage64 resume requires non-negative integer {field}")
+    return value
+
+
+def _validate_stage64_sample_target_provenance(
+    sample: dict[str, Any],
+    canonical_targets: list[dict[str, Any]],
+) -> tuple[int, int]:
+    """Return (generation_slot_id, target_index), rejecting stale formal partials."""
+
+    sample_id = sample.get("sample_id")
+    generation_slot_id = _strict_nonnegative_int(
+        sample.get("generation_slot_id"),
+        f"generation_slot_id for sample {sample_id!r}",
+    )
+    target_index = _strict_nonnegative_int(
+        sample.get("target_index"),
+        f"target_index for sample {sample_id!r}",
+    )
+    if target_index >= len(canonical_targets):
+        raise RuntimeError(
+            "formal Stage64 resume target_index is outside the current canonical plan: "
+            f"sample={sample_id!r}, target_index={target_index}, target_count={len(canonical_targets)}"
+        )
+    expected = canonical_targets[target_index]
+    if normalize_space(sample.get("stage64_target_plan_sha256")) != expected[
+        "target_plan_sha256"
+    ]:
+        raise RuntimeError(
+            "formal Stage64 resume target plan is missing or stale; start a fresh run: "
+            f"sample={sample_id!r}, target_index={target_index}"
+        )
+    stored_target_identity = normalize_space(
+        sample.get("stage64_target_identity") or sample.get("stage64_target_id")
+    )
+    if stored_target_identity != expected["target_identity"]:
+        raise RuntimeError(
+            "formal Stage64 resume target identity is missing or stale; start a fresh run: "
+            f"sample={sample_id!r}, target_index={target_index}"
+        )
+    stored_target = sample.get("stage64_target")
+    if not isinstance(stored_target, dict) or stored_target != expected["stage64_target"]:
+        raise RuntimeError(
+            "formal Stage64 resume target payload is missing or stale; start a fresh run: "
+            f"sample={sample_id!r}, target_index={target_index}"
+        )
+    qa = sample.get("qa") if isinstance(sample.get("qa"), dict) else {}
+    final_operation = normalize_space(sample.get("qa_operation") or qa.get("qa_operation"))
+    expected_operation = normalize_space(expected["stage64_target"].get("qa_operation"))
+    if final_operation != expected_operation:
+        raise RuntimeError(
+            "formal Stage64 resume sample operation does not match its immutable target: "
+            f"sample={sample_id!r}, final={final_operation!r}, expected={expected_operation!r}"
+        )
+    try:
+        expected_reasoning_contract = _stage64_reasoning_contract_from_target(
+            expected["stage64_target"]
+        )
+    except NativeGraphDialogueReject as exc:
+        raise RuntimeError(
+            "formal Stage64 canonical target has invalid reasoning identity"
+        ) from exc
+    if expected_reasoning_contract is None:
+        raise RuntimeError(
+            "formal Stage64 canonical target is missing reasoning identity"
+        )
+    query_plan = qa.get("query_plan") if isinstance(qa.get("query_plan"), dict) else {}
+    for field in STAGE64_REASONING_TARGET_FIELDS:
+        expected_value = expected_reasoning_contract[field]
+        sample_value = sample.get(field) if field in sample else qa.get(field)
+        if sample_value != expected_value or query_plan.get(field) != expected_value:
+            raise RuntimeError(
+                "formal Stage64 resume sample reasoning identity does not match its "
+                f"immutable target: sample={sample_id!r}, field={field!r}, "
+                f"sample_value={sample_value!r}, query_plan_value={query_plan.get(field)!r}, "
+                f"expected={expected_value!r}"
+            )
+    return generation_slot_id, target_index
+
+
+class _Stage64TargetLedger:
+    """Serial owner of immutable targets across concurrent physical worker slots."""
+
+    def __init__(
+        self,
+        canonical_targets: list[dict[str, Any]],
+        resumed_samples: Iterable[dict[str, Any]] = (),
+    ) -> None:
+        self.canonical_targets = copy.deepcopy(canonical_targets)
+        self._by_index = {
+            int(record["target_index"]): record for record in self.canonical_targets
+        }
+        if sorted(self._by_index) != list(range(len(self.canonical_targets))):
+            raise RuntimeError("formal Stage64 canonical target indices must be contiguous and unique")
+        self.accepted_target_indices: set[int] = set()
+        self.accepted_generation_slots: set[int] = set()
+        for sample in resumed_samples:
+            generation_slot_id, target_index = _validate_stage64_sample_target_provenance(
+                sample,
+                self.canonical_targets,
+            )
+            if generation_slot_id in self.accepted_generation_slots:
+                raise RuntimeError(
+                    f"formal Stage64 resume has duplicate generation_slot_id={generation_slot_id}"
+                )
+            if target_index in self.accepted_target_indices:
+                raise RuntimeError(
+                    f"formal Stage64 resume has duplicate target_index={target_index}"
+                )
+            self.accepted_generation_slots.add(generation_slot_id)
+            self.accepted_target_indices.add(target_index)
+        self.pending_target_indices = deque(
+            index for index in self._by_index if index not in self.accepted_target_indices
+        )
+        self.slot_to_target_index: dict[int, int] = {}
+        self._requeued_target_indices: set[int] = set()
+        self.skipped_by_operation: Counter[str] = Counter()
+        self.reallocated_by_operation: Counter[str] = Counter()
+        self.skipped_slot_count = 0
+        self.reallocated_slot_count = 0
+        self.next_generation_slot = (
+            max(self.accepted_generation_slots) + 1
+            if self.accepted_generation_slots
+            else 0
+        )
+
+    def claim(self, generation_slot_id: int) -> dict[str, Any] | None:
+        if generation_slot_id in self.slot_to_target_index:
+            return copy.deepcopy(self._by_index[self.slot_to_target_index[generation_slot_id]])
+        if generation_slot_id in self.accepted_generation_slots:
+            raise RuntimeError(
+                f"formal Stage64 attempted to reuse accepted generation_slot_id={generation_slot_id}"
+            )
+        if not self.pending_target_indices:
+            return None
+        target_index = self.pending_target_indices.popleft()
+        self.slot_to_target_index[generation_slot_id] = target_index
+        if target_index in self._requeued_target_indices:
+            operation = str(
+                self._by_index[target_index]["stage64_target"].get("qa_operation")
+                or "unknown"
+            )
+            self.reallocated_slot_count += 1
+            self.reallocated_by_operation[operation] += 1
+            self._requeued_target_indices.remove(target_index)
+        self.next_generation_slot = max(self.next_generation_slot, generation_slot_id + 1)
+        return copy.deepcopy(self._by_index[target_index])
+
+    def skip(self, generation_slot_id: int) -> dict[str, Any]:
+        if generation_slot_id not in self.slot_to_target_index:
+            raise RuntimeError(
+                f"formal Stage64 cannot skip unassigned generation_slot_id={generation_slot_id}"
+            )
+        target_index = self.slot_to_target_index.pop(generation_slot_id)
+        if target_index in self.accepted_target_indices:
+            raise RuntimeError(
+                f"formal Stage64 cannot requeue accepted target_index={target_index}"
+            )
+        self.pending_target_indices.append(target_index)
+        self._requeued_target_indices.add(target_index)
+        operation = str(
+            self._by_index[target_index]["stage64_target"].get("qa_operation")
+            or "unknown"
+        )
+        self.skipped_slot_count += 1
+        self.skipped_by_operation[operation] += 1
+        return copy.deepcopy(self._by_index[target_index])
+
+    def accept(self, generation_slot_id: int, sample: dict[str, Any]) -> None:
+        expected_target_index = self.slot_to_target_index.get(generation_slot_id)
+        if expected_target_index is None:
+            raise RuntimeError(
+                f"formal Stage64 accepted an unassigned generation_slot_id={generation_slot_id}"
+            )
+        sample_slot, sample_target_index = _validate_stage64_sample_target_provenance(
+            sample,
+            self.canonical_targets,
+        )
+        if sample_slot != generation_slot_id or sample_target_index != expected_target_index:
+            raise RuntimeError(
+                "formal Stage64 worker result changed immutable target identity: "
+                f"slot={generation_slot_id}, expected_target={expected_target_index}, "
+                f"sample_slot={sample_slot}, sample_target={sample_target_index}"
+            )
+        if sample_target_index in self.accepted_target_indices:
+            raise RuntimeError(
+                f"formal Stage64 accepted duplicate target_index={sample_target_index}"
+            )
+        self.slot_to_target_index.pop(generation_slot_id)
+        self.accepted_generation_slots.add(generation_slot_id)
+        self.accepted_target_indices.add(sample_target_index)
+
+    def quota_summary(self, samples: Iterable[dict[str, Any]]) -> dict[str, Any]:
+        rows = list(samples)
+        target_operations = Counter(
+            str(record["stage64_target"].get("qa_operation") or "unknown")
+            for record in self.canonical_targets
+        )
+        target_reasoning_subtypes = Counter(
+            str(record["stage64_target"].get("reasoning_subtype") or "unknown")
+            for record in self.canonical_targets
+        )
+        target_reasoning_templates = Counter(
+            str(record["stage64_target"].get("reasoning_template") or "unknown")
+            for record in self.canonical_targets
+        )
+        target_hop_counts = Counter(
+            str(record["stage64_target"].get("hop_count") or "unknown")
+            for record in self.canonical_targets
+        )
+        target_hard_negative_strategies = Counter(
+            str(
+                record["stage64_target"].get("hard_negative_strategy")
+                or "unknown"
+            )
+            for record in self.canonical_targets
+        )
+        accepted_operations: Counter[str] = Counter()
+        accepted_reasoning_subtypes: Counter[str] = Counter()
+        accepted_reasoning_templates: Counter[str] = Counter()
+        accepted_hop_counts: Counter[str] = Counter()
+        accepted_hard_negative_strategies: Counter[str] = Counter()
+        identity_match_count = 0
+        reasoning_target_match_count = 0
+        preferred_answer_type_match_count = 0
+        summarized_target_indices: set[int] = set()
+        for sample in rows:
+            qa = sample.get("qa") if isinstance(sample.get("qa"), dict) else {}
+            accepted_operations[
+                str(sample.get("qa_operation") or qa.get("qa_operation") or "unknown")
+            ] += 1
+            accepted_reasoning_subtypes[
+                str(sample.get("reasoning_subtype") or qa.get("reasoning_subtype") or "unknown")
+            ] += 1
+            accepted_reasoning_templates[
+                str(sample.get("reasoning_template") or qa.get("reasoning_template") or "unknown")
+            ] += 1
+            accepted_hop_counts[
+                str(sample.get("hop_count") or qa.get("hop_count") or "unknown")
+            ] += 1
+            accepted_hard_negative_strategies[
+                str(
+                    sample.get("hard_negative_strategy")
+                    or qa.get("hard_negative_strategy")
+                    or "unknown"
+                )
+            ] += 1
+            try:
+                _slot, target_index = _validate_stage64_sample_target_provenance(
+                    sample,
+                    self.canonical_targets,
+                )
+            except RuntimeError:
+                continue
+            if (
+                target_index not in self.accepted_target_indices
+                or target_index in summarized_target_indices
+            ):
+                continue
+            summarized_target_indices.add(target_index)
+            identity_match_count += 1
+            reasoning_target_match_count += 1
+            preferred = normalize_space(
+                self._by_index[target_index]["stage64_target"].get(
+                    "preferred_answer_type"
+                )
+            )
+            final_answer_type = normalize_space(
+                sample.get("answer_type") or qa.get("answer_type")
+            )
+            preferred_answer_type_match_count += int(
+                bool(preferred) and final_answer_type == preferred
+            )
+        operation_keys = sorted(set(target_operations) | set(accepted_operations))
+        shortfall = {
+            operation: max(0, target_operations[operation] - accepted_operations[operation])
+            for operation in operation_keys
+            if target_operations[operation] > accepted_operations[operation]
+        }
+        excess = {
+            operation: max(0, accepted_operations[operation] - target_operations[operation])
+            for operation in operation_keys
+            if accepted_operations[operation] > target_operations[operation]
+        }
+        missing_target_indices = sorted(
+            set(self._by_index) - self.accepted_target_indices
+        )
+        return {
+            "stage64_target_operation_counts": dict(sorted(target_operations.items())),
+            "stage64_accepted_operation_counts": dict(sorted(accepted_operations.items())),
+            "stage64_target_reasoning_subtype_counts": dict(
+                sorted(target_reasoning_subtypes.items())
+            ),
+            "stage64_accepted_reasoning_subtype_counts": dict(
+                sorted(accepted_reasoning_subtypes.items())
+            ),
+            "stage64_target_reasoning_template_counts": dict(
+                sorted(target_reasoning_templates.items())
+            ),
+            "stage64_accepted_reasoning_template_counts": dict(
+                sorted(accepted_reasoning_templates.items())
+            ),
+            "stage64_target_hop_count_counts": dict(sorted(target_hop_counts.items())),
+            "stage64_accepted_hop_count_counts": dict(
+                sorted(accepted_hop_counts.items())
+            ),
+            "stage64_target_hard_negative_strategy_counts": dict(
+                sorted(target_hard_negative_strategies.items())
+            ),
+            "stage64_accepted_hard_negative_strategy_counts": dict(
+                sorted(accepted_hard_negative_strategies.items())
+            ),
+            "stage64_operation_shortfall_counts": shortfall,
+            "stage64_operation_excess_counts": excess,
+            "stage64_target_shortfall_count": len(missing_target_indices),
+            "stage64_target_count": len(self.canonical_targets),
+            "stage64_accepted_target_identity_count": len(
+                self.accepted_target_indices
+            ),
+            "stage64_pending_target_identity_count": len(missing_target_indices),
+            "stage64_missing_target_indices": missing_target_indices,
+            "stage64_target_identity_match_count": identity_match_count,
+            "stage64_target_identity_mismatch_count": len(rows) - identity_match_count,
+            "stage64_target_identity_match_rate": (
+                round(identity_match_count / len(rows), 6) if rows else 0.0
+            ),
+            "stage64_reasoning_target_match_count": reasoning_target_match_count,
+            "stage64_reasoning_target_mismatch_count": (
+                len(rows) - reasoning_target_match_count
+            ),
+            "stage64_reasoning_target_match_rate": (
+                round(reasoning_target_match_count / len(rows), 6) if rows else 0.0
+            ),
+            "stage64_preferred_answer_type_match_count": preferred_answer_type_match_count,
+            "stage64_preferred_answer_type_match_rate": (
+                round(preferred_answer_type_match_count / len(rows), 6)
+                if rows
+                else 0.0
+            ),
+            "stage64_skipped_slot_count": self.skipped_slot_count,
+            "stage64_skipped_by_operation": dict(sorted(self.skipped_by_operation.items())),
+            "stage64_reallocated_slot_count": self.reallocated_slot_count,
+            "stage64_reallocated_by_operation": dict(
+                sorted(self.reallocated_by_operation.items())
+            ),
+            "stage64_operation_quota_accounting_pass": not excess,
+            "stage64_operation_quota_complete": bool(
+                len(rows) == len(self.canonical_targets)
+                and not missing_target_indices
+                and not shortfall
+                and not excess
+                and identity_match_count == len(rows)
+            ),
+        }
 
 
 def _stage64_ref_maps(
@@ -7776,7 +19362,7 @@ def _resolve_stage64_ref(ref: Any, alias_to_event_id: dict[str, str]) -> str:
 def _stage64_gold_from_api(
     qa_proposal: dict[str, Any],
     raw_id_to_label: dict[str, str],
-    option_text_to_label: dict[str, str],
+    option_text_to_labels: dict[str, list[str]],
     options_raw: list[Any],
 ) -> list[str]:
     raw_gold = qa_proposal.get("gold")
@@ -7797,11 +19383,20 @@ def _stage64_gold_from_api(
     gold: list[str] = []
     unmatched: list[str] = []
     for item in gold_items:
-        label = raw_id_to_label.get(item) or raw_id_to_label.get(item.upper()) or option_text_to_label.get(normalize_text(item))
-        if not label:
+        candidate_labels: set[str] = set()
+        raw_label = raw_id_to_label.get(item) or raw_id_to_label.get(item.upper())
+        if raw_label:
+            candidate_labels.add(raw_label)
+        candidate_labels.update(option_text_to_labels.get(stage64_quality.normalized_option_text(item), []))
+        if len(candidate_labels) > 1:
+            raise NativeGraphDialogueReject(
+                f"stage64 API QA gold text is ambiguous across option labels: "
+                f"{item!r} -> {sorted(candidate_labels)}"
+            )
+        if not candidate_labels:
             unmatched.append(item)
             continue
-        gold.append(label)
+        gold.append(next(iter(candidate_labels)))
     if unmatched:
         inferred = []
         for index, option in enumerate(options_raw):
@@ -7820,6 +19415,2774 @@ def _stage64_gold_from_api(
     return gold
 
 
+def _stage64_json_sha256(value: Any) -> str:
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _stage64_same_temporal_value(left: Any, right: Any) -> bool:
+    if isinstance(left, str) and isinstance(right, str):
+        return (
+            stage64_quality.normalized_option_text(left)
+            == stage64_quality.normalized_option_text(right)
+        )
+    return type(left) is type(right) and left == right
+
+
+def _stage64_temporal_value_surface(event: dict[str, Any]) -> str:
+    if "value" not in event:
+        return ""
+    value = event.get("value")
+    if value is None:
+        return ""
+    return re.sub(r"\s+", " ", str(value)).strip()
+
+
+def _stage64_unique_temporal_state_update_chain(
+    current_event_plan: dict[str, Any],
+    stage64_target: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Return one exact four-update answer chain, or fail closed."""
+
+    if not isinstance(current_event_plan, dict):
+        return None
+    operation = normalize_space(current_event_plan.get("operation"))
+    if operation and operation != "temporal_state_update":
+        return None
+    raw_events = current_event_plan.get("events")
+    if not isinstance(raw_events, list) or not all(
+        isinstance(event, dict) for event in raw_events
+    ):
+        return None
+    minimum_events, maximum_events = semantic_graph_v2.OPERATION_EVENT_COUNT_RANGES[
+        "temporal_state_update"
+    ]
+    if not minimum_events <= len(raw_events) <= maximum_events:
+        return None
+
+    durable_ids = [normalize_space(event.get("event_instance_id")) for event in raw_events]
+    if any(not event_id for event_id in durable_ids) or len(set(durable_ids)) != len(
+        durable_ids
+    ):
+        return None
+
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for event in raw_events:
+        key = (
+            stage64_quality.normalized_option_text(event.get("entity")),
+            stage64_quality.normalized_option_text(event.get("slot")),
+        )
+        if any(not item for item in key):
+            return None
+        grouped.setdefault(key, []).append(event)
+
+    reasoning_contract = _stage64_reasoning_contract_from_target(stage64_target)
+    anti_shortcut = bool(
+        reasoning_contract is not None
+        and reasoning_contract.get("forbid_max_time_shortcut")
+    )
+    strategy = (
+        str(reasoning_contract.get("hard_negative_strategy") or "")
+        if anti_shortcut
+        else ""
+    )
+    required_later_statuses = STAGE64_TEMPORAL_HARD_NEGATIVE_STATUSES.get(
+        strategy, frozenset()
+    )
+
+    candidates: list[dict[str, Any]] = []
+    for (normalized_entity, normalized_slot), group in grouped.items():
+        if len(group) != 4:
+            continue
+        time_indexes = [event.get("time_index") for event in group]
+        if (
+            not all(
+                isinstance(value, int) and not isinstance(value, bool)
+                for value in time_indexes
+            )
+            or len(set(time_indexes)) != 4
+        ):
+            continue
+        ordered = sorted(group, key=lambda event: int(event["time_index"]))
+        raw_entities = [normalize_space(event.get("entity")) for event in ordered]
+        raw_slots = [normalize_space(event.get("slot")) for event in ordered]
+        if (
+            any(not entity for entity in raw_entities)
+            or len(set(raw_entities)) != 1
+            or any(not slot for slot in raw_slots)
+            or len(set(raw_slots)) != 1
+        ):
+            continue
+        value_surfaces = [_stage64_temporal_value_surface(event) for event in ordered]
+        normalized_values = [
+            stage64_quality.normalized_option_text(value) for value in value_surfaces
+        ]
+        if any(not value for value in normalized_values) or len(set(normalized_values)) != 4:
+            continue
+        statuses = [normalize_space(event.get("status")).casefold() for event in ordered]
+        active_indexes = [
+            index for index, status in enumerate(statuses) if status in ACTIVE_STATUSES
+        ]
+        if anti_shortcut:
+            if (
+                not required_later_statuses
+                or len(active_indexes) != 1
+                or active_indexes[0] >= len(ordered) - 1
+                or any(
+                    status not in semantic_graph_v2.NON_ACTIVE_STATUSES
+                    for index, status in enumerate(statuses)
+                    if index != active_indexes[0]
+                )
+            ):
+                continue
+            current_index = active_indexes[0]
+            later_strategy_indexes = [
+                index
+                for index in range(current_index + 1, len(ordered))
+                if statuses[index] in required_later_statuses
+            ]
+            if not later_strategy_indexes:
+                continue
+        else:
+            if (
+                any(
+                    status not in semantic_graph_v2.NON_ACTIVE_STATUSES
+                    for status in statuses[:3]
+                )
+                or statuses[3] != "active"
+            ):
+                continue
+            current_index = 3
+            later_strategy_indexes = []
+        if any(
+            "previous_value" not in current
+            or not _stage64_same_temporal_value(
+                current.get("previous_value"), previous.get("value")
+            )
+            for previous, current in zip(ordered, ordered[1:])
+        ):
+            continue
+
+        event_instance_ids = [
+            normalize_space(event.get("event_instance_id")) for event in ordered
+        ]
+        current_event = ordered[current_index]
+        current_event_instance_id = event_instance_ids[current_index]
+        prior_event_instance_ids = event_instance_ids[:current_index]
+        later_event_instance_ids = event_instance_ids[current_index + 1 :]
+        distractor_event_instance_ids = [
+            event_id
+            for index, event_id in enumerate(event_instance_ids)
+            if index != current_index
+        ]
+        later_strategy_event_instance_ids = [
+            event_instance_ids[index] for index in later_strategy_indexes
+        ]
+        graph_contract: dict[str, Any] = {
+            "schema_version": STAGE64_TEMPORAL_STATE_UPDATE_GRAPH_CONTRACT_VERSION,
+            "operation": "temporal_state_update",
+            "entity": raw_entities[0],
+            "normalized_entity": normalized_entity,
+            "slot": raw_slots[0],
+            "normalized_slot": normalized_slot,
+            "event_instance_ids": event_instance_ids,
+            "prior_event_instance_ids": prior_event_instance_ids,
+            "later_event_instance_ids": later_event_instance_ids,
+            "distractor_event_instance_ids": distractor_event_instance_ids,
+            "later_strategy_event_instance_ids": later_strategy_event_instance_ids,
+            "current_event_instance_id": current_event_instance_id,
+            "current_array_index": current_index,
+            "max_time_event_instance_id": event_instance_ids[-1],
+            "forbid_max_time_shortcut": anti_shortcut,
+            "hard_negative_strategy": strategy or None,
+            "time_indexes": [int(event["time_index"]) for event in ordered],
+            "values": [copy.deepcopy(event.get("value")) for event in ordered],
+            "value_surfaces": value_surfaces,
+            "normalized_values": normalized_values,
+            "statuses": statuses,
+            "current_value": copy.deepcopy(current_event.get("value")),
+            "current_value_surface": value_surfaces[current_index],
+        }
+        graph_contract["contract_sha256"] = _stage64_json_sha256(graph_contract)
+        candidates.append(
+            {
+                "events": ordered,
+                "event_instance_ids": event_instance_ids,
+                "prior_event_instance_ids": prior_event_instance_ids,
+                "later_event_instance_ids": later_event_instance_ids,
+                "distractor_event_instance_ids": distractor_event_instance_ids,
+                "later_strategy_event_instance_ids": later_strategy_event_instance_ids,
+                "current_event_instance_id": current_event_instance_id,
+                "current_array_index": current_index,
+                "normalized_entity": normalized_entity,
+                "normalized_slot": normalized_slot,
+                "graph_contract": graph_contract,
+                "contract_sha256": graph_contract["contract_sha256"],
+            }
+        )
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def derive_unique_temporal_state_update_contract(
+    current_event_plan: dict[str, Any],
+    stage64_target: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Freeze the sole four-event temporal chain using durable event IDs."""
+
+    chain = _stage64_unique_temporal_state_update_chain(
+        current_event_plan,
+        stage64_target,
+    )
+    if chain is None or not isinstance(chain.get("graph_contract"), dict):
+        return None
+    return copy.deepcopy(chain["graph_contract"])
+
+
+def _stage64_temporal_resolved_refs_equal(
+    raw_refs: Any,
+    expected_event_instance_ids: list[str],
+    alias_to_event_id: dict[str, str],
+) -> bool:
+    refs = _stage64_str_list(raw_refs)
+    if len(refs) != len(expected_event_instance_ids):
+        return False
+    # Formal temporal QA must persist durable IDs.  Marker aliases are local
+    # dialogue-generation handles and can be paired with the wrong event, as
+    # happened in Run130; resolving an alias is not sufficient evidence here.
+    if set(refs) != set(expected_event_instance_ids) or len(set(refs)) != len(refs):
+        return False
+    resolved = [_resolve_stage64_ref(ref, alias_to_event_id) for ref in refs]
+    return (
+        all(resolved)
+        and len(set(resolved)) == len(resolved)
+        and set(resolved) == set(expected_event_instance_ids)
+    )
+
+
+def _stage64_temporal_option_source_event_id(
+    option: dict[str, Any],
+    alias_to_event_id: dict[str, str],
+) -> str:
+    source_ref = normalize_space(option.get("source_event_instance_id"))
+    anchor_ref = normalize_space(option.get("anchor_ref"))
+    if not source_ref or not anchor_ref:
+        return ""
+    resolved_source = _resolve_stage64_ref(source_ref, alias_to_event_id)
+    resolved_anchor = _resolve_stage64_ref(anchor_ref, alias_to_event_id)
+    if (
+        not resolved_source
+        or resolved_source != resolved_anchor
+        or source_ref != resolved_source
+        or anchor_ref != resolved_source
+    ):
+        return ""
+    for field in ("event_instance_id", "source_event_id"):
+        if field not in option:
+            continue
+        declared_ref = normalize_space(option.get(field))
+        if not declared_ref or _resolve_stage64_ref(
+            declared_ref, alias_to_event_id
+        ) != resolved_source or declared_ref != resolved_source:
+            return ""
+    return resolved_source
+
+
+def _stage64_temporal_proposal_matches_chain(
+    qa_proposal: dict[str, Any],
+    chain: dict[str, Any],
+    gold_label: str,
+    alias_to_event_id: dict[str, str],
+) -> bool:
+    options = qa_proposal.get("options")
+    if not isinstance(options, list) or len(options) != 4:
+        return False
+    event_by_id = {
+        normalize_space(event.get("event_instance_id")): event
+        for event in chain["events"]
+    }
+    non_gold_source_ids: list[str] = []
+    for label, option in zip(LETTERS[:4], options):
+        if not isinstance(option, dict):
+            return False
+        source_event_id = _stage64_temporal_option_source_event_id(
+            option, alias_to_event_id
+        )
+        source_event = event_by_id.get(source_event_id)
+        if source_event is None or (
+            stage64_quality.normalized_option_text(option.get("text"))
+            != stage64_quality.normalized_option_text(
+                _stage64_temporal_value_surface(source_event)
+            )
+        ):
+            return False
+        if label == gold_label:
+            if source_event_id != chain["current_event_instance_id"]:
+                return False
+        else:
+            non_gold_source_ids.append(source_event_id)
+    if (
+        len(set(non_gold_source_ids)) != 3
+        or set(non_gold_source_ids)
+        != set(chain["distractor_event_instance_ids"])
+    ):
+        return False
+
+    anchor_refs = qa_proposal.get("anchor_refs")
+    query_plan = qa_proposal.get("query_plan")
+    if not isinstance(anchor_refs, dict) or not isinstance(query_plan, dict):
+        return False
+    checks = (
+        (anchor_refs.get("support"), chain["event_instance_ids"]),
+        (anchor_refs.get("gold"), [chain["current_event_instance_id"]]),
+        (anchor_refs.get("distractors"), chain["distractor_event_instance_ids"]),
+        (query_plan.get("reasoning_anchor_path"), chain["event_instance_ids"]),
+        (query_plan.get("required_anchor_refs"), chain["event_instance_ids"]),
+        (query_plan.get("supporting_anchor_refs"), chain["event_instance_ids"]),
+        (query_plan.get("gold_anchor_refs"), [chain["current_event_instance_id"]]),
+        (
+            query_plan.get("distractor_anchor_refs"),
+            chain["distractor_event_instance_ids"],
+        ),
+    )
+    return all(
+        _stage64_temporal_resolved_refs_equal(raw_refs, expected, alias_to_event_id)
+        for raw_refs, expected in checks
+    )
+
+
+def normalize_stage64_temporal_state_update_options_and_references(
+    current_event_plan: dict[str, Any],
+    qa_proposal: dict[str, Any],
+    stage64_target: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Repair only proven temporal representation/reference drift.
+
+    Run121-shaped non-gold option/reference drift is repaired from one unique
+    four-event chain.  A Run122-shaped raw gold-label mismatch is reconciled
+    only when every independent graph, option, truth, answer-surface, and gold
+    reference signal uniquely identifies the same current option.
+    """
+
+    diagnostics: dict[str, Any] = {
+        "schema_version": (
+            STAGE64_TEMPORAL_STATE_UPDATE_OPTION_REFERENCE_NORMALIZER_VERSION
+        ),
+        "stage64_temporal_state_update_option_reference_normalizer_used": False,
+        "pre_qa_proposal_sha256": None,
+        "post_qa_proposal_sha256": None,
+        "temporal_chain_contract_sha256": None,
+        "temporal_chain_event_instance_ids": [],
+        "prior_event_instance_ids": [],
+        "current_event_instance_id": None,
+        "gold_label": None,
+        "gold_label_before": None,
+        "gold_label_after": None,
+        "gold_label_reconciled": False,
+        "gold_label_reconciliation_evidence_sha256": None,
+        "gold_label_reconciliation_evidence_fields": [],
+        "gold_answer_text_completed": False,
+        "gold_answer_text_completion_source": None,
+        "gold_answer_text_completion_evidence_sha256": None,
+        "gold_answer_text_completion_evidence_fields": [],
+        "rewritten_option_labels": [],
+        "changed_option_labels": [],
+        "synchronized_reference_fields": [],
+        "noop_reason": None,
+    }
+    if not isinstance(qa_proposal, dict):
+        diagnostics["noop_reason"] = "qa_proposal_not_object"
+        return qa_proposal, diagnostics
+    if normalize_space(qa_proposal.get("qa_operation")) != "temporal_state_update":
+        diagnostics["noop_reason"] = "not_temporal_state_update_operation"
+        return qa_proposal, diagnostics
+
+    reject_prefix = "stage64 API QA temporal_state_update option/reference normalizer"
+    chain = _stage64_unique_temporal_state_update_chain(
+        current_event_plan,
+        stage64_target,
+    )
+    if chain is None:
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} requires one unique validated four-event update chain"
+        )
+    try:
+        pre_sha256 = _stage64_json_sha256(qa_proposal)
+    except (TypeError, ValueError) as exc:
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} requires a JSON-serializable proposal"
+        ) from exc
+    diagnostics.update(
+        {
+            "pre_qa_proposal_sha256": pre_sha256,
+            "post_qa_proposal_sha256": pre_sha256,
+            "temporal_chain_contract_sha256": chain["contract_sha256"],
+            "temporal_chain_event_instance_ids": list(chain["event_instance_ids"]),
+            "prior_event_instance_ids": list(chain["prior_event_instance_ids"]),
+            "distractor_event_instance_ids": list(
+                chain["distractor_event_instance_ids"]
+            ),
+            "later_strategy_event_instance_ids": list(
+                chain["later_strategy_event_instance_ids"]
+            ),
+            "current_event_instance_id": chain["current_event_instance_id"],
+        }
+    )
+
+    question = normalize_space(qa_proposal.get("question"))
+    question_text = normalize_space(qa_proposal.get("question_text"))
+    if not question or (question_text and question_text != question):
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} refused missing or mismatched question text"
+        )
+    _assert_no_stage64_solver_visible_artifact("question", question)
+    normalized_question = stage64_quality.normalized_option_text(question)
+    padded_question = f" {normalized_question} "
+    if (
+        STAGE64_TEMPORAL_CURRENT_QUESTION_RE.search(question) is None
+        or f" {chain['normalized_entity']} " not in padded_question
+        or f" {chain['normalized_slot']} " not in padded_question
+    ):
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} refused generic or graph-mismatched question"
+        )
+    if normalize_space(qa_proposal.get("question_type")) != "single_choice" or normalize_space(
+        qa_proposal.get("answer_format")
+    ) != "single_choice_mcq":
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} requires a valid single-choice QA schema"
+        )
+    answer_type = normalize_space(qa_proposal.get("answer_type"))
+    if answer_type not in STAGE64_ANSWER_TYPES:
+        raise NativeGraphDialogueReject(f"{reject_prefix} requires a valid answer_type")
+
+    options = qa_proposal.get("options")
+    if (
+        not isinstance(options, list)
+        or len(options) != 4
+        or not all(isinstance(option, dict) for option in options)
+    ):
+        raise NativeGraphDialogueReject(f"{reject_prefix} requires four object options")
+    raw_gold = qa_proposal.get("gold")
+    if not isinstance(raw_gold, list) or len(raw_gold) != 1:
+        raise NativeGraphDialogueReject(f"{reject_prefix} requires one gold label")
+    raw_gold_label = normalize_space(raw_gold[0]).upper()
+    if len(raw_gold_label) != 1 or raw_gold_label not in set(LETTERS[:4]):
+        raise NativeGraphDialogueReject(f"{reject_prefix} requires one A-D gold label")
+    diagnostics["gold_label_before"] = raw_gold_label
+
+    alias_to_event_id, _unused_turn_map = _stage64_ref_maps(
+        current_event_plan, {"events": []}, {}
+    )
+    option_source_ids: dict[str, str] = {}
+    truth_value_by_label: dict[str, bool] = {}
+    is_gold_by_label: dict[str, bool] = {}
+    for index, option in enumerate(options):
+        label = LETTERS[index]
+        raw_id = normalize_space(option.get("id"))
+        raw_option_id = normalize_space(option.get("option_id"))
+        if raw_id.upper() != label or (raw_option_id and raw_option_id.upper() != label):
+            raise NativeGraphDialogueReject(f"{reject_prefix} refused invalid option labels")
+        if not normalize_space(option.get("text")):
+            raise NativeGraphDialogueReject(f"{reject_prefix} refused empty option text")
+        if normalize_space(option.get("answer_type")) != answer_type:
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} refused inconsistent option answer_type"
+            )
+        if normalize_space(option.get("anchor_kind")) != "event":
+            raise NativeGraphDialogueReject(f"{reject_prefix} refused invalid option anchor_kind")
+        source_event_id = _stage64_temporal_option_source_event_id(
+            option, alias_to_event_id
+        )
+        if not source_event_id:
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} refused unresolved or inconsistent option source"
+            )
+        option_source_ids[label] = source_event_id
+        if "truth_value" not in option or not isinstance(
+            option.get("truth_value"), bool
+        ):
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} requires boolean truth_value on every option"
+            )
+        for field, destination in (
+            ("truth_value", truth_value_by_label),
+            ("is_gold", is_gold_by_label),
+        ):
+            if field not in option:
+                continue
+            if not isinstance(option.get(field), bool):
+                raise NativeGraphDialogueReject(
+                    f"{reject_prefix} refused non-boolean {field} declaration"
+                )
+            destination[label] = option[field]
+
+    current_event = chain["events"][chain["current_array_index"]]
+    current_event_id = chain["current_event_instance_id"]
+    current_value = _stage64_temporal_value_surface(current_event)
+    current_value_key = stage64_quality.normalized_option_text(current_value)
+    current_option_labels = [
+        label
+        for label, option in zip(LETTERS[:4], options)
+        if option_source_ids.get(label) == current_event_id
+        and stage64_quality.normalized_option_text(option.get("text"))
+        == current_value_key
+    ]
+    if len(current_option_labels) != 1:
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} requires one unique current option text and source"
+        )
+    derived_gold_label = current_option_labels[0]
+    diagnostics["gold_label"] = derived_gold_label
+    diagnostics["gold_label_after"] = derived_gold_label
+
+    for field, declarations in (
+        ("truth_value", truth_value_by_label),
+        ("is_gold", is_gold_by_label),
+    ):
+        if any(
+            declared is not (label == derived_gold_label)
+            for label, declared in declarations.items()
+        ):
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} refused inconsistent {field} declaration"
+            )
+
+    query_plan = qa_proposal.get("query_plan")
+    anchor_refs = qa_proposal.get("anchor_refs")
+    if not isinstance(query_plan, dict) or not isinstance(anchor_refs, dict):
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} requires query_plan and anchor_refs objects"
+        )
+    if (
+        normalize_space(query_plan.get("answer_source")) != "graph_anchor"
+        or normalize_space(query_plan.get("qa_operation")) != "temporal_state_update"
+        or normalize_space(query_plan.get("qa_subtype"))
+        != normalize_space(qa_proposal.get("qa_subtype"))
+        or normalize_space(query_plan.get("answer_type")) != answer_type
+    ):
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} refused inconsistent query_plan schema"
+        )
+    for field, raw_refs in (
+        ("anchor_refs.gold", anchor_refs.get("gold")),
+        ("query_plan.gold_anchor_refs", query_plan.get("gold_anchor_refs")),
+        (
+            "query_plan.resolved_gold_event_instance_ids",
+            query_plan.get("resolved_gold_event_instance_ids"),
+        ),
+    ):
+        if raw_refs is None and field.endswith("resolved_gold_event_instance_ids"):
+            continue
+        if not _stage64_temporal_resolved_refs_equal(
+            raw_refs, [current_event_id], alias_to_event_id
+        ):
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} refused wrong declared gold source in {field}"
+            )
+
+    declared_gold_surfaces = {
+        "gold_answer_text": qa_proposal.get("gold_answer_text"),
+        "gold_answer": qa_proposal.get("gold_answer"),
+        "normalized_gold_answer": qa_proposal.get("normalized_gold_answer"),
+        "query_plan.gold_answer": query_plan.get("gold_answer"),
+        "query_plan.normalized_gold_answer": query_plan.get("normalized_gold_answer"),
+    }
+    gold_answer_text_missing = (
+        "gold_answer_text" not in qa_proposal
+        or qa_proposal.get("gold_answer_text") is None
+    )
+    wrong_declared_gold = {
+        field: value
+        for field, value in declared_gold_surfaces.items()
+        if value is not None
+        and stage64_quality.normalized_option_text(value) != current_value_key
+    }
+    if wrong_declared_gold:
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} refused wrong declared gold answer: "
+            f"fields={sorted(wrong_declared_gold)}"
+        )
+
+    gold_label = derived_gold_label
+    working_proposal = qa_proposal
+    gold_label_reconciled = raw_gold_label != derived_gold_label
+    true_labels = sorted(
+        label for label, value in truth_value_by_label.items() if value is True
+    )
+    gold_answer_text_completed = False
+    if gold_answer_text_missing:
+        if gold_label_reconciled:
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} refused simultaneous gold label reconciliation "
+                "and gold_answer_text completion"
+            )
+        required_completion_surfaces = (
+            "query_plan.gold_answer",
+            "query_plan.normalized_gold_answer",
+        )
+        missing_completion_surfaces = [
+            field
+            for field in required_completion_surfaces
+            if declared_gold_surfaces.get(field) is None
+        ]
+        if (
+            missing_completion_surfaces
+            or len(truth_value_by_label) != 4
+            or true_labels != [derived_gold_label]
+        ):
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} requires a declared gold_answer_text; "
+                "safe completion evidence was incomplete or conflicting"
+            )
+        current_option_text = normalize_space(
+            options[LETTERS.index(derived_gold_label)].get("text")
+        )
+        if (
+            not current_option_text
+            or stage64_quality.normalized_option_text(current_option_text)
+            != current_value_key
+        ):
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} refused gold_answer_text completion from a "
+                "non-current option surface"
+            )
+
+        completion_evidence_fields = [
+            "unique_validated_four_event_chain",
+            "raw_gold_label_matches_current_option",
+            "unique_current_option_text_and_source",
+            "all_four_truth_values_are_boolean",
+            "unique_true_option_matches_current",
+            "query_plan.gold_answer_matches_current",
+            "query_plan.normalized_gold_answer_matches_current",
+            "anchor_refs.gold_matches_current",
+            "query_plan.gold_anchor_refs_matches_current",
+        ]
+        if query_plan.get("resolved_gold_event_instance_ids") is not None:
+            completion_evidence_fields.append(
+                "query_plan.resolved_gold_event_instance_ids_matches_current"
+            )
+        completion_evidence_payload = {
+            "schema_version": (
+                STAGE64_TEMPORAL_STATE_UPDATE_OPTION_REFERENCE_NORMALIZER_VERSION
+            ),
+            "temporal_chain_contract_sha256": chain["contract_sha256"],
+            "current_event_instance_id": current_event_id,
+            "gold_label": derived_gold_label,
+            "completion_source": "unique_current_option.text",
+            "evidence_fields": completion_evidence_fields,
+        }
+        working_proposal = copy.deepcopy(qa_proposal)
+        working_proposal["gold_answer_text"] = current_option_text
+        gold_answer_text_completed = True
+        diagnostics.update(
+            {
+                "gold_answer_text_completed": True,
+                "gold_answer_text_completion_source": "unique_current_option.text",
+                "gold_answer_text_completion_evidence_sha256": _stage64_json_sha256(
+                    completion_evidence_payload
+                ),
+                "gold_answer_text_completion_evidence_fields": (
+                    completion_evidence_fields
+                ),
+            }
+        )
+
+    if gold_label_reconciled:
+        required_gold_surface_fields = (
+            "gold_answer_text",
+            "query_plan.gold_answer",
+            "query_plan.normalized_gold_answer",
+        )
+        missing_gold_surface_fields = [
+            field
+            for field in required_gold_surface_fields
+            if declared_gold_surfaces.get(field) is None
+        ]
+        if (
+            missing_gold_surface_fields
+            or len(truth_value_by_label) != 4
+            or true_labels != [derived_gold_label]
+        ):
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} refused wrong gold option text or current source; "
+                "raw gold-label reconciliation evidence was incomplete or conflicting"
+            )
+
+        evidence_fields = [
+            "unique_validated_four_event_chain",
+            "unique_current_option_text_and_source",
+            "all_four_truth_values_are_boolean",
+            "unique_true_option_matches_current",
+            "gold_answer_text_matches_current",
+            "query_plan.gold_answer_matches_current",
+            "query_plan.normalized_gold_answer_matches_current",
+            "anchor_refs.gold_matches_current",
+            "query_plan.gold_anchor_refs_matches_current",
+        ]
+        if query_plan.get("resolved_gold_event_instance_ids") is not None:
+            evidence_fields.append(
+                "query_plan.resolved_gold_event_instance_ids_matches_current"
+            )
+        evidence_payload = {
+            "schema_version": (
+                STAGE64_TEMPORAL_STATE_UPDATE_OPTION_REFERENCE_NORMALIZER_VERSION
+            ),
+            "temporal_chain_contract_sha256": chain["contract_sha256"],
+            "current_event_instance_id": current_event_id,
+            "gold_label_before": raw_gold_label,
+            "gold_label_after": derived_gold_label,
+            "true_option_labels": true_labels,
+            "evidence_fields": evidence_fields,
+        }
+        working_proposal = copy.deepcopy(qa_proposal)
+        working_proposal["gold"] = [derived_gold_label]
+        diagnostics.update(
+            {
+                "gold_label_reconciled": True,
+                "gold_label_reconciliation_evidence_sha256": _stage64_json_sha256(
+                    evidence_payload
+                ),
+                "gold_label_reconciliation_evidence_fields": evidence_fields,
+            }
+        )
+
+    if _stage64_temporal_proposal_matches_chain(
+        working_proposal, chain, gold_label, alias_to_event_id
+    ):
+        if gold_label_reconciled or gold_answer_text_completed:
+            diagnostics.update(
+                {
+                    "stage64_temporal_state_update_option_reference_normalizer_used": True,
+                    "post_qa_proposal_sha256": _stage64_json_sha256(
+                        working_proposal
+                    ),
+                    "noop_reason": None,
+                }
+            )
+            return working_proposal, diagnostics
+        diagnostics["noop_reason"] = "temporal_options_and_references_already_correct"
+        return qa_proposal, diagnostics
+
+    normalized = copy.deepcopy(working_proposal)
+    distractor_events = [
+        event
+        for index, event in enumerate(chain["events"])
+        if index != chain["current_array_index"]
+    ]
+    rewritten_labels: list[str] = []
+    changed_labels: list[str] = []
+    distractor_cursor = 0
+    for index, option in enumerate(normalized["options"]):
+        label = LETTERS[index]
+        if label == gold_label:
+            continue
+        distractor_event = distractor_events[distractor_cursor]
+        distractor_cursor += 1
+        distractor_event_id = normalize_space(
+            distractor_event.get("event_instance_id")
+        )
+        before = copy.deepcopy(option)
+        option["text"] = _stage64_temporal_value_surface(distractor_event)
+        option["source_event_instance_id"] = distractor_event_id
+        option["anchor_ref"] = distractor_event_id
+        for field in ("event_instance_id", "source_event_id"):
+            if field in option:
+                option[field] = distractor_event_id
+        rewritten_labels.append(label)
+        if option != before:
+            changed_labels.append(label)
+
+    chain_ids = list(chain["event_instance_ids"])
+    distractor_ids = list(chain["distractor_event_instance_ids"])
+    gold_ids = [current_event_id]
+    normalized["anchor_refs"]["support"] = chain_ids
+    normalized["anchor_refs"]["gold"] = gold_ids
+    normalized["anchor_refs"]["distractors"] = distractor_ids
+    normalized["query_plan"]["reasoning_anchor_path"] = chain_ids
+    normalized["query_plan"]["required_anchor_refs"] = chain_ids
+    normalized["query_plan"]["supporting_anchor_refs"] = chain_ids
+    normalized["query_plan"]["gold_anchor_refs"] = gold_ids
+    normalized["query_plan"]["distractor_anchor_refs"] = distractor_ids
+    synchronized_reference_fields = [
+        "anchor_refs.support",
+        "anchor_refs.gold",
+        "anchor_refs.distractors",
+        "query_plan.reasoning_anchor_path",
+        "query_plan.required_anchor_refs",
+        "query_plan.supporting_anchor_refs",
+        "query_plan.gold_anchor_refs",
+        "query_plan.distractor_anchor_refs",
+    ]
+    if not _stage64_temporal_proposal_matches_chain(
+        normalized, chain, gold_label, alias_to_event_id
+    ):
+        raise NativeGraphDialogueReject(f"{reject_prefix} postcondition failed")
+
+    diagnostics.update(
+        {
+            "stage64_temporal_state_update_option_reference_normalizer_used": True,
+            "post_qa_proposal_sha256": _stage64_json_sha256(normalized),
+            "rewritten_option_labels": rewritten_labels,
+            "changed_option_labels": changed_labels,
+            "synchronized_reference_fields": synchronized_reference_fields,
+            "noop_reason": None,
+        }
+    )
+    return normalized, diagnostics
+
+
+def _stage64_unique_validated_count_set(
+    current_event_plan: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Return the one complete 6-8 member count set, or fail closed.
+
+    Formal count graphs are defined over the complete operation event list.  A
+    subset is not enough to derive an answer: every event must be a distinct
+    member of the same set/entity/slot dimension, with at least two included
+    and two excluded members.
+    """
+
+    raw_events = current_event_plan.get("events") if isinstance(current_event_plan, dict) else None
+    if not isinstance(raw_events, list) or not all(isinstance(event, dict) for event in raw_events):
+        return None
+    minimum_events, maximum_events = semantic_graph_v2.OPERATION_EVENT_COUNT_RANGES["count"]
+    if not minimum_events <= len(raw_events) <= maximum_events:
+        return None
+
+    dimensions: list[tuple[str, str, str]] = []
+    raw_set_ids: list[str] = []
+    event_ids: list[str] = []
+    member_values: list[str] = []
+    included_event_ids: list[str] = []
+    excluded_event_ids: list[str] = []
+    for event in raw_events:
+        membership = event.get("set_membership")
+        if (
+            not isinstance(membership, dict)
+            or not isinstance(membership.get("included"), bool)
+        ):
+            return None
+        raw_set_id = normalize_space(membership.get("set_id"))
+        event_id = normalize_space(
+            event.get("event_instance_id") or event.get("event_id") or event.get("node_id")
+        )
+        dimension = (
+            normalize_text(raw_set_id),
+            normalize_text(event.get("entity")),
+            normalize_text(event.get("slot")),
+        )
+        member_value = stage64_quality.normalized_option_text(event.get("value"))
+        if not raw_set_id or not event_id or any(not value for value in dimension) or not member_value:
+            return None
+        raw_set_ids.append(raw_set_id)
+        event_ids.append(event_id)
+        member_values.append(member_value)
+        dimensions.append(dimension)
+        if membership["included"]:
+            included_event_ids.append(event_id)
+        else:
+            excluded_event_ids.append(event_id)
+
+    if (
+        len(set(dimensions)) != 1
+        or len(set(raw_set_ids)) != 1
+        or len(set(event_ids)) != len(event_ids)
+        or len(set(member_values)) != len(member_values)
+        or len(included_event_ids) < 2
+        or len(excluded_event_ids) < 2
+    ):
+        return None
+    dimension = dimensions[0]
+    return {
+        "set_id": raw_set_ids[0],
+        "normalized_set_id": dimension[0],
+        "entity": dimension[1],
+        "slot": dimension[2],
+        "event_instance_ids": event_ids,
+        "included_event_instance_ids": included_event_ids,
+        "excluded_event_instance_ids": excluded_event_ids,
+        "member_count": len(event_ids),
+        "included_count": len(included_event_ids),
+        "excluded_count": len(excluded_event_ids),
+    }
+
+
+def _stage64_strict_nonnegative_integer(value: Any) -> int | None:
+    text = normalize_space(value)
+    if not re.fullmatch(r"\d+", text):
+        return None
+    return int(text)
+
+
+def _stage64_unique_raw_gold_label(
+    qa_proposal: dict[str, Any],
+    options: list[dict[str, Any]],
+) -> str:
+    raw_gold = qa_proposal.get("gold")
+    if not isinstance(raw_gold, list) or len(raw_gold) != 1:
+        raise NativeGraphDialogueReject(
+            "stage64 API QA count Number duplicate option normalizer requires exactly one raw gold label"
+        )
+    gold_item = normalize_space(raw_gold[0])
+    if not gold_item:
+        raise NativeGraphDialogueReject(
+            "stage64 API QA count Number duplicate option normalizer got an empty gold label"
+        )
+    matching_labels: set[str] = set()
+    for index, option in enumerate(options):
+        label = LETTERS[index]
+        raw_id = normalize_space(option.get("id") or option.get("option_id") or label)
+        if gold_item.upper() == label or gold_item.casefold() == raw_id.casefold():
+            matching_labels.add(label)
+    if len(matching_labels) != 1:
+        raise NativeGraphDialogueReject(
+            "stage64 API QA count Number duplicate option normalizer could not resolve one unique gold label"
+        )
+    return next(iter(matching_labels))
+
+
+def normalize_stage64_count_number_duplicate_options(
+    current_event_plan: dict[str, Any],
+    qa_proposal: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Repair duplicate numeric distractor surfaces without changing QA semantics.
+
+    This is deliberately narrower than API QA repair.  It never chooses or
+    changes the gold answer, question, references, labels, or option metadata.
+    The graph-derived included count and every API-declared gold value must
+    already agree before any non-gold option text is rewritten.
+    """
+
+    diagnostics: dict[str, Any] = {
+        "schema_version": STAGE64_COUNT_NUMBER_DUPLICATE_OPTION_NORMALIZER_VERSION,
+        "stage64_count_number_duplicate_option_normalizer_used": False,
+        "pre_qa_proposal_sha256": None,
+        "post_qa_proposal_sha256": None,
+        "rewritten_option_labels": [],
+        "derived_included_count": None,
+        "derived_set_id": None,
+        "derived_set_event_instance_ids": [],
+        "derived_included_event_instance_ids": [],
+        "derived_excluded_event_instance_ids": [],
+        "gold_label": None,
+        "noop_reason": None,
+    }
+    if not isinstance(qa_proposal, dict):
+        diagnostics["noop_reason"] = "qa_proposal_not_object"
+        return qa_proposal, diagnostics
+    if normalize_space(qa_proposal.get("qa_operation")) != "count":
+        diagnostics["noop_reason"] = "not_count_operation"
+        return qa_proposal, diagnostics
+    if normalize_space(qa_proposal.get("answer_type")) != "Number":
+        diagnostics["noop_reason"] = "not_number_answer_type"
+        return qa_proposal, diagnostics
+    options_raw = qa_proposal.get("options")
+    if (
+        not isinstance(options_raw, list)
+        or len(options_raw) != 4
+        or not all(isinstance(option, dict) for option in options_raw)
+    ):
+        diagnostics["noop_reason"] = "not_four_object_options"
+        return qa_proposal, diagnostics
+    option_texts = [stage64_quality.normalized_option_text(option.get("text")) for option in options_raw]
+    if any(not text for text in option_texts):
+        diagnostics["noop_reason"] = "empty_normalized_option_text"
+        return qa_proposal, diagnostics
+    if len(option_texts) == len(set(option_texts)):
+        diagnostics["noop_reason"] = "option_texts_already_unique"
+        return qa_proposal, diagnostics
+
+    try:
+        pre_sha256 = _stage64_json_sha256(qa_proposal)
+    except (TypeError, ValueError) as exc:
+        raise NativeGraphDialogueReject(
+            "stage64 API QA count Number duplicate option normalizer requires a JSON-serializable proposal"
+        ) from exc
+    diagnostics["pre_qa_proposal_sha256"] = pre_sha256
+    diagnostics["post_qa_proposal_sha256"] = pre_sha256
+
+    count_set = _stage64_unique_validated_count_set(current_event_plan)
+    if count_set is None:
+        raise NativeGraphDialogueReject(
+            "stage64 API QA count Number duplicate option normalizer requires one complete validated count set"
+        )
+    derived_count = int(count_set["included_count"])
+    gold_label = _stage64_unique_raw_gold_label(qa_proposal, options_raw)
+    gold_index = LETTERS.index(gold_label)
+    gold_option_value = _stage64_strict_nonnegative_integer(options_raw[gold_index].get("text"))
+    if gold_option_value != derived_count:
+        raise NativeGraphDialogueReject(
+            "stage64 API QA count Number duplicate option normalizer refused wrong gold option: "
+            f"label={gold_label} value={gold_option_value!r} derived_included_count={derived_count}"
+        )
+
+    query_plan = qa_proposal.get("query_plan") if isinstance(qa_proposal.get("query_plan"), dict) else {}
+    declared_gold_answers = {
+        "gold_answer_text": qa_proposal.get("gold_answer_text"),
+        "query_plan.gold_answer": query_plan.get("gold_answer"),
+        "query_plan.normalized_gold_answer": query_plan.get("normalized_gold_answer"),
+    }
+    present_gold_answers = {
+        field: value for field, value in declared_gold_answers.items() if value is not None
+    }
+    if not present_gold_answers:
+        raise NativeGraphDialogueReject(
+            "stage64 API QA count Number duplicate option normalizer requires a declared gold answer"
+        )
+    wrong_declared = {
+        field: value
+        for field, value in present_gold_answers.items()
+        if _stage64_strict_nonnegative_integer(value) != derived_count
+    }
+    if wrong_declared:
+        raise NativeGraphDialogueReject(
+            "stage64 API QA count Number duplicate option normalizer refused wrong declared gold answer: "
+            f"{wrong_declared!r} derived_included_count={derived_count}"
+        )
+
+    # A validated set always has at least two excluded members, so count+2 is
+    # still a possible count within the set size.  These three deterministic
+    # distractors bracket the gold and remain within the downstream <=4 span.
+    distractor_values = [derived_count - 1, derived_count + 1, derived_count + 2]
+    if (
+        any(value < 0 or value > int(count_set["member_count"]) for value in distractor_values)
+        or len(set(distractor_values + [derived_count])) != 4
+    ):
+        raise NativeGraphDialogueReject(
+            "stage64 API QA count Number duplicate option normalizer could not construct nearby nonnegative distractors"
+        )
+
+    normalized = copy.deepcopy(qa_proposal)
+    rewritten_labels: list[str] = []
+    distractor_cursor = 0
+    for index, option in enumerate(normalized["options"]):
+        label = LETTERS[index]
+        if label == gold_label:
+            continue
+        replacement = str(distractor_values[distractor_cursor])
+        distractor_cursor += 1
+        if option.get("text") != replacement:
+            rewritten_labels.append(label)
+        option["text"] = replacement
+
+    post_option_texts = [
+        stage64_quality.normalized_option_text(option.get("text"))
+        for option in normalized["options"]
+    ]
+    post_option_values = [
+        _stage64_strict_nonnegative_integer(option.get("text"))
+        for option in normalized["options"]
+    ]
+    if (
+        len(set(post_option_texts)) != 4
+        or any(value is None for value in post_option_values)
+        or not (min(post_option_values) < derived_count < max(post_option_values))
+        or max(post_option_values) - min(post_option_values) > 4
+    ):
+        raise NativeGraphDialogueReject(
+            "stage64 API QA count Number duplicate option normalizer postcondition failed"
+        )
+
+    diagnostics.update(
+        {
+            "stage64_count_number_duplicate_option_normalizer_used": True,
+            "post_qa_proposal_sha256": _stage64_json_sha256(normalized),
+            "rewritten_option_labels": rewritten_labels,
+            "derived_included_count": derived_count,
+            "derived_set_id": count_set["set_id"],
+            "derived_set_event_instance_ids": list(count_set["event_instance_ids"]),
+            "derived_included_event_instance_ids": list(
+                count_set["included_event_instance_ids"]
+            ),
+            "derived_excluded_event_instance_ids": list(
+                count_set["excluded_event_instance_ids"]
+            ),
+            "gold_label": gold_label,
+            "noop_reason": None,
+        }
+    )
+    return normalized, diagnostics
+
+
+def _stage64_unique_comparison_raw_gold_label(
+    qa_proposal: dict[str, Any],
+    options: list[dict[str, Any]],
+) -> str:
+    raw_gold = qa_proposal.get("gold")
+    if not isinstance(raw_gold, list) or len(raw_gold) != 1:
+        raise NativeGraphDialogueReject(
+            "stage64 API QA comparison Number duplicate option normalizer requires exactly one raw gold label"
+        )
+    gold_item = normalize_space(raw_gold[0])
+    if not gold_item:
+        raise NativeGraphDialogueReject(
+            "stage64 API QA comparison Number duplicate option normalizer got an empty gold label"
+        )
+    matching_labels: set[str] = set()
+    for index, option in enumerate(options):
+        label = LETTERS[index]
+        raw_id = normalize_space(option.get("id") or option.get("option_id") or label)
+        if gold_item.upper() == label or gold_item.casefold() == raw_id.casefold():
+            matching_labels.add(label)
+    if len(matching_labels) != 1:
+        raise NativeGraphDialogueReject(
+            "stage64 API QA comparison Number duplicate option normalizer could not resolve one unique gold label"
+        )
+    return next(iter(matching_labels))
+
+
+def normalize_stage64_comparison_number_duplicate_options(
+    current_event_plan: dict[str, Any],
+    qa_proposal: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Repair only duplicate numeric distractor surfaces for a valid comparison gold."""
+
+    diagnostics: dict[str, Any] = {
+        "schema_version": STAGE64_COMPARISON_NUMBER_DUPLICATE_OPTION_NORMALIZER_VERSION,
+        "stage64_comparison_number_duplicate_option_normalizer_used": False,
+        "pre_qa_proposal_sha256": None,
+        "post_qa_proposal_sha256": None,
+        "comparison_graph_contract_sha256": None,
+        "comparison_pair_event_instance_ids": [],
+        "expected_absolute_difference": None,
+        "rewritten_option_labels": [],
+        "gold_label": None,
+        "noop_reason": None,
+    }
+    if not isinstance(qa_proposal, dict):
+        diagnostics["noop_reason"] = "qa_proposal_not_object"
+        return qa_proposal, diagnostics
+    if normalize_space(qa_proposal.get("qa_operation")) != "comparison":
+        diagnostics["noop_reason"] = "not_comparison_operation"
+        return qa_proposal, diagnostics
+    if normalize_space(qa_proposal.get("answer_type")) != "Number":
+        diagnostics["noop_reason"] = "not_number_answer_type"
+        return qa_proposal, diagnostics
+    options_raw = qa_proposal.get("options")
+    if (
+        not isinstance(options_raw, list)
+        or len(options_raw) != 4
+        or not all(isinstance(option, dict) for option in options_raw)
+    ):
+        diagnostics["noop_reason"] = "not_four_object_options"
+        return qa_proposal, diagnostics
+    option_texts = [
+        stage64_quality.normalized_option_text(option.get("text"))
+        for option in options_raw
+    ]
+    if any(not text for text in option_texts):
+        diagnostics["noop_reason"] = "empty_normalized_option_text"
+        return qa_proposal, diagnostics
+    if len(option_texts) == len(set(option_texts)):
+        diagnostics["noop_reason"] = "option_texts_already_unique"
+        return qa_proposal, diagnostics
+
+    try:
+        pre_sha256 = _stage64_json_sha256(qa_proposal)
+    except (TypeError, ValueError) as exc:
+        raise NativeGraphDialogueReject(
+            "stage64 API QA comparison Number duplicate option normalizer requires a JSON-serializable proposal"
+        ) from exc
+    diagnostics["pre_qa_proposal_sha256"] = pre_sha256
+    diagnostics["post_qa_proposal_sha256"] = pre_sha256
+
+    comparison_contract = derive_unique_comparison_contract(current_event_plan)
+    if comparison_contract is None:
+        raise NativeGraphDialogueReject(
+            "stage64 API QA comparison Number duplicate option normalizer requires one unique validated comparison pair"
+        )
+    expected_difference = int(comparison_contract["expected_absolute_difference"])
+    gold_label = _stage64_unique_comparison_raw_gold_label(qa_proposal, options_raw)
+    gold_index = LETTERS.index(gold_label)
+    gold_option_value = _stage64_strict_nonnegative_integer(
+        options_raw[gold_index].get("text")
+    )
+    if gold_option_value != expected_difference:
+        raise NativeGraphDialogueReject(
+            "stage64 API QA comparison Number duplicate option normalizer refused wrong gold option: "
+            f"label={gold_label} value={gold_option_value!r} "
+            f"expected_absolute_difference={expected_difference}"
+        )
+
+    query_plan = (
+        qa_proposal.get("query_plan")
+        if isinstance(qa_proposal.get("query_plan"), dict)
+        else {}
+    )
+    declared_gold_answers = {
+        "gold_answer_text": qa_proposal.get("gold_answer_text"),
+        "gold_answer": qa_proposal.get("gold_answer"),
+        "normalized_gold_answer": qa_proposal.get("normalized_gold_answer"),
+        "query_plan.gold_answer": query_plan.get("gold_answer"),
+        "query_plan.normalized_gold_answer": query_plan.get("normalized_gold_answer"),
+    }
+    wrong_declared = {
+        field: value
+        for field, value in declared_gold_answers.items()
+        if value is not None
+        and _stage64_strict_nonnegative_integer(value) != expected_difference
+    }
+    if wrong_declared:
+        raise NativeGraphDialogueReject(
+            "stage64 API QA comparison Number duplicate option normalizer refused wrong declared gold answer: "
+            f"{wrong_declared!r} expected_absolute_difference={expected_difference}"
+        )
+
+    distractor_values = [
+        expected_difference - 1,
+        expected_difference + 1,
+        expected_difference + 2,
+    ]
+    if (
+        any(value < 0 for value in distractor_values)
+        or len(set(distractor_values + [expected_difference])) != 4
+    ):
+        raise NativeGraphDialogueReject(
+            "stage64 API QA comparison Number duplicate option normalizer could not construct nearby nonnegative distractors"
+        )
+
+    normalized = copy.deepcopy(qa_proposal)
+    rewritten_labels: list[str] = []
+    distractor_cursor = 0
+    for index, option in enumerate(normalized["options"]):
+        label = LETTERS[index]
+        if label == gold_label:
+            continue
+        replacement = str(distractor_values[distractor_cursor])
+        distractor_cursor += 1
+        if option.get("text") != replacement:
+            rewritten_labels.append(label)
+        option["text"] = replacement
+
+    post_option_values = [
+        _stage64_strict_nonnegative_integer(option.get("text"))
+        for option in normalized["options"]
+    ]
+    if (
+        any(value is None for value in post_option_values)
+        or len(set(post_option_values)) != 4
+        or not (
+            min(post_option_values) < expected_difference < max(post_option_values)
+        )
+        or max(post_option_values) - min(post_option_values) > 4
+    ):
+        raise NativeGraphDialogueReject(
+            "stage64 API QA comparison Number duplicate option normalizer postcondition failed"
+        )
+
+    diagnostics.update(
+        {
+            "stage64_comparison_number_duplicate_option_normalizer_used": True,
+            "post_qa_proposal_sha256": _stage64_json_sha256(normalized),
+            "comparison_graph_contract_sha256": comparison_contract["contract_sha256"],
+            "comparison_pair_event_instance_ids": list(
+                comparison_contract["primary_event_instance_ids"]
+            ),
+            "expected_absolute_difference": expected_difference,
+            "rewritten_option_labels": rewritten_labels,
+            "gold_label": gold_label,
+            "noop_reason": None,
+        }
+    )
+    return normalized, diagnostics
+
+
+def _stage64_count_reference_completion(
+    current_event_plan: dict[str, Any],
+    resolved_ref_groups: dict[str, list[str]],
+) -> dict[str, Any] | None:
+    """Return the only graph-derived count set compatible with the API refs.
+
+    This may complete evidence metadata only. Question text, options, and gold
+    remain untouched and are independently checked against the derived count.
+    """
+
+    count_set = _stage64_unique_validated_count_set(current_event_plan)
+    if count_set is None:
+        return None
+    cited_ids = {
+        event_id
+        for values in resolved_ref_groups.values()
+        for event_id in values
+    }
+    candidate_ids = set(count_set["event_instance_ids"])
+    # Existing API references are semantic claims, not optional hints.
+    if cited_ids and not cited_ids.issubset(candidate_ids):
+        return None
+    return {
+        "set_id": count_set["normalized_set_id"],
+        "entity": count_set["entity"],
+        "slot": count_set["slot"],
+        "event_instance_ids": list(count_set["event_instance_ids"]),
+        "included_count": count_set["included_count"],
+    }
+
+
+def _stage64_query_plan_completion_exact_refs(
+    raw_refs: Any,
+    expected_event_instance_ids: list[str],
+    alias_to_event_id: dict[str, str],
+    *,
+    ordered: bool = False,
+) -> bool:
+    """Require one explicit, duplicate-free reference group.
+
+    Most anchor groups are mathematical sets.  A temporal reasoning path is a
+    sequence, however, so callers can require exact resolved order rather than
+    only exact membership.
+    """
+
+    if not isinstance(raw_refs, list):
+        return False
+    refs = [normalize_space(ref) for ref in raw_refs]
+    if any(not ref for ref in refs) or len(refs) != len(expected_event_instance_ids):
+        return False
+    resolved = [_resolve_stage64_ref(ref, alias_to_event_id) for ref in refs]
+    if not all(resolved) or len(set(resolved)) != len(resolved):
+        return False
+    if ordered:
+        return resolved == expected_event_instance_ids
+    return set(resolved) == set(expected_event_instance_ids)
+
+
+def _stage64_query_plan_completion_option_source(
+    option: dict[str, Any],
+    alias_to_event_id: dict[str, str],
+) -> str:
+    """Resolve an option only when all explicitly declared source aliases agree."""
+
+    source_ref = normalize_space(option.get("source_event_instance_id"))
+    anchor_ref = normalize_space(option.get("anchor_ref"))
+    if not source_ref or not anchor_ref:
+        return ""
+    source_event_id = _resolve_stage64_ref(source_ref, alias_to_event_id)
+    anchor_event_id = _resolve_stage64_ref(anchor_ref, alias_to_event_id)
+    if not source_event_id or source_event_id != anchor_event_id:
+        return ""
+    for field in ("event_instance_id", "source_event_id"):
+        if field not in option:
+            continue
+        declared_ref = normalize_space(option.get(field))
+        if (
+            not declared_ref
+            or _resolve_stage64_ref(declared_ref, alias_to_event_id)
+            != source_event_id
+        ):
+            return ""
+    return source_event_id
+
+
+def _stage64_query_plan_completion_scalar_matches(
+    field: str,
+    actual: Any,
+    expected: Any,
+) -> bool:
+    """Compare explicit scalar claims without rewriting harmless surface form."""
+
+    if field == "normalized_gold_answer":
+        return (
+            isinstance(actual, str)
+            and isinstance(expected, str)
+            and normalize_text(actual) == normalize_text(expected)
+        )
+    return type(actual) is type(expected) and actual == expected
+
+
+def normalize_stage64_missing_query_plan_from_unique_contract(
+    current_event_plan: dict[str, Any],
+    graph_update: dict[str, Any],
+    qa_proposal: dict[str, Any],
+    stage64_target: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Complete only omitted query-plan fields from a unique graph contract.
+
+    The API-authored question, options, gold declarations, and anchor groups are
+    independent evidence.  They must already agree with the graph exactly.
+    Existing query-plan values are immutable semantic claims: a missing value
+    may be added, but an explicit conflict is rejected rather than overwritten.
+    """
+
+    diagnostics: dict[str, Any] = {
+        "schema_version": STAGE64_QUERY_PLAN_COMPLETION_NORMALIZER_VERSION,
+        "stage64_query_plan_completion_normalizer_used": False,
+        "operation": None,
+        "contract_schema_version": None,
+        "contract_sha256": None,
+        "pre_qa_proposal_sha256": None,
+        "post_qa_proposal_sha256": None,
+        "query_plan_sha256": None,
+        "completed_fields": [],
+        "completed_top_level_fields": [],
+        "completed_query_plan_fields": [],
+        "validated_query_plan_fields": [],
+        "validated_fields": [],
+        "expected_reference_groups": {},
+        "gold_label": None,
+        "gold_answer": None,
+        "completion_evidence": {},
+        "completion_evidence_sha256": None,
+        "only_query_plan_added": False,
+        "only_missing_query_plan_fields_added": False,
+        "query_plan_was_present": False,
+        "noop_reason": None,
+    }
+    reject_prefix = "stage64 API QA query_plan completion normalizer"
+    if not isinstance(qa_proposal, dict):
+        raise NativeGraphDialogueReject(f"{reject_prefix} requires qa_proposal object")
+    original_qa_proposal = qa_proposal
+    try:
+        pre_sha256 = _stage64_json_sha256(qa_proposal)
+    except (TypeError, ValueError) as exc:
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} requires a JSON-serializable proposal"
+        ) from exc
+    diagnostics["pre_qa_proposal_sha256"] = pre_sha256
+    diagnostics["post_qa_proposal_sha256"] = pre_sha256
+    stage64_reasoning_contract = _stage64_reasoning_contract_from_target(
+        stage64_target
+    )
+
+    required_query_plan_fields = {
+        "answer_source",
+        "qa_operation",
+        "qa_subtype",
+        "answer_type",
+        "reasoning_anchor_path",
+        "required_anchor_refs",
+        "supporting_anchor_refs",
+        "gold_anchor_refs",
+        "distractor_anchor_refs",
+        "gold_answer",
+        "normalized_gold_answer",
+    }
+    if stage64_reasoning_contract is not None:
+        required_query_plan_fields.update(STAGE64_REASONING_TARGET_FIELDS)
+    query_plan_was_present = "query_plan" in qa_proposal
+    diagnostics["query_plan_was_present"] = query_plan_was_present
+    if query_plan_was_present and not isinstance(qa_proposal.get("query_plan"), dict):
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} refuses explicit non-object query_plan"
+        )
+    existing_query_plan = (
+        qa_proposal["query_plan"] if query_plan_was_present else {}
+    )
+    missing_query_plan_fields = sorted(
+        required_query_plan_fields - set(existing_query_plan)
+    )
+    explicit_resolved_fields = sorted(
+        field
+        for field in existing_query_plan
+        if field.startswith("resolved_")
+    )
+    if query_plan_was_present and not missing_query_plan_fields and not explicit_resolved_fields:
+        query_operation = normalize_space(existing_query_plan.get("qa_operation"))
+        operation_evidence = [
+            normalize_space((stage64_target or {}).get("qa_operation")),
+            normalize_space(current_event_plan.get("operation")),
+            normalize_space(graph_update.get("operation"))
+            if "operation" in graph_update
+            else "",
+            normalize_space(qa_proposal.get("qa_operation")),
+        ]
+        if query_operation and any(
+            value and value != query_operation for value in operation_evidence
+        ):
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} refuses conflicting explicit query_plan.qa_operation"
+            )
+        target_operation_hint = normalize_space(
+            (stage64_target or {}).get("qa_operation")
+        )
+        canonical_subtype = normalize_space(
+            STAGE64_CANONICAL_QA_SUBTYPES.get(query_operation)
+        )
+        expected_subtype = (
+            canonical_subtype
+            if target_operation_hint or stage64_reasoning_contract is not None
+            else normalize_space(qa_proposal.get("qa_subtype"))
+        )
+        scalar_expectations = {
+            "answer_source": "graph_anchor",
+        }
+        if expected_subtype:
+            scalar_expectations["qa_subtype"] = expected_subtype
+        top_answer_type = normalize_space(qa_proposal.get("answer_type"))
+        if top_answer_type:
+            scalar_expectations["answer_type"] = top_answer_type
+        top_gold_answer = qa_proposal.get("gold_answer_text")
+        if isinstance(top_gold_answer, str):
+            scalar_expectations.update(
+                {
+                    "gold_answer": top_gold_answer,
+                    "normalized_gold_answer": normalize_text(top_gold_answer),
+                }
+            )
+        if stage64_reasoning_contract is not None:
+            scalar_expectations.update(
+                {
+                    field: copy.deepcopy(stage64_reasoning_contract[field])
+                    for field in STAGE64_REASONING_TARGET_FIELDS
+                }
+            )
+        for field, expected in scalar_expectations.items():
+            actual = existing_query_plan.get(field)
+            if not _stage64_query_plan_completion_scalar_matches(
+                field, actual, expected
+            ):
+                raise NativeGraphDialogueReject(
+                    f"{reject_prefix} refuses conflicting explicit query_plan.{field}"
+                )
+        diagnostics["validated_query_plan_fields"] = sorted(
+            scalar_expectations
+        )
+        diagnostics["query_plan_sha256"] = _stage64_json_sha256(
+            existing_query_plan
+        )
+        diagnostics["noop_reason"] = "query_plan_already_present"
+        return qa_proposal, diagnostics
+
+    unique_contract_operations = {"comparison", "count", "temporal_state_update"}
+    query_operation_hint = normalize_space(existing_query_plan.get("qa_operation"))
+    generic_missing_ref_fields = {
+        "required_anchor_refs",
+        "supporting_anchor_refs",
+    }
+    if (
+        query_plan_was_present
+        and query_operation_hint in STAGE64_QA_OPERATIONS
+        and query_operation_hint not in unique_contract_operations
+        and missing_query_plan_fields
+        and set(missing_query_plan_fields).issubset(generic_missing_ref_fields)
+    ):
+        generic_operation_evidence = [
+            normalize_space((stage64_target or {}).get("qa_operation")),
+            normalize_space(current_event_plan.get("operation")),
+            normalize_space(graph_update.get("operation"))
+            if "operation" in graph_update
+            else "",
+            normalize_space(qa_proposal.get("qa_operation")),
+        ]
+        if any(
+            value and value != query_operation_hint
+            for value in generic_operation_evidence
+        ):
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} refuses generic partial operation conflict"
+            )
+        canonical_subtype = normalize_space(
+            STAGE64_CANONICAL_QA_SUBTYPES.get(query_operation_hint)
+        )
+        generic_scalar_expectations = {
+            "answer_source": "graph_anchor",
+            "qa_operation": query_operation_hint,
+            "qa_subtype": canonical_subtype,
+            "answer_type": normalize_space(qa_proposal.get("answer_type")),
+            "gold_answer": qa_proposal.get("gold_answer_text"),
+            "normalized_gold_answer": normalize_text(
+                qa_proposal.get("gold_answer_text")
+            ),
+        }
+        if stage64_reasoning_contract is not None:
+            generic_scalar_expectations.update(
+                {
+                    field: copy.deepcopy(stage64_reasoning_contract[field])
+                    for field in STAGE64_REASONING_TARGET_FIELDS
+                }
+            )
+        for field, expected in generic_scalar_expectations.items():
+            actual = existing_query_plan.get(field)
+            if (
+                not expected
+                or not _stage64_query_plan_completion_scalar_matches(
+                    field, actual, expected
+                )
+            ):
+                raise NativeGraphDialogueReject(
+                    f"{reject_prefix} refuses conflicting explicit query_plan.{field}"
+                )
+
+        anchor_refs = qa_proposal.get("anchor_refs")
+        if not isinstance(anchor_refs, dict):
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} generic partial completion requires anchor_refs"
+            )
+        alias_to_event_id, _unused_turn_map = _stage64_ref_maps(
+            current_event_plan, graph_update, {}
+        )
+
+        def resolved_unique_refs(raw_refs: Any) -> list[str]:
+            if not isinstance(raw_refs, list):
+                return []
+            raw = [normalize_space(ref) for ref in raw_refs]
+            if any(not ref for ref in raw):
+                return []
+            resolved = [_resolve_stage64_ref(ref, alias_to_event_id) for ref in raw]
+            if (
+                not all(resolved)
+                or len(resolved) != len(set(resolved))
+            ):
+                return []
+            return resolved
+
+        reasoning_ids = resolved_unique_refs(
+            existing_query_plan.get("reasoning_anchor_path")
+        )
+        support_ids = resolved_unique_refs(anchor_refs.get("support"))
+        gold_ids = resolved_unique_refs(anchor_refs.get("gold"))
+        distractor_ids = resolved_unique_refs(anchor_refs.get("distractors"))
+        if (
+            not reasoning_ids
+            or not support_ids
+            or set(reasoning_ids) != set(support_ids)
+            or not gold_ids
+            or not distractor_ids
+            or not _stage64_query_plan_completion_exact_refs(
+                existing_query_plan.get("gold_anchor_refs"),
+                gold_ids,
+                alias_to_event_id,
+            )
+            or not _stage64_query_plan_completion_exact_refs(
+                existing_query_plan.get("distractor_anchor_refs"),
+                distractor_ids,
+                alias_to_event_id,
+            )
+        ):
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} generic partial reference evidence conflicts"
+            )
+        generic_expected_refs = {
+            "required_anchor_refs": reasoning_ids,
+            "supporting_anchor_refs": support_ids,
+        }
+        for field, expected_ids in generic_expected_refs.items():
+            if field in existing_query_plan and not (
+                _stage64_query_plan_completion_exact_refs(
+                    existing_query_plan.get(field),
+                    expected_ids,
+                    alias_to_event_id,
+                )
+            ):
+                raise NativeGraphDialogueReject(
+                    f"{reject_prefix} refuses conflicting explicit query_plan.{field}"
+                )
+
+        normalized = copy.deepcopy(qa_proposal)
+        normalized_query_plan = normalized["query_plan"]
+        for field in missing_query_plan_fields:
+            normalized_query_plan[field] = copy.deepcopy(
+                generic_expected_refs[field]
+            )
+        evidence = {
+            "generic_partial_only": True,
+            "operation": query_operation_hint,
+            "reasoning_anchor_path_sha256": _stage64_json_sha256(reasoning_ids),
+            "anchor_refs_sha256": _stage64_json_sha256(anchor_refs),
+            "explicit_gold_and_distractor_refs_validated": True,
+        }
+        diagnostics.update(
+            {
+                "stage64_query_plan_completion_normalizer_used": True,
+                "operation": query_operation_hint,
+                "contract_schema_version": "generic_partial_reference_completion_v1",
+                "contract_sha256": _stage64_json_sha256(evidence),
+                "post_qa_proposal_sha256": _stage64_json_sha256(normalized),
+                "query_plan_sha256": _stage64_json_sha256(
+                    normalized_query_plan
+                ),
+                "completed_fields": [
+                    f"query_plan.{field}" for field in missing_query_plan_fields
+                ],
+                "completed_query_plan_fields": missing_query_plan_fields,
+                "validated_query_plan_fields": sorted(
+                    [
+                        *generic_scalar_expectations,
+                        "reasoning_anchor_path",
+                        "gold_anchor_refs",
+                        "distractor_anchor_refs",
+                        *(
+                            field
+                            for field in generic_expected_refs
+                            if field in existing_query_plan
+                        ),
+                    ]
+                ),
+                "validated_fields": ["anchor_refs"],
+                "expected_reference_groups": copy.deepcopy(
+                    generic_expected_refs
+                ),
+                "completion_evidence": evidence,
+                "completion_evidence_sha256": _stage64_json_sha256(evidence),
+                "only_missing_query_plan_fields_added": True,
+                "noop_reason": None,
+            }
+        )
+        return normalized, diagnostics
+
+    # A few API rows omitted schema fields whose values are independently fixed
+    # before the unique-contract query plan can be derived.  These completions
+    # are fail-closed and never replace an explicit top-level value.
+    top_level_completed_fields: list[str] = []
+    prerequisite_options = qa_proposal.get("options")
+    four_object_options = (
+        isinstance(prerequisite_options, list)
+        and len(prerequisite_options) == 4
+        and all(isinstance(option, dict) for option in prerequisite_options)
+    )
+    proposal_operation_hint = normalize_space(qa_proposal.get("qa_operation"))
+    if "answer_type" not in qa_proposal:
+        option_answer_types = (
+            [normalize_space(option.get("answer_type")) for option in prerequisite_options]
+            if four_object_options
+            else []
+        )
+        query_answer_type = normalize_space(existing_query_plan.get("answer_type"))
+        answer_type_evidence = [
+            value
+            for value in [*option_answer_types, query_answer_type]
+            if value
+        ]
+        unique_answer_types = set(answer_type_evidence)
+        required_types = STAGE64_OPERATION_REQUIRED_ANSWER_TYPES.get(
+            proposal_operation_hint
+        )
+        derivable_answer_type = (
+            next(iter(unique_answer_types))
+            if four_object_options
+            and len(option_answer_types) == 4
+            and all(option_answer_types)
+            and len(unique_answer_types) == 1
+            else ""
+        )
+        if (
+            derivable_answer_type not in STAGE64_ANSWER_TYPES
+            or (
+                required_types
+                and derivable_answer_type not in required_types
+            )
+            or (
+                proposal_operation_hint == "temporal_state_update"
+                and derivable_answer_type == "YesNo"
+            )
+        ):
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} cannot uniquely derive missing top-level "
+                "answer_type from query/options and operation contract"
+            )
+        qa_proposal = copy.deepcopy(qa_proposal)
+        qa_proposal["answer_type"] = derivable_answer_type
+        existing_query_plan = (
+            qa_proposal["query_plan"] if query_plan_was_present else {}
+        )
+        top_level_completed_fields.append("answer_type")
+    if "answer_format" not in qa_proposal:
+        declared_question_type = normalize_space(qa_proposal.get("question_type"))
+        plan_question_type = normalize_space(current_event_plan.get("question_type"))
+        single_choice_schema = (
+            declared_question_type == "single_choice"
+            or (
+                not declared_question_type
+                and plan_question_type == "single_choice"
+            )
+        )
+        if not single_choice_schema or not four_object_options:
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} cannot uniquely derive missing top-level "
+                "answer_format without a single_choice schema and four options"
+            )
+        if not top_level_completed_fields:
+            qa_proposal = copy.deepcopy(qa_proposal)
+        qa_proposal["answer_format"] = "single_choice_mcq"
+        existing_query_plan = (
+            qa_proposal["query_plan"] if query_plan_was_present else {}
+        )
+        top_level_completed_fields.append("answer_format")
+
+    # A missing gold_answer_text is redundant when the frozen temporal
+    # contract, option sources, exact value surfaces, truth booleans, and gold
+    # label all agree. Complete that absent key only; never overwrite an
+    # explicit (possibly wrong) answer surface.
+    if (
+        not query_plan_was_present
+        and
+        proposal_operation_hint == "temporal_state_update"
+        and ("gold_answer_text" not in qa_proposal or qa_proposal.get("gold_answer_text") is None)
+    ):
+        temporal_contract = derive_unique_temporal_state_update_contract(
+            current_event_plan,
+            stage64_target,
+        )
+        options_for_completion = qa_proposal.get("options")
+        raw_gold_for_completion = qa_proposal.get("gold")
+        completion_pass = (
+            temporal_contract is not None
+            and isinstance(options_for_completion, list)
+            and len(options_for_completion) == 4
+            and isinstance(raw_gold_for_completion, list)
+            and raw_gold_for_completion
+            == [LETTERS[int(temporal_contract["current_array_index"])]]
+        )
+        if completion_pass:
+            chain_ids = temporal_contract["event_instance_ids"]
+            value_surfaces = temporal_contract["value_surfaces"]
+            for index, option in enumerate(options_for_completion):
+                expected_label = LETTERS[index]
+                completion_pass = completion_pass and (
+                    isinstance(option, dict)
+                    and normalize_space(option.get("id")).upper() == expected_label
+                    and option.get("source_event_instance_id") == chain_ids[index]
+                    and option.get("anchor_ref") == chain_ids[index]
+                    and option.get("anchor_kind") == "event"
+                    and option.get("text") == value_surfaces[index]
+                    and isinstance(option.get("truth_value"), bool)
+                    and option.get("truth_value")
+                    is (index == int(temporal_contract["current_array_index"]))
+                )
+        if completion_pass:
+            qa_proposal = copy.deepcopy(qa_proposal)
+            qa_proposal["gold_answer_text"] = temporal_contract["current_value_surface"]
+            top_level_completed_fields.append("gold_answer_text")
+            diagnostics["completion_evidence"] = {
+                "schema_version": STAGE64_TEMPORAL_STATE_UPDATE_GRAPH_CONTRACT_VERSION,
+                "contract_sha256": temporal_contract["contract_sha256"],
+                "unique_temporal_chain": True,
+                "exact_option_value_surfaces": True,
+                "durable_option_sources": True,
+                "truth_values_and_gold_label": True,
+            }
+            diagnostics["completion_evidence_sha256"] = _stage64_json_sha256(
+                diagnostics["completion_evidence"]
+            )
+            diagnostics["post_qa_proposal_sha256"] = _stage64_json_sha256(qa_proposal)
+
+    required_top_level_fields = (
+        "qa_operation",
+        "qa_subtype",
+        "answer_type",
+        "answer_format",
+        "question",
+        "question_text",
+        "options",
+        "gold",
+        "gold_answer_text",
+        "anchor_refs",
+    ) + (
+        STAGE64_REASONING_TARGET_FIELDS
+        if stage64_reasoning_contract is not None
+        else ()
+    )
+    missing_top_level_fields = [
+        field for field in required_top_level_fields if field not in qa_proposal
+    ]
+    if missing_top_level_fields:
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} refuses to guess missing API fields: "
+            f"{missing_top_level_fields}"
+        )
+
+    proposal_operation = normalize_space(qa_proposal.get("qa_operation"))
+    target_operation = normalize_space(
+        (stage64_target or {}).get("qa_operation")
+        if isinstance(stage64_target, dict)
+        else ""
+    )
+    plan_operation = normalize_space(current_event_plan.get("operation"))
+    graph_update_operation_present = "operation" in graph_update
+    graph_update_operation = (
+        normalize_space(graph_update.get("operation"))
+        if graph_update_operation_present
+        else ""
+    )
+    supported_operations = {"comparison", "count", "temporal_state_update"}
+    if proposal_operation not in supported_operations:
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} does not support operation {proposal_operation!r}"
+        )
+    operation_evidence = (
+        target_operation,
+        plan_operation,
+        proposal_operation,
+    )
+    if (
+        any(
+            operation and operation != proposal_operation
+            for operation in operation_evidence
+        )
+        or (
+            graph_update_operation_present
+            and graph_update_operation
+            and graph_update_operation != proposal_operation
+        )
+    ):
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} operation evidence mismatch: "
+            f"required={operation_evidence}, "
+            f"graph_update_present={graph_update_operation_present}, "
+            f"graph_update={graph_update_operation!r}"
+        )
+
+    qa_subtype = normalize_space(qa_proposal.get("qa_subtype"))
+    canonical_subtype = normalize_space(
+        STAGE64_CANONICAL_QA_SUBTYPES.get(proposal_operation)
+    )
+    if not canonical_subtype or qa_subtype != canonical_subtype:
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} subtype mismatch: "
+            f"proposal={qa_subtype!r}, canonical={canonical_subtype!r}"
+        )
+    answer_type = normalize_space(qa_proposal.get("answer_type"))
+    if answer_type not in STAGE64_ANSWER_TYPES:
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} invalid explicit answer_type: {answer_type!r}"
+        )
+    required_answer_types = STAGE64_OPERATION_REQUIRED_ANSWER_TYPES.get(
+        proposal_operation
+    )
+    if required_answer_types and answer_type not in required_answer_types:
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} answer_type mismatch for {proposal_operation}: "
+            f"{answer_type!r} not in {sorted(required_answer_types)}"
+        )
+    if proposal_operation == "temporal_state_update" and answer_type == "YesNo":
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} temporal completion requires four concrete state values"
+        )
+    if normalize_space(qa_proposal.get("answer_format")) != "single_choice_mcq":
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} requires answer_format='single_choice_mcq'"
+        )
+    if "question_type" in qa_proposal and qa_proposal.get(
+        "question_type"
+    ) != "single_choice":
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} refuses explicit question_type conflict: "
+            f"{qa_proposal.get('question_type')!r}"
+        )
+
+    raw_question = qa_proposal.get("question")
+    raw_question_text = qa_proposal.get("question_text")
+    if (
+        not isinstance(raw_question, str)
+        or not raw_question
+        or not isinstance(raw_question_text, str)
+        or raw_question_text != raw_question
+    ):
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} requires nonempty byte-identical question aliases"
+        )
+    question = normalize_space(raw_question)
+    if not question:
+        raise NativeGraphDialogueReject(f"{reject_prefix} refuses blank question")
+    _assert_no_stage64_solver_visible_artifact("question", question)
+
+    alias_to_event_id, _unused_turn_map = _stage64_ref_maps(
+        current_event_plan, graph_update, {}
+    )
+    options = qa_proposal.get("options")
+    if (
+        not isinstance(options, list)
+        or len(options) != 4
+        or not all(isinstance(option, dict) for option in options)
+    ):
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} requires exactly four object options"
+        )
+    option_source_ids: dict[str, str] = {}
+    option_texts: dict[str, str] = {}
+    true_labels: list[str] = []
+    for index, option in enumerate(options):
+        label = LETTERS[index]
+        raw_id = normalize_space(option.get("id"))
+        raw_option_id = normalize_space(option.get("option_id"))
+        if raw_id.upper() != label or (
+            raw_option_id and raw_option_id.upper() != label
+        ):
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} requires explicit ordered A-D option labels"
+            )
+        raw_text = option.get("text")
+        if not isinstance(raw_text, str) or not normalize_space(raw_text):
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} refuses empty option {label} text"
+            )
+        _assert_no_stage64_solver_visible_artifact(
+            f"options[{label}].text", raw_text
+        )
+        if normalize_space(option.get("answer_type")) != answer_type:
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} option {label} answer_type mismatch"
+            )
+        if normalize_space(option.get("anchor_kind")) != "event":
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} option {label} anchor_kind mismatch"
+            )
+        source_event_id = _stage64_query_plan_completion_option_source(
+            option, alias_to_event_id
+        )
+        if not source_event_id:
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} option {label} has unresolved or conflicting source refs"
+            )
+        if not isinstance(option.get("truth_value"), bool):
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} option {label} requires boolean truth_value"
+            )
+        if option.get("truth_value") is True:
+            true_labels.append(label)
+        if "is_gold" in option and not isinstance(option.get("is_gold"), bool):
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} option {label} has non-boolean is_gold"
+            )
+        option_source_ids[label] = source_event_id
+        option_texts[label] = raw_text
+    normalized_option_texts = [
+        stage64_quality.normalized_option_text(option_texts[label])
+        for label in LETTERS[:4]
+    ]
+    if any(not text for text in normalized_option_texts) or len(
+        set(normalized_option_texts)
+    ) != 4:
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} requires four unique option value surfaces"
+        )
+
+    raw_gold = qa_proposal.get("gold")
+    if not isinstance(raw_gold, list) or len(raw_gold) != 1:
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} requires one explicit gold label"
+        )
+    gold_label = normalize_space(raw_gold[0]).upper()
+    if gold_label not in LETTERS[:4] or true_labels != [gold_label]:
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} gold label and truth_value declarations disagree"
+        )
+    for label, option in zip(LETTERS[:4], options):
+        if "is_gold" in option and option.get("is_gold") is not (
+            label == gold_label
+        ):
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} option {label} is_gold disagrees with gold"
+            )
+    raw_gold_answer = qa_proposal.get("gold_answer_text")
+    if (
+        not isinstance(raw_gold_answer, str)
+        or raw_gold_answer != option_texts[gold_label]
+    ):
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} gold_answer_text must equal the sole true option text"
+        )
+    _assert_no_stage64_solver_visible_artifact(
+        "gold_answer_text", raw_gold_answer
+    )
+    for field, expected_value in (
+        ("gold_answer", raw_gold_answer),
+        ("normalized_gold_answer", normalize_text(raw_gold_answer)),
+    ):
+        if field in qa_proposal and qa_proposal.get(field) != expected_value:
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} refuses conflicting explicit {field}"
+            )
+
+    anchor_refs = qa_proposal.get("anchor_refs")
+    if not isinstance(anchor_refs, dict):
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} requires explicit anchor_refs object"
+        )
+    for field in ("support", "gold", "distractors"):
+        if field not in anchor_refs or not isinstance(anchor_refs.get(field), list):
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} requires explicit anchor_refs.{field} list"
+            )
+
+    contract_schema_version: str
+    contract_sha256: str
+    reasoning_ids: list[str]
+    gold_ids: list[str]
+    distractor_ids: list[str]
+    expected_answer: str
+    question_tokens = stage64_quality._question_dimension_tokens(question)
+    if proposal_operation == "comparison":
+        contract = derive_unique_comparison_contract(current_event_plan)
+        if contract is None:
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} comparison contract is not unique"
+            )
+        contract_schema_version = str(contract["schema_version"])
+        contract_sha256 = str(contract["contract_sha256"])
+        reasoning_ids = list(contract["primary_event_instance_ids"])
+        gold_ids = list(reasoning_ids)
+        distractor_ids = list(reasoning_ids)
+        expected_difference = int(contract["expected_absolute_difference"])
+        expected_answer = str(expected_difference)
+        missing_entities = [
+            entity
+            for entity in contract["entities"]
+            if not stage64_quality._question_names_dimension(
+                question_tokens, entity
+            )
+        ]
+        required_slot_tokens = stage64_quality._comparison_slot_tokens(
+            contract["normalized_slot"]
+        )
+        normalized_question_slot_tokens = {
+            stage64_quality.COMPARISON_SLOT_TOKEN_ALIASES.get(token, token)
+            for token in question_tokens
+        }
+        if (
+            missing_entities
+            or not required_slot_tokens.issubset(
+                normalized_question_slot_tokens
+            )
+            or stage64_quality.OPERATION_QUESTION_SIGNALS[
+                "comparison"
+            ].search(question)
+            is None
+            or stage64_quality.COMPARISON_INTERNAL_TIME_INDEX_RE.search(
+                question
+            )
+            or (
+                contract["requires_natural_time_qualifier"]
+                and stage64_quality.COMPARISON_NATURAL_TIME_QUALIFIER_RE.search(
+                    question
+                )
+                is None
+            )
+        ):
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} comparison question does not identify the unique pair"
+            )
+        option_values = [
+            _stage64_strict_nonnegative_integer(option_texts[label])
+            for label in LETTERS[:4]
+        ]
+        if (
+            any(value is None for value in option_values)
+            or len(set(option_values)) != 4
+            or option_values.count(expected_difference) != 1
+            or not (
+                min(option_values) < expected_difference < max(option_values)
+            )
+            or max(option_values) - min(option_values) > 4
+            or _stage64_strict_nonnegative_integer(
+                option_texts[gold_label]
+            )
+            != expected_difference
+            or set(option_source_ids.values()) != set(reasoning_ids)
+        ):
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} comparison options/gold do not match the unique pair"
+            )
+    elif proposal_operation == "count":
+        contract = derive_unique_count_contract(current_event_plan)
+        if contract is None:
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} count contract is not unique"
+            )
+        contract_schema_version = str(contract["schema_version"])
+        contract_sha256 = str(contract["contract_sha256"])
+        reasoning_ids = list(contract["event_instance_ids"])
+        gold_ids = list(contract["included_event_instance_ids"])
+        distractor_ids = list(contract["excluded_event_instance_ids"])
+        expected_count = int(contract["expected_included_count"])
+        expected_answer = str(expected_count)
+        missing_dimensions = [
+            name
+            for name, dimension in (
+                ("set_id", contract["set_id"]),
+                ("entity", contract["entity"]),
+                ("slot", contract["slot"]),
+            )
+            if not stage64_quality._question_names_dimension(
+                question_tokens, dimension
+            )
+        ]
+        if (
+            missing_dimensions
+            or stage64_quality.OPERATION_QUESTION_SIGNALS["count"].search(
+                question
+            )
+            is None
+        ):
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} count question does not identify the complete set"
+            )
+        option_values = [
+            _stage64_strict_nonnegative_integer(option_texts[label])
+            for label in LETTERS[:4]
+        ]
+        if (
+            any(value is None for value in option_values)
+            or len(set(option_values)) != 4
+            or option_values.count(expected_count) != 1
+            or not (min(option_values) < expected_count < max(option_values))
+            or max(option_values) - min(option_values) > 4
+            or any(
+                value is not None and value > int(contract["member_count"])
+                for value in option_values
+            )
+            or _stage64_strict_nonnegative_integer(
+                option_texts[gold_label]
+            )
+            != expected_count
+            or not set(option_source_ids.values()).issubset(
+                set(reasoning_ids)
+            )
+        ):
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} count options/gold do not match the complete set"
+            )
+    else:
+        chain = _stage64_unique_temporal_state_update_chain(
+            current_event_plan,
+            stage64_target,
+        )
+        if chain is None:
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} temporal contract is not unique"
+            )
+        contract_schema_version = STAGE64_TEMPORAL_STATE_UPDATE_GRAPH_CONTRACT_VERSION
+        contract_sha256 = str(chain["contract_sha256"])
+        reasoning_ids = list(chain["event_instance_ids"])
+        gold_ids = [str(chain["current_event_instance_id"])]
+        distractor_ids = list(chain["distractor_event_instance_ids"])
+        current_event = chain["events"][chain["current_array_index"]]
+        expected_answer = _stage64_temporal_value_surface(current_event)
+        normalized_question = stage64_quality.normalized_option_text(question)
+        padded_question = f" {normalized_question} "
+        if (
+            STAGE64_TEMPORAL_CURRENT_QUESTION_RE.search(question) is None
+            or f" {chain['normalized_entity']} " not in padded_question
+            or f" {chain['normalized_slot']} " not in padded_question
+        ):
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} temporal question does not identify the unique current state"
+            )
+        event_by_id = {
+            normalize_space(event.get("event_instance_id")): event
+            for event in chain["events"]
+        }
+        if set(option_source_ids.values()) != set(reasoning_ids):
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} temporal options do not cover the unique chain"
+            )
+        for label in LETTERS[:4]:
+            source_event = event_by_id.get(option_source_ids[label])
+            if source_event is None or (
+                stage64_quality.normalized_option_text(option_texts[label])
+                != stage64_quality.normalized_option_text(
+                    _stage64_temporal_value_surface(source_event)
+                )
+            ):
+                raise NativeGraphDialogueReject(
+                    f"{reject_prefix} temporal option {label} does not match its graph value"
+                )
+        if (
+            option_source_ids[gold_label] != gold_ids[0]
+            or stage64_quality.normalized_option_text(
+                option_texts[gold_label]
+            )
+            != stage64_quality.normalized_option_text(expected_answer)
+        ):
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} temporal gold is not the unique current state"
+            )
+
+    expected_reference_groups = {
+        "reasoning_anchor_path": reasoning_ids,
+        "required_anchor_refs": reasoning_ids,
+        "supporting_anchor_refs": reasoning_ids,
+        "gold_anchor_refs": gold_ids,
+        "distractor_anchor_refs": distractor_ids,
+    }
+    anchor_expectations = {
+        "support": reasoning_ids,
+        "gold": gold_ids,
+        "distractors": distractor_ids,
+    }
+    wrong_anchor_fields = [
+        field
+        for field, expected_ids in anchor_expectations.items()
+        if not _stage64_query_plan_completion_exact_refs(
+            anchor_refs.get(field), expected_ids, alias_to_event_id
+        )
+    ]
+    if wrong_anchor_fields:
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} anchor_refs do not match the unique contract: "
+            f"{wrong_anchor_fields}"
+        )
+    if (
+        stage64_quality.normalized_option_text(raw_gold_answer)
+        != stage64_quality.normalized_option_text(expected_answer)
+    ):
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} gold answer does not match the unique graph contract"
+        )
+
+    completed_query_plan = {
+        "answer_source": "graph_anchor",
+        "qa_operation": proposal_operation,
+        "qa_subtype": qa_subtype,
+        **(
+            {
+                field: copy.deepcopy(stage64_reasoning_contract[field])
+                for field in STAGE64_REASONING_TARGET_FIELDS
+            }
+            if stage64_reasoning_contract is not None
+            else {}
+        ),
+        "answer_type": answer_type,
+        **copy.deepcopy(expected_reference_groups),
+        "gold_answer": raw_gold_answer,
+        "normalized_gold_answer": normalize_text(raw_gold_answer),
+    }
+    reference_fields = set(expected_reference_groups)
+    resolved_reference_expectations = {
+        "resolved_reasoning_event_instance_ids": reasoning_ids,
+        "resolved_required_event_instance_ids": reasoning_ids,
+        "resolved_supporting_event_instance_ids": reasoning_ids,
+        "resolved_gold_event_instance_ids": gold_ids,
+        "resolved_distractor_event_instance_ids": distractor_ids,
+    }
+    validated_query_plan_fields: list[str] = []
+    for field, expected_value in completed_query_plan.items():
+        if field not in existing_query_plan:
+            continue
+        actual_value = existing_query_plan.get(field)
+        if field in reference_fields:
+            ordered = (
+                proposal_operation == "temporal_state_update"
+                and field == "reasoning_anchor_path"
+            )
+            matches = _stage64_query_plan_completion_exact_refs(
+                actual_value,
+                expected_reference_groups[field],
+                alias_to_event_id,
+                ordered=ordered,
+            )
+        else:
+            matches = _stage64_query_plan_completion_scalar_matches(
+                field,
+                actual_value,
+                expected_value,
+            )
+        if not matches:
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} refuses conflicting explicit query_plan.{field}"
+            )
+        validated_query_plan_fields.append(field)
+
+    for field, expected_ids in resolved_reference_expectations.items():
+        if field not in existing_query_plan:
+            continue
+        ordered = (
+            proposal_operation == "temporal_state_update"
+            and field == "resolved_reasoning_event_instance_ids"
+        )
+        if not _stage64_query_plan_completion_exact_refs(
+            existing_query_plan.get(field),
+            expected_ids,
+            alias_to_event_id,
+            ordered=ordered,
+        ):
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} refuses conflicting explicit query_plan.{field}"
+            )
+        validated_query_plan_fields.append(field)
+
+    completed_query_plan_fields = [
+        field for field in completed_query_plan if field not in existing_query_plan
+    ]
+    completion_evidence = {
+        "target_qa_operation": target_operation,
+        "current_event_plan_operation": plan_operation,
+        "proposal_qa_operation": proposal_operation,
+        "graph_update_operation_present": graph_update_operation_present,
+        "graph_update_operation": graph_update_operation,
+        "canonical_qa_subtype": canonical_subtype,
+        "stage64_reasoning_target": copy.deepcopy(stage64_reasoning_contract),
+        "answer_type": answer_type,
+        "answer_format": "single_choice_mcq",
+        "question_sha256": _stage64_json_sha256(raw_question),
+        "options_sha256": _stage64_json_sha256(options),
+        "gold_sha256": _stage64_json_sha256(
+            {"gold": raw_gold, "gold_answer_text": raw_gold_answer}
+        ),
+        "anchor_refs_sha256": _stage64_json_sha256(anchor_refs),
+        "contract_schema_version": contract_schema_version,
+        "contract_sha256": contract_sha256,
+        "question_validated": True,
+        "options_validated": True,
+        "gold_validated": True,
+        "anchor_refs_validated": True,
+    }
+    if not completed_query_plan_fields and not top_level_completed_fields:
+        diagnostics.update(
+            {
+                "operation": proposal_operation,
+                "contract_schema_version": contract_schema_version,
+                "contract_sha256": contract_sha256,
+                "query_plan_sha256": _stage64_json_sha256(existing_query_plan),
+                "validated_query_plan_fields": validated_query_plan_fields,
+                "validated_fields": [
+                    "question",
+                    "question_text",
+                    "options",
+                    "gold",
+                    "gold_answer_text",
+                    "anchor_refs",
+                ],
+                "expected_reference_groups": copy.deepcopy(
+                    expected_reference_groups
+                ),
+                "gold_label": gold_label,
+                "gold_answer": raw_gold_answer,
+                "completion_evidence": completion_evidence,
+                "completion_evidence_sha256": _stage64_json_sha256(
+                    completion_evidence
+                ),
+                "noop_reason": "query_plan_already_complete_and_validated",
+            }
+        )
+        return qa_proposal, diagnostics
+
+    normalized = copy.deepcopy(qa_proposal)
+    if query_plan_was_present:
+        normalized_query_plan = normalized["query_plan"]
+        for field in completed_query_plan_fields:
+            normalized_query_plan[field] = copy.deepcopy(
+                completed_query_plan[field]
+            )
+    else:
+        normalized["query_plan"] = copy.deepcopy(completed_query_plan)
+
+    expected_post = copy.deepcopy(original_qa_proposal)
+    for field in top_level_completed_fields:
+        expected_post[field] = copy.deepcopy(qa_proposal[field])
+    if query_plan_was_present:
+        expected_post_query_plan = expected_post["query_plan"]
+        for field in completed_query_plan_fields:
+            expected_post_query_plan[field] = copy.deepcopy(
+                completed_query_plan[field]
+            )
+    else:
+        expected_post["query_plan"] = copy.deepcopy(completed_query_plan)
+    if normalized != expected_post:
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} postcondition changed an explicit field"
+        )
+    completed_fields = [
+        *(f"qa_proposal.{field}" for field in top_level_completed_fields),
+        *(
+            ["query_plan"]
+            if not query_plan_was_present
+            else (
+                f"query_plan.{field}"
+                for field in completed_query_plan_fields
+            )
+        ),
+    ]
+    diagnostics.update(
+        {
+            "stage64_query_plan_completion_normalizer_used": True,
+            "operation": proposal_operation,
+            "contract_schema_version": contract_schema_version,
+            "contract_sha256": contract_sha256,
+            "post_qa_proposal_sha256": _stage64_json_sha256(normalized),
+            "query_plan_sha256": _stage64_json_sha256(normalized["query_plan"]),
+            "completed_fields": completed_fields,
+            "completed_top_level_fields": top_level_completed_fields,
+            "completed_query_plan_fields": completed_query_plan_fields,
+            "validated_query_plan_fields": validated_query_plan_fields,
+            "validated_fields": [
+                "question",
+                "question_text",
+                "options",
+                "gold",
+                "gold_answer_text",
+                "anchor_refs",
+            ],
+            "expected_reference_groups": copy.deepcopy(
+                expected_reference_groups
+            ),
+            "gold_label": gold_label,
+            "gold_answer": raw_gold_answer,
+            "completion_evidence": completion_evidence,
+            "completion_evidence_sha256": _stage64_json_sha256(
+                completion_evidence
+            ),
+            "only_query_plan_added": (
+                not query_plan_was_present and not top_level_completed_fields
+            ),
+            "only_missing_query_plan_fields_added": (
+                query_plan_was_present
+                and bool(completed_query_plan_fields)
+                and not top_level_completed_fields
+            ),
+            "noop_reason": None,
+        }
+    )
+    return normalized, diagnostics
+
+
+def normalize_stage64_qa_schema_completion(
+    current_event_plan: dict[str, Any],
+    graph_update: dict[str, Any],
+    qa_proposal: dict[str, Any],
+    stage64_target: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Repair only uniquely proven redundant Stage64 QA schema drift."""
+
+    diagnostics: dict[str, Any] = {
+        "schema_version": STAGE64_QA_SCHEMA_COMPLETION_NORMALIZER_VERSION,
+        "stage64_qa_schema_completion_normalizer_used": False,
+        "completed_fields": [],
+        "overwritten_fields": [],
+        "question_alias_completed_field": None,
+        "question_type_answer_type_confusion_repaired": False,
+        "question_type_before": None,
+        "question_type_after": None,
+        "pre_qa_proposal_sha256": None,
+        "post_qa_proposal_sha256": None,
+        "completion_evidence_sha256": None,
+        "completion_evidence": {},
+        "noop_reason": None,
+    }
+    reject_prefix = "stage64 API QA schema completion normalizer"
+    if not isinstance(qa_proposal, dict):
+        raise NativeGraphDialogueReject(f"{reject_prefix} requires qa_proposal object")
+    try:
+        pre_sha256 = _stage64_json_sha256(qa_proposal)
+    except (TypeError, ValueError) as exc:
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} requires a JSON-serializable proposal"
+        ) from exc
+    diagnostics["pre_qa_proposal_sha256"] = pre_sha256
+    diagnostics["post_qa_proposal_sha256"] = pre_sha256
+
+    completable_fields = (
+        "qa_operation",
+        "qa_subtype",
+        "question_type",
+    )
+    missing_fields = [field for field in completable_fields if field not in qa_proposal]
+
+    question_present = "question" in qa_proposal
+    question_text_present = "question_text" in qa_proposal
+    if not question_present and not question_text_present:
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} requires one nonempty question string"
+        )
+    question_alias_completed_field: str | None = None
+    if question_present:
+        raw_question = qa_proposal.get("question")
+        if not isinstance(raw_question, str) or not normalize_space(raw_question):
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} refuses null or blank explicit question"
+            )
+    else:
+        raw_question = qa_proposal.get("question_text")
+        question_alias_completed_field = "question"
+    if question_text_present:
+        raw_question_text = qa_proposal.get("question_text")
+        if not isinstance(raw_question_text, str) or not normalize_space(
+            raw_question_text
+        ):
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} refuses null or blank explicit question_text"
+            )
+    else:
+        raw_question_text = qa_proposal.get("question")
+        question_alias_completed_field = "question_text"
+    if (
+        not isinstance(raw_question, str)
+        or not normalize_space(raw_question)
+        or not isinstance(raw_question_text, str)
+        or not normalize_space(raw_question_text)
+    ):
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} refuses to complete a question alias from null or blank text"
+        )
+    if question_present and question_text_present and raw_question != raw_question_text:
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} refuses conflicting question/question_text aliases"
+        )
+    if question_alias_completed_field is not None:
+        missing_fields.append(question_alias_completed_field)
+
+    raw_question_type = qa_proposal.get("question_type")
+    raw_answer_type = qa_proposal.get("answer_type")
+    question_type_confusion = (
+        "question_type" in qa_proposal
+        and isinstance(raw_question_type, str)
+        and bool(normalize_space(raw_question_type))
+        and isinstance(raw_answer_type, str)
+        and raw_question_type == raw_answer_type
+        and raw_question_type != "single_choice"
+    )
+    if (
+        "question_type" in qa_proposal
+        and raw_question_type != "single_choice"
+        and not question_type_confusion
+    ):
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} refuses explicit question_type conflict: "
+            f"{raw_question_type!r}"
+        )
+
+    if not missing_fields and not question_type_confusion:
+        diagnostics["noop_reason"] = "schema_fields_already_present"
+        return qa_proposal, diagnostics
+
+    query_plan = qa_proposal.get("query_plan")
+    if not isinstance(query_plan, dict):
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} requires query_plan object as independent evidence"
+        )
+    target_operation = normalize_space(
+        (stage64_target or {}).get("qa_operation")
+        if isinstance(stage64_target, dict)
+        else ""
+    )
+    plan_operation = normalize_space(current_event_plan.get("operation"))
+    query_plan_operation = normalize_space(query_plan.get("qa_operation"))
+    graph_update_operation_present = "operation" in graph_update
+    graph_update_operation = (
+        normalize_space(graph_update.get("operation"))
+        if graph_update_operation_present
+        else ""
+    )
+    required_operation_evidence = (
+        target_operation,
+        plan_operation,
+        query_plan_operation,
+    )
+    if (
+        target_operation not in STAGE64_QA_OPERATIONS
+        or any(
+            operation != target_operation
+            for operation in required_operation_evidence
+        )
+        or (
+            graph_update_operation_present
+            and graph_update_operation != target_operation
+        )
+    ):
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} operation evidence mismatch: "
+            f"required={required_operation_evidence}, "
+            f"graph_update_present={graph_update_operation_present}, "
+            f"graph_update={graph_update_operation!r}"
+        )
+
+    canonical_subtype = normalize_space(
+        STAGE64_CANONICAL_QA_SUBTYPES.get(target_operation)
+    )
+    query_plan_subtype = normalize_space(query_plan.get("qa_subtype"))
+    if not canonical_subtype or query_plan_subtype != canonical_subtype:
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} subtype evidence mismatch: "
+            f"query_plan={query_plan_subtype!r}, canonical={canonical_subtype!r}"
+        )
+
+    plan_question_type = normalize_space(current_event_plan.get("question_type"))
+    if plan_question_type != "single_choice":
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} question_type evidence mismatch: {plan_question_type!r}"
+        )
+    answer_format = normalize_space(qa_proposal.get("answer_format"))
+    if answer_format != "single_choice_mcq":
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} answer_format evidence mismatch: {answer_format!r}"
+        )
+    options = qa_proposal.get("options")
+    four_object_options = (
+        isinstance(options, list)
+        and len(options) == 4
+        and all(isinstance(option, dict) for option in options)
+    )
+    if question_type_confusion and (
+        normalize_space(raw_answer_type) not in STAGE64_ANSWER_TYPES
+        or not four_object_options
+    ):
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} question_type/answer_type confusion lacks four "
+            "object options or a valid answer_type"
+        )
+
+    derived_fields = {
+        "qa_operation": target_operation,
+        "qa_subtype": canonical_subtype,
+        "question_type": "single_choice",
+        "question": raw_question_text,
+        "question_text": raw_question,
+    }
+    for field, expected_value in derived_fields.items():
+        if field not in qa_proposal:
+            continue
+        if field == "question_type" and question_type_confusion:
+            continue
+        actual_value = qa_proposal.get(field)
+        if actual_value != expected_value:
+            raise NativeGraphDialogueReject(
+                f"{reject_prefix} refuses to overwrite explicit {field}: "
+                f"{actual_value!r} != {expected_value!r}"
+            )
+
+    completion_evidence = {
+        "target_qa_operation": target_operation,
+        "current_event_plan_operation": plan_operation,
+        "graph_update_operation": graph_update_operation,
+        "graph_update_operation_present": graph_update_operation_present,
+        "query_plan_qa_operation": query_plan_operation,
+        "query_plan_qa_subtype": query_plan_subtype,
+        "canonical_qa_subtype": canonical_subtype,
+        "current_event_plan_question_type": plan_question_type,
+        "answer_format": answer_format,
+        "four_object_options": four_object_options,
+        "question_alias_completed_field": question_alias_completed_field,
+        "question_type_equals_answer_type": question_type_confusion,
+        "question_sha256": _stage64_json_sha256(raw_question),
+    }
+    normalized = copy.deepcopy(qa_proposal)
+    for field in missing_fields:
+        normalized[field] = copy.deepcopy(derived_fields[field])
+    overwritten_fields: list[str] = []
+    if question_type_confusion:
+        normalized["question_type"] = "single_choice"
+        overwritten_fields.append("question_type")
+    diagnostics.update(
+        {
+            "stage64_qa_schema_completion_normalizer_used": True,
+            "completed_fields": missing_fields,
+            "overwritten_fields": overwritten_fields,
+            "question_alias_completed_field": question_alias_completed_field,
+            "question_type_answer_type_confusion_repaired": (
+                question_type_confusion
+            ),
+            "question_type_before": (
+                raw_question_type if question_type_confusion else None
+            ),
+            "question_type_after": (
+                "single_choice" if question_type_confusion else None
+            ),
+            "post_qa_proposal_sha256": _stage64_json_sha256(normalized),
+            "completion_evidence_sha256": _stage64_json_sha256(
+                completion_evidence
+            ),
+            "completion_evidence": completion_evidence,
+            "noop_reason": None,
+        }
+    )
+    return normalized, diagnostics
+
+
 def _build_stage64_api_qa_from_proposal(
     current_event_plan: dict[str, Any],
     graph_update: dict[str, Any],
@@ -7830,7 +22193,29 @@ def _build_stage64_api_qa_from_proposal(
 ) -> dict[str, Any]:
     if not isinstance(qa_proposal, dict):
         raise NativeGraphDialogueReject("stage64 API QA mode requires qa_proposal object from API")
-    question_type = normalize_space(qa_proposal.get("question_type") or "single_choice")
+    qa_proposal, reasoning_identity_completion_normalizer = (
+        normalize_stage64_reasoning_identity_completion(
+            qa_proposal,
+            stage64_target,
+        )
+    )
+    qa_proposal, query_plan_completion_normalizer = (
+        normalize_stage64_missing_query_plan_from_unique_contract(
+            current_event_plan,
+            graph_update,
+            qa_proposal,
+            stage64_target,
+        )
+    )
+    qa_proposal, qa_schema_completion_normalizer = (
+        normalize_stage64_qa_schema_completion(
+            current_event_plan,
+            graph_update,
+            qa_proposal,
+            stage64_target,
+        )
+    )
+    question_type = normalize_space(qa_proposal.get("question_type"))
     if question_type != "single_choice":
         raise NativeGraphDialogueReject(f"stage64 API QA requires single_choice, got {question_type!r}")
     qa_operation = normalize_space(qa_proposal.get("qa_operation"))
@@ -7850,7 +22235,17 @@ def _build_stage64_api_qa_from_proposal(
         elif len(unique_option_answer_types) == 1 and unique_option_answer_types[0] in STAGE64_ANSWER_TYPES:
             answer_type = unique_option_answer_types[0]
     answer_format = normalize_space(qa_proposal.get("answer_format") or "single_choice_mcq")
-    question = normalize_space(qa_proposal.get("question") or qa_proposal.get("question_text"))
+    raw_question = qa_proposal.get("question")
+    raw_question_text = qa_proposal.get("question_text")
+    question = normalize_space(raw_question)
+    if (
+        not isinstance(raw_question, str)
+        or not isinstance(raw_question_text, str)
+        or raw_question_text != raw_question
+    ):
+        raise NativeGraphDialogueReject(
+            "stage64 API QA question_text must exactly equal question"
+        )
     if qa_operation not in STAGE64_QA_OPERATIONS:
         raise NativeGraphDialogueReject(f"stage64 API QA invalid qa_operation: {qa_operation!r}")
     target_operation = normalize_space((stage64_target or {}).get("qa_operation")) if isinstance(stage64_target, dict) else ""
@@ -7863,6 +22258,21 @@ def _build_stage64_api_qa_from_proposal(
         raise NativeGraphDialogueReject(
             f"stage64 API QA qa_operation {qa_operation!r} requires answer_type in "
             f"{sorted(required_answer_types)}, got {answer_type!r}"
+        )
+    preferred_answer_type = normalize_space(
+        (stage64_target or {}).get("preferred_answer_type")
+        if isinstance(stage64_target, dict)
+        else ""
+    )
+    if qa_operation == "bridge" and preferred_answer_type == "YesNo":
+        if answer_type == "YesNo":
+            raise NativeGraphDialogueReject(
+                "stage64 API QA bridge target requires a concrete non-YesNo answer type"
+            )
+    elif preferred_answer_type and answer_type != preferred_answer_type:
+        raise NativeGraphDialogueReject(
+            "stage64 API QA answer_type drifted from immutable target: "
+            f"expected {preferred_answer_type!r}, got {answer_type!r}"
         )
     if not qa_subtype:
         raise NativeGraphDialogueReject("stage64 API QA missing qa_subtype")
@@ -7883,9 +22293,29 @@ def _build_stage64_api_qa_from_proposal(
         raise NativeGraphDialogueReject(
             f"stage64 API QA expected {expected_options} options for {answer_type}, got {len(options_raw)}"
         )
+    qa_proposal, temporal_state_update_option_reference_normalizer = (
+        normalize_stage64_temporal_state_update_options_and_references(
+            current_event_plan,
+            qa_proposal,
+            stage64_target,
+        )
+    )
+    qa_proposal, count_number_duplicate_option_normalizer = (
+        normalize_stage64_count_number_duplicate_options(
+            current_event_plan,
+            qa_proposal,
+        )
+    )
+    qa_proposal, comparison_number_duplicate_option_normalizer = (
+        normalize_stage64_comparison_number_duplicate_options(
+            current_event_plan,
+            qa_proposal,
+        )
+    )
+    options_raw = qa_proposal.get("options")
 
     raw_id_to_label: dict[str, str] = {}
-    option_text_to_label: dict[str, str] = {}
+    option_text_to_labels: dict[str, list[str]] = {}
     normalized_options: list[dict[str, Any]] = []
     option_source_event_ids: dict[str, str] = {}
     for index, option in enumerate(options_raw):
@@ -7930,9 +22360,13 @@ def _build_stage64_api_qa_from_proposal(
             normalized_option["anchor_kind"] = "event"
         normalized_options.append(normalized_option)
         option_source_event_ids[label] = source_event_id
-        option_text_to_label[normalize_text(text)] = label
+        option_text_to_labels.setdefault(stage64_quality.normalized_option_text(text), []).append(label)
 
-    gold = _stage64_gold_from_api(qa_proposal, raw_id_to_label, option_text_to_label, options_raw)
+    normalized_option_texts = [_option_text_norm(option.get("text")) for option in normalized_options]
+    if any(not text for text in normalized_option_texts) or len(normalized_option_texts) != len(set(normalized_option_texts)):
+        raise NativeGraphDialogueReject("stage64 API QA exact duplicate option text")
+
+    gold = _stage64_gold_from_api(qa_proposal, raw_id_to_label, option_text_to_labels, options_raw)
     for option in normalized_options:
         is_gold = option["id"] in gold
         option["is_gold"] = is_gold
@@ -7961,18 +22395,66 @@ def _build_stage64_api_qa_from_proposal(
     if answer_type != "YesNo" and not distractor_refs:
         raise NativeGraphDialogueReject("stage64 API QA non-YesNo query_plan missing distractor refs")
 
+    # Marker aliases are useful for API prompting, but clean samples need
+    # durable event IDs for later recalibration and accumulation.
+    ref_groups = {
+        "resolved_reasoning_event_instance_ids": reasoning_path,
+        "resolved_required_event_instance_ids": required_refs,
+        "resolved_supporting_event_instance_ids": support_refs,
+        "resolved_gold_event_instance_ids": gold_refs,
+        "resolved_distractor_event_instance_ids": distractor_refs,
+    }
+    resolved_ref_groups: dict[str, list[str]] = {}
+    unresolved_refs: list[str] = []
+    for field, refs in ref_groups.items():
+        resolved_ids: list[str] = []
+        for ref in refs:
+            event_id = _resolve_stage64_ref(ref, alias_to_event_id)
+            if not event_id:
+                unresolved_refs.append(ref)
+            elif event_id not in resolved_ids:
+                resolved_ids.append(event_id)
+        resolved_ref_groups[field] = resolved_ids
+    if unresolved_refs:
+        raise NativeGraphDialogueReject(f"stage64 API QA unresolved query_plan refs: {sorted(set(unresolved_refs))[:5]}")
+
+    stage64_reasoning_contract = _validate_stage64_reasoning_target_binding(
+        stage64_target=stage64_target,
+        qa_proposal=qa_proposal,
+        query_plan=query_plan_raw,
+        current_event_plan=current_event_plan,
+        resolved_reasoning_event_ids=resolved_ref_groups[
+            "resolved_reasoning_event_instance_ids"
+        ],
+        resolved_distractor_event_ids=resolved_ref_groups[
+            "resolved_distractor_event_instance_ids"
+        ],
+    )
+
+    count_reference_completion = None
+    if qa_operation == "count":
+        count_reference_completion = _stage64_count_reference_completion(
+            current_event_plan,
+            resolved_ref_groups,
+        )
+        if count_reference_completion is not None:
+            complete_ids = list(count_reference_completion["event_instance_ids"])
+            for field in (
+                "resolved_reasoning_event_instance_ids",
+                "resolved_required_event_instance_ids",
+                "resolved_supporting_event_instance_ids",
+            ):
+                resolved_ref_groups[field] = complete_ids
+
     all_refs = sorted(set(required_refs + support_refs + gold_refs + distractor_refs + reasoning_path))
     resolved_event_ids: set[str] = set()
-    unresolved_refs: list[str] = []
     for ref in all_refs:
         event_id = _resolve_stage64_ref(ref, alias_to_event_id)
         if event_id:
             resolved_event_ids.add(event_id)
-        else:
-            unresolved_refs.append(ref)
-    if unresolved_refs:
-        raise NativeGraphDialogueReject(f"stage64 API QA unresolved query_plan refs: {unresolved_refs[:5]}")
     resolved_event_ids.update(option_source_event_ids.values())
+    for event_ids in resolved_ref_groups.values():
+        resolved_event_ids.update(event_ids)
     evidence_turn_ids = sorted(
         {
             turn_id
@@ -8001,16 +22483,36 @@ def _build_stage64_api_qa_from_proposal(
             "supporting_anchor_refs": support_refs,
             "gold_anchor_refs": gold_refs,
             "distractor_anchor_refs": distractor_refs,
+            **resolved_ref_groups,
+            **(
+                {"count_reference_completion": count_reference_completion}
+                if count_reference_completion is not None
+                else {}
+            ),
             "gold_answer": gold_answer_text,
             "normalized_gold_answer": normalize_text(query_plan.get("normalized_gold_answer") or gold_answer_text),
         }
     )
-    return {
+    result = {
         "question_type": "single_choice",
         "question": question,
         "question_text": question,
         "qa_operation": qa_operation,
         "qa_subtype": qa_subtype,
+        **(
+            {
+                field: copy.deepcopy(stage64_reasoning_contract[field])
+                for field in STAGE64_REASONING_TARGET_FIELDS
+            }
+            if stage64_reasoning_contract is not None
+            else {}
+        ),
+        **(
+            {"forbid_max_time_shortcut": True}
+            if stage64_reasoning_contract is not None
+            and stage64_reasoning_contract.get("forbid_max_time_shortcut")
+            else {}
+        ),
         "answer_type": answer_type,
         "answer_format": answer_format,
         "options": normalized_options,
@@ -8031,8 +22533,87 @@ def _build_stage64_api_qa_from_proposal(
         "graph_validation_pass": True,
         "qa_generated_after_alignment": True,
         "stage64_api_qa_schema_pass": True,
+        **(
+            {
+                "stage64_reasoning_identity_completion_normalizer": copy.deepcopy(
+                    reasoning_identity_completion_normalizer
+                )
+            }
+            if reasoning_identity_completion_normalizer.get(
+                "stage64_reasoning_identity_completion_normalizer_used"
+            )
+            else {}
+        ),
+        **(
+            {
+                "stage64_query_plan_completion_normalizer": copy.deepcopy(
+                    query_plan_completion_normalizer
+                )
+            }
+            if query_plan_completion_normalizer.get(
+                "stage64_query_plan_completion_normalizer_used"
+            )
+            else {}
+        ),
+        **(
+            {
+                "stage64_qa_schema_completion_normalizer": copy.deepcopy(
+                    qa_schema_completion_normalizer
+                )
+            }
+            if qa_schema_completion_normalizer.get(
+                "stage64_qa_schema_completion_normalizer_used"
+            )
+            else {}
+        ),
+        **(
+            {
+                "stage64_temporal_state_update_option_reference_normalizer": copy.deepcopy(
+                    temporal_state_update_option_reference_normalizer
+                )
+            }
+            if temporal_state_update_option_reference_normalizer.get(
+                "stage64_temporal_state_update_option_reference_normalizer_used"
+            )
+            else {}
+        ),
+        **(
+            {
+                "stage64_count_number_duplicate_option_normalizer": copy.deepcopy(
+                    count_number_duplicate_option_normalizer
+                )
+            }
+            if count_number_duplicate_option_normalizer.get(
+                "stage64_count_number_duplicate_option_normalizer_used"
+            )
+            else {}
+        ),
+        **(
+            {
+                "stage64_comparison_number_duplicate_option_normalizer": copy.deepcopy(
+                    comparison_number_duplicate_option_normalizer
+                )
+            }
+            if comparison_number_duplicate_option_normalizer.get(
+                "stage64_comparison_number_duplicate_option_normalizer_used"
+            )
+            else {}
+        ),
         **_deps(hashes),
     }
+    semantic_issues = stage64_quality.semantic_quality_issues(
+        {
+            "qa": result,
+            "graph_update": graph_update,
+            "current_event_plan": current_event_plan,
+        }
+    )
+    if semantic_issues:
+        reasons = sorted({str(issue.get("reason") or "unknown") for issue in semantic_issues})
+        raise NativeGraphDialogueReject(
+            f"stage64 API QA semantic quality failed: {reasons}; details={semantic_issues[:4]}"
+        )
+    return result
 
 
 def build_qa_from_current_graph_and_alignment(
@@ -8122,6 +22703,386 @@ def build_qa_from_current_graph_and_alignment(
         except NativeGraphDialogueReject as exc:
             errors.append(f"{qtype}:{exc}")
     raise NativeGraphDialogueReject(f"QA-last failed for all question types: {errors}")
+
+
+def _stage64_frozen_qa_context_sha256(
+    current_event_plan: dict[str, Any],
+    graph_update: dict[str, Any],
+    current_alignment: dict[str, Any],
+    final_dialogue: dict[str, Any],
+    appended_dialogue_turns: list[dict[str, Any]],
+    hashes: dict[str, str],
+) -> str:
+    return _stage64_json_sha256(
+        {
+            "current_event_plan": current_event_plan,
+            "graph_update": graph_update,
+            "current_alignment": current_alignment,
+            "final_dialogue": final_dialogue,
+            "appended_dialogue_turns": appended_dialogue_turns,
+            "hashes": hashes,
+        }
+    )
+
+
+def build_stage64_qa_with_local_repairs(
+    *,
+    current_event_plan: dict[str, Any],
+    graph_update: dict[str, Any],
+    current_alignment: dict[str, Any],
+    initial_qa_proposal: dict[str, Any],
+    question_type: str,
+    rng: random.Random,
+    hashes: dict[str, str],
+    final_dialogue: dict[str, Any],
+    policy: dict[str, Any],
+    seed_row: dict[str, Any],
+    appended_dialogue_turns: list[dict[str, Any]],
+    api_args: argparse.Namespace,
+    max_repair_attempts: int = 3,
+    item_difficulty_target: str | None = None,
+    audit: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Build Stage64 QA while reusing one immutable graph/dialogue alignment."""
+
+    if not isinstance(initial_qa_proposal, dict):
+        raise NativeGraphDialogueReject(
+            "stage64 local QA repair requires an initial qa_proposal object"
+        )
+    try:
+        repair_limit = max(0, int(max_repair_attempts))
+    except (TypeError, ValueError):
+        repair_limit = 3
+    target_audit = audit if isinstance(audit, dict) else {}
+    target_audit.clear()
+    frozen_dependencies = copy.deepcopy(hashes)
+    frozen_context_sha256 = _stage64_frozen_qa_context_sha256(
+        current_event_plan,
+        graph_update,
+        current_alignment,
+        final_dialogue,
+        appended_dialogue_turns,
+        hashes,
+    )
+    target_audit.update(
+        {
+            "schema_version": STAGE64_QA_LOCAL_REPAIR_AUDIT_VERSION,
+            "max_repair_attempts": repair_limit,
+            "repair_attempt_count": 0,
+            "candidate_build_failure_count": 0,
+            "api_failure_count": 0,
+            "no_progress_same_sha_count": 0,
+            "repair_triggered": False,
+            "success": False,
+            "exhausted": False,
+            "nonrepairable_failure": False,
+            "initial_candidate_sha256": None,
+            "chosen_candidate_index": None,
+            "chosen_candidate_sha256": None,
+            "final_failure_reason": None,
+            "frozen_dependencies": frozen_dependencies,
+            "frozen_context_sha256": frozen_context_sha256,
+            "frozen_context_post_sha256": frozen_context_sha256,
+            "frozen_context_verified": True,
+            "candidate_history": [],
+            "repair_attempts": [],
+        }
+    )
+
+    def verify_frozen_context() -> None:
+        post_sha256 = _stage64_frozen_qa_context_sha256(
+            current_event_plan,
+            graph_update,
+            current_alignment,
+            final_dialogue,
+            appended_dialogue_turns,
+            hashes,
+        )
+        target_audit["frozen_context_post_sha256"] = post_sha256
+        target_audit["frozen_context_verified"] = (
+            post_sha256 == frozen_context_sha256 and hashes == frozen_dependencies
+        )
+        if target_audit["frozen_context_verified"] is not True:
+            target_audit["nonrepairable_failure"] = True
+            target_audit["final_failure_reason"] = (
+                "stage64 frozen QA dependencies mutated during local repair"
+            )
+            raise NativeGraphDialogueReject(
+                "stage64 frozen QA dependencies mutated during local repair"
+            )
+
+    def proposal_sha256(proposal: Any) -> str | None:
+        try:
+            return _stage64_json_sha256(proposal)
+        except (TypeError, ValueError):
+            return None
+
+    def append_candidate(
+        proposal: dict[str, Any],
+        *,
+        source: str,
+        repair_attempt: int | None,
+    ) -> tuple[int, str | None]:
+        candidate_index = len(target_audit["candidate_history"])
+        candidate_sha256 = proposal_sha256(proposal)
+        target_audit["candidate_history"].append(
+            {
+                "candidate_index": candidate_index,
+                "source": source,
+                "repair_attempt": repair_attempt,
+                "proposal_sha256": candidate_sha256,
+                "proposal": copy.deepcopy(proposal),
+                "build_attempts": [],
+            }
+        )
+        return candidate_index, candidate_sha256
+
+    candidate = copy.deepcopy(initial_qa_proposal)
+    candidate_index, candidate_sha256 = append_candidate(
+        candidate,
+        source="initial_final_qa",
+        repair_attempt=None,
+    )
+    target_audit["initial_candidate_sha256"] = candidate_sha256
+    repair_attempt_count = 0
+    build_attempt_count = 0
+    while True:
+        build_attempt_count += 1
+        build_record = {
+            "build_attempt": build_attempt_count,
+            "candidate_index": candidate_index,
+            "candidate_sha256": candidate_sha256,
+            "pass": False,
+            "repairable": False,
+            "failure_type": None,
+            "failure_reason": None,
+        }
+        try:
+            qa = build_qa_from_current_graph_and_alignment(
+                copy.deepcopy(current_event_plan),
+                copy.deepcopy(graph_update),
+                copy.deepcopy(current_alignment),
+                copy.deepcopy(candidate),
+                question_type,
+                rng,
+                copy.deepcopy(hashes),
+                copy.deepcopy(final_dialogue),
+                copy.deepcopy(policy),
+                seed_row=copy.deepcopy(seed_row),
+            )
+        except Exception as qa_exc:
+            verify_frozen_context()
+            repairable = _is_stage64_qa_repairable_error(qa_exc)
+            failure_reason = normalize_space(str(qa_exc)) or type(qa_exc).__name__
+            build_record.update(
+                {
+                    "repairable": repairable,
+                    "failure_type": type(qa_exc).__name__,
+                    "failure_reason": failure_reason,
+                }
+            )
+            target_audit["candidate_history"][candidate_index][
+                "build_attempts"
+            ].append(build_record)
+            target_audit["candidate_build_failure_count"] = int(
+                target_audit["candidate_build_failure_count"]
+            ) + 1
+            target_audit["final_failure_reason"] = failure_reason
+            if not repairable:
+                target_audit["nonrepairable_failure"] = True
+                raise
+            target_audit["repair_triggered"] = True
+            if repair_attempt_count >= repair_limit:
+                target_audit["exhausted"] = True
+                raise
+        else:
+            verify_frozen_context()
+            build_record["pass"] = True
+            target_audit["candidate_history"][candidate_index][
+                "build_attempts"
+            ].append(build_record)
+            target_audit.update(
+                {
+                    "success": True,
+                    "chosen_candidate_index": candidate_index,
+                    "chosen_candidate_sha256": candidate_sha256,
+                    "final_failure_reason": None,
+                }
+            )
+            return qa, copy.deepcopy(candidate)
+
+        repair_attempt_count += 1
+        target_audit["repair_attempt_count"] = repair_attempt_count
+        repair_record: dict[str, Any] = {
+            "repair_attempt": repair_attempt_count,
+            "source_candidate_index": candidate_index,
+            "source_candidate_sha256": candidate_sha256,
+            "failure_reason": target_audit["final_failure_reason"],
+            "frozen_dependencies": copy.deepcopy(frozen_dependencies),
+            "frozen_context_sha256": frozen_context_sha256,
+            "meta": {},
+            "payload": None,
+            "payload_sha256": None,
+            "proposal_sha256": None,
+            "candidate_replaced": False,
+            "no_progress_same_sha": False,
+            "candidate_index": None,
+        }
+        try:
+            repair_payload, repair_meta = call_api_stage64_qa_repair(
+                copy.deepcopy(current_event_plan),
+                copy.deepcopy(current_alignment),
+                copy.deepcopy(candidate),
+                copy.deepcopy(policy.get("stage64_target"))
+                if isinstance(policy.get("stage64_target"), dict)
+                else None,
+                str(target_audit["final_failure_reason"]),
+                copy.deepcopy(appended_dialogue_turns),
+                api_args,
+                item_difficulty_target=item_difficulty_target,
+                frozen_dependencies=copy.deepcopy(frozen_dependencies),
+            )
+        except Exception as repair_exc:
+            repair_record["meta"] = {
+                "used": False,
+                "error_type": type(repair_exc).__name__,
+                "error": str(repair_exc),
+            }
+            target_audit["repair_attempts"].append(repair_record)
+            target_audit["api_failure_count"] = int(
+                target_audit["api_failure_count"]
+            ) + 1
+            target_audit["final_failure_reason"] = (
+                normalize_space(str(repair_exc)) or type(repair_exc).__name__
+            )
+            target_audit["nonrepairable_failure"] = True
+            verify_frozen_context()
+            raise
+        repair_meta = repair_meta if isinstance(repair_meta, dict) else {}
+        repair_record["meta"] = copy.deepcopy(repair_meta)
+        repair_record["payload"] = copy.deepcopy(repair_payload)
+        repair_record["payload_sha256"] = proposal_sha256(repair_payload)
+        repaired_proposal = (
+            repair_payload.get("qa_proposal")
+            if isinstance(repair_payload, dict)
+            else None
+        )
+        if repair_meta.get("used") and isinstance(repaired_proposal, dict):
+            repaired_proposal_sha256 = proposal_sha256(repaired_proposal)
+            if (
+                repaired_proposal_sha256 is not None
+                and repaired_proposal_sha256 == candidate_sha256
+            ):
+                no_progress_reason = (
+                    "stage64 QA repair made no progress: proposal SHA unchanged"
+                )
+                repair_record.update(
+                    {
+                        "proposal_sha256": repaired_proposal_sha256,
+                        "candidate_replaced": False,
+                        "no_progress_same_sha": True,
+                        "candidate_index": candidate_index,
+                    }
+                )
+                target_audit["no_progress_same_sha_count"] = int(
+                    target_audit.get("no_progress_same_sha_count") or 0
+                ) + 1
+                target_audit["final_failure_reason"] = no_progress_reason
+                target_audit["nonrepairable_failure"] = True
+                target_audit["repair_attempts"].append(repair_record)
+                verify_frozen_context()
+                raise NativeGraphDialogueReject(no_progress_reason)
+            candidate = copy.deepcopy(repaired_proposal)
+            candidate_index, candidate_sha256 = append_candidate(
+                candidate,
+                source="qa_repair",
+                repair_attempt=repair_attempt_count,
+            )
+            repair_record.update(
+                {
+                    "proposal_sha256": candidate_sha256,
+                    "candidate_replaced": True,
+                    "candidate_index": candidate_index,
+                }
+            )
+        else:
+            target_audit["api_failure_count"] = int(
+                target_audit["api_failure_count"]
+            ) + 1
+        target_audit["repair_attempts"].append(repair_record)
+        verify_frozen_context()
+
+
+def _record_stage64_qa_local_repair_audit(
+    summary: dict[str, Any],
+    raw_record: dict[str, Any],
+    audit: dict[str, Any],
+) -> None:
+    if not isinstance(audit, dict) or not audit:
+        return
+    candidate_history = copy.deepcopy(audit.get("candidate_history") or [])
+    repair_attempts = copy.deepcopy(audit.get("repair_attempts") or [])
+    raw_record["stage64_qa_candidate_history"] = candidate_history
+    raw_record.setdefault("api_stage64_qa_repair_attempts", []).extend(
+        repair_attempts
+    )
+    raw_record["stage64_qa_local_repair_audit"] = {
+        key: copy.deepcopy(value)
+        for key, value in audit.items()
+        if key not in {"candidate_history", "repair_attempts"}
+    }
+    for repair_record in repair_attempts:
+        meta = (
+            repair_record.get("meta")
+            if isinstance(repair_record.get("meta"), dict)
+            else {}
+        )
+        _record_api_meta_retry_diagnostics(summary, meta)
+
+    repair_attempt_count = int(audit.get("repair_attempt_count") or 0)
+    candidate_build_failure_count = int(
+        audit.get("candidate_build_failure_count") or 0
+    )
+    api_failure_count = int(audit.get("api_failure_count") or 0)
+    no_progress_same_sha_count = int(
+        audit.get("no_progress_same_sha_count") or 0
+    )
+    summary["stage64_qa_repair_attempt_count"] += repair_attempt_count
+    summary[
+        "stage64_qa_repair_candidate_build_failure_count"
+    ] += candidate_build_failure_count
+    summary["stage64_qa_repair_api_failed_count"] += api_failure_count
+    summary[
+        "stage64_qa_repair_no_progress_same_sha_count"
+    ] += no_progress_same_sha_count
+    summary["stage64_qa_repair_candidate_count"] += len(candidate_history)
+    candidate_reason_counts = summary.setdefault(
+        "stage64_qa_repair_candidate_failure_reason", {}
+    )
+    for candidate_record in candidate_history:
+        for build_record in candidate_record.get("build_attempts") or []:
+            if not isinstance(build_record, dict) or build_record.get("pass") is True:
+                continue
+            reason = normalize_space(build_record.get("failure_reason"))
+            if reason:
+                reason = reason[:160]
+                candidate_reason_counts[reason] = int(
+                    candidate_reason_counts.get(reason) or 0
+                ) + 1
+
+    if audit.get("success") is True and repair_attempt_count > 0:
+        summary["stage64_qa_repair_success_count"] += 1
+        summary["stage64_qa_repair_saved_full_regeneration_count"] += 1
+    elif audit.get("repair_triggered") is True and audit.get("success") is not True:
+        summary["stage64_qa_repair_failed_count"] += 1
+        if audit.get("exhausted") is True:
+            summary["stage64_qa_repair_exhausted_count"] += 1
+        if audit.get("nonrepairable_failure") is True:
+            summary["stage64_qa_repair_nonrepairable_failure_count"] += 1
+        reason = normalize_space(audit.get("final_failure_reason")) or "unknown"
+        reason = reason[:160]
+        reason_counts = summary.setdefault("stage64_qa_repair_failure_reason", {})
+        reason_counts[reason] = int(reason_counts.get(reason) or 0) + 1
 
 
 def referenced_turn_ids_from_clean_row(row: dict[str, Any]) -> list[tuple[str, str]]:
@@ -8365,11 +23326,22 @@ def build_clean_sample(
     frontier_from_sample_name = seed_row.get("frontier_from_sample_name") or seed_provenance.get("frontier_from_sample_name")
     seed_source = seed_row.get("seed_source") if isinstance(seed_row.get("seed_source"), dict) else seed_provenance.get("seed_source")
     seed_payload = seed_row.get("seed") if isinstance(seed_row.get("seed"), dict) else seed_provenance.get("seed")
+    seed_metadata = seed_row.get("metadata") if isinstance(seed_row.get("metadata"), dict) else {}
+    lineage_group = normalize_space(
+        seed_row.get("lineage_group")
+        or seed_metadata.get("lineage_group")
+        or (seed_source or {}).get("lineage_group")
+        or (seed_source or {}).get("source_lineage_key")
+        or (seed_source or {}).get("parent_sample_id")
+        or seed_row.get("sample_id")
+    )
     sample = {
         "sample_id": sample_id,
         "expanded_graph_id": sample_id,
         "expanded_dialogue_id": f"{sample_id}_dialogue",
         "source_id": seed_row.get("sample_id") or seed_row.get("source_id"),
+        "parent_sample_id": seed_row.get("sample_id") or seed_row.get("source_id"),
+        "lineage_group": lineage_group,
         "generation_source": "current_method.native_challenger_generation.graph_conditioned_api_dialogue",
         "generation_backend": "native_current_method",
         "native_challenger_mode": "graph_conditioned_api_dialogue",
@@ -8403,6 +23375,8 @@ def build_clean_sample(
         "metadata": {
             "method": "current_method_graph_conditioned_api_dialogue",
             "source_seed_id": seed_row.get("sample_id") or seed_row.get("source_id"),
+            "parent_sample_id": seed_row.get("sample_id") or seed_row.get("source_id"),
+            "lineage_group": lineage_group,
             "graph_snapshot_id": current_event_plan.get("graph_snapshot_id"),
             "graph_snapshot_hash": hashes["graph_snapshot_hash"],
             "dialogue_hash": hashes["dialogue_hash"],
@@ -8431,6 +23405,11 @@ def build_clean_sample(
             {
                 "qa_operation": stage64_qa_operation,
                 "qa_subtype": qa.get("qa_subtype"),
+                **{
+                    field: copy.deepcopy(qa.get(field))
+                    for field in STAGE64_REASONING_TARGET_FIELDS
+                    if field in qa
+                },
                 "answer_type": qa.get("answer_type"),
                 "answer_format": qa.get("answer_format"),
                 "question_text": qa.get("question_text") or qa.get("question"),
@@ -8446,6 +23425,11 @@ def build_clean_sample(
                 "qa_operation_answer_type_diversification": True,
                 "qa_operation": stage64_qa_operation,
                 "qa_subtype": qa.get("qa_subtype"),
+                **{
+                    field: copy.deepcopy(qa.get(field))
+                    for field in STAGE64_REASONING_TARGET_FIELDS
+                    if field in qa
+                },
                 "answer_type": qa.get("answer_type"),
                 "answer_format": qa.get("answer_format"),
                 "qa_generated_by_api_stage64_schema": True,
@@ -8463,6 +23447,11 @@ def build_clean_sample(
                     "raw_qa_artifact",
                     "answer_type_mismatch",
                     "unanchored_distractor",
+                    *(
+                        ["max_time_only"]
+                        if qa.get("forbid_max_time_shortcut") is True
+                        else []
+                    ),
                 ],
             }
         )
@@ -8658,6 +23647,72 @@ def _empty_summary() -> dict[str, Any]:
         "full_regeneration_retry_count": 0,
         "deterministic_scaffold_alignment_count": 0,
         "deterministic_scaffold_alignment_success_count": 0,
+        "formal_mining_scaffold_reject_count": 0,
+        "formal_mining_api_native_dialogue_accept_count": 0,
+        "formal_mining_local_padding_accept_count": 0,
+        "formal_mining_segmented_dialogue_accept_count": 0,
+        "formal_mining_prefix_hash_chain_verified_count": 0,
+        "formal_mining_parent_context_schema_version": (
+            FORMAL_PARENT_CONTEXT_SCHEMA_VERSION
+        ),
+        "formal_mining_parent_prompt_audit_version": (
+            FORMAL_PARENT_PROMPT_AUDIT_VERSION
+        ),
+        "formal_mining_parent_prompt_audit_verified_count": 0,
+        "formal_mining_parent_verbatim_exposure_count_sum": 0,
+        "formal_mining_accepted_prefix_context_schema_version": (
+            FORMAL_ACCEPTED_PREFIX_CONTEXT_SCHEMA_VERSION
+        ),
+        "formal_mining_accepted_prefix_prompt_audit_version": (
+            FORMAL_ACCEPTED_PREFIX_PROMPT_AUDIT_VERSION
+        ),
+        "formal_mining_current_exact_claim_exemption_version": (
+            FORMAL_CURRENT_EXACT_CLAIM_EXEMPTION_VERSION
+        ),
+        "formal_mining_accepted_prefix_prompt_audit_verified_count": 0,
+        "formal_mining_accepted_prefix_verbatim_exposure_count_sum": 0,
+        "formal_mining_final_qa_after_frozen_alignment_count": 0,
+        "formal_mining_marker_scheduler_verified_count": 0,
+        "formal_mining_exact_claim_preflight_verified_count": 0,
+        "formal_mining_turn_duplicate_audit_version": (
+            FORMAL_SEGMENT_TURN_DUPLICATE_AUDIT_VERSION
+        ),
+        "formal_mining_turn_duplicate_audit_verified_count": 0,
+        "formal_mining_turn_duplicate_audited_turn_count_sum": 0,
+        "formal_mining_turn_duplicate_exact_pair_count_sum": 0,
+        "formal_mining_turn_duplicate_near_pair_count_sum": 0,
+        "formal_mining_turn_duplicate_phrase_pair_count_sum": 0,
+        "formal_mining_opening_diversity_audit_version": (
+            FORMAL_SEGMENT_OPENING_DIVERSITY_AUDIT_VERSION
+        ),
+        "formal_mining_opening_diversity_audit_verified_count": 0,
+        "formal_mining_opening_diversity_audited_turn_count_sum": 0,
+        "formal_mining_opening_diversity_short_body_count_sum": 0,
+        "formal_mining_opening_diversity_concentrated_prefix_count_sum": 0,
+        "formal_segment_opening_concentration_reject_count": 0,
+        "formal_segment_opening_segment_scope_reject_count": 0,
+        "formal_segment_opening_cumulative_scope_reject_count": 0,
+        "formal_segment_opening_rejected_prefix_count": 0,
+        "formal_segment_exact_duplicate_reject_count": 0,
+        "formal_segment_near_duplicate_reject_count": 0,
+        "formal_segment_phrase_containment_reject_count": 0,
+        "formal_segment_exact_duplicate_pair_reject_count": 0,
+        "formal_segment_near_duplicate_pair_reject_count": 0,
+        "formal_segment_phrase_containment_pair_reject_count": 0,
+        "formal_dialogue_retry_temperature_override_count": 0,
+        "formal_dialogue_diversity_temperature_override_count": 0,
+        "formal_dialogue_structural_temperature_override_count": 0,
+        "formal_dialogue_structural_retry_reason_counts": {},
+        "formal_dialogue_late_local_retry_count": 0,
+        "formal_dialogue_forbidden_opening_prefix_count_max": 0,
+        "formal_mining_marker_assignment_segment_count_sum": 0,
+        "formal_mining_marker_max_assigned_per_segment": 0,
+        "evidence_dispersion_reject_count": 0,
+        "evidence_dispersion_failure_reason": {},
+        "evidence_dispersion_pass_count": 0,
+        "evidence_dispersion_span_turns_sum": 0,
+        "evidence_dispersion_max_consecutive_run_sum": 0,
+        "evidence_dispersion_tail_concentration_sum": 0.0,
         "seed_source_null_count": 0,
         "seed_source_inferred_count": 0,
         "train_seed_allowed_count": 0,
@@ -8686,11 +23741,49 @@ def _empty_summary() -> dict[str, Any]:
         "by_qa_operation": {},
         "by_answer_type": {},
         "stage64_api_qa_schema_pass_count": 0,
+        "stage64_query_plan_completion_normalizer_used_count": 0,
+        "stage64_query_plan_completion_normalizer_completed_field_count": 0,
+        "stage64_query_plan_completion_normalizer_completed_field_counts": {},
+        "stage64_query_plan_completion_normalizer_by_operation": {},
+        "stage64_query_plan_completion_normalizer_contract_type_counts": {},
+        "stage64_query_plan_completion_question_validated_count": 0,
+        "stage64_query_plan_completion_options_validated_count": 0,
+        "stage64_query_plan_completion_gold_validated_count": 0,
+        "stage64_query_plan_completion_anchor_refs_validated_count": 0,
+        "stage64_qa_schema_completion_normalizer_used_count": 0,
+        "stage64_qa_schema_completion_normalizer_completed_field_count": 0,
+        "stage64_qa_schema_completion_normalizer_completed_field_counts": {},
+        "stage64_qa_schema_completion_normalizer_overwritten_field_count": 0,
+        "stage64_qa_schema_completion_normalizer_overwritten_field_counts": {},
+        "stage64_qa_schema_completion_question_alias_completed_count": 0,
+        "stage64_qa_schema_completion_question_type_answer_type_confusion_repaired_count": 0,
+        "stage64_temporal_state_update_option_reference_normalizer_used_count": 0,
+        "stage64_temporal_state_update_gold_label_reconciled_count": 0,
+        "stage64_temporal_state_update_gold_answer_text_completed_count": 0,
+        "stage64_temporal_state_update_option_reference_normalizer_rewritten_option_count": 0,
+        "stage64_temporal_state_update_option_reference_normalizer_synchronized_reference_field_count": 0,
+        "stage64_count_number_duplicate_option_normalizer_used_count": 0,
+        "stage64_count_number_duplicate_option_normalizer_rewritten_option_count": 0,
+        "stage64_comparison_number_duplicate_option_normalizer_used_count": 0,
+        "stage64_comparison_number_duplicate_option_normalizer_rewritten_option_count": 0,
+        "stage64_final_qa_attempt_count": 0,
+        "stage64_final_qa_success_count": 0,
+        "stage64_final_qa_failed_count": 0,
         "stage64_qa_repair_attempt_count": 0,
         "stage64_qa_repair_success_count": 0,
         "stage64_qa_repair_failed_count": 0,
         "stage64_qa_repair_saved_full_regeneration_count": 0,
+        "stage64_qa_repair_max_attempts": 0,
+        "stage64_qa_repair_candidate_count": 0,
+        "stage64_qa_repair_candidate_build_failure_count": 0,
+        "stage64_qa_repair_api_failed_count": 0,
+        "stage64_qa_repair_no_progress_same_sha_count": 0,
+        "stage64_qa_repair_exhausted_count": 0,
+        "stage64_qa_repair_nonrepairable_failure_count": 0,
         "stage64_qa_repair_failure_reason": {},
+        "stage64_qa_repair_candidate_failure_reason": {},
+        "distribution_cap_reject_count": 0,
+        "distribution_cap_reject_reason_counts": {},
         "api_failure_count": 0,
         "challenger_api_used": True,
         "old_gate_generate_samples_called": False,
@@ -8709,6 +23802,96 @@ def _update_summary_for_accept(summary: dict[str, Any], sample: dict[str, Any], 
     summary["contradiction_count"] += int(alignment_result.get("contradiction_count") or 0)
     summary["alignment_coverage_pass_count"] += 1 if alignment_result.get("coverage_pass") is True else 0
     summary["anchor_leakage_count"] += int(alignment_result.get("anchor_leakage_count") or 0)
+    metadata = sample.get("metadata") if isinstance(sample.get("metadata"), dict) else {}
+    summary["formal_mining_api_native_dialogue_accept_count"] += int(
+        metadata.get("formal_mining_api_native_dialogue_only") is True
+    )
+    summary["formal_mining_local_padding_accept_count"] += int(
+        metadata.get("dialogue_local_padding_used") is True
+    )
+    native_contract = sample.get("native_contract") if isinstance(sample.get("native_contract"), dict) else {}
+    summary["formal_mining_segmented_dialogue_accept_count"] += int(
+        native_contract.get("formal_mining_segmented_dialogue") is True
+    )
+    summary["formal_mining_prefix_hash_chain_verified_count"] += int(
+        native_contract.get("formal_mining_prefix_hash_chain_verified") is True
+    )
+    summary["formal_mining_parent_prompt_audit_verified_count"] += int(
+        native_contract.get("formal_mining_parent_prompt_audit_verified") is True
+    )
+    summary["formal_mining_parent_verbatim_exposure_count_sum"] += int(
+        native_contract.get("formal_mining_parent_verbatim_exposure_count") or 0
+    )
+    summary["formal_mining_accepted_prefix_prompt_audit_verified_count"] += int(
+        native_contract.get(
+            "formal_mining_accepted_prefix_prompt_audit_verified"
+        )
+        is True
+    )
+    summary["formal_mining_accepted_prefix_verbatim_exposure_count_sum"] += int(
+        native_contract.get(
+            "formal_mining_accepted_prefix_verbatim_exposure_count"
+        )
+        or 0
+    )
+    summary["formal_mining_final_qa_after_frozen_alignment_count"] += int(
+        native_contract.get("formal_mining_qa_generated_after_frozen_alignment") is True
+    )
+    summary["formal_mining_marker_scheduler_verified_count"] += int(
+        native_contract.get("formal_mining_marker_scheduler_verified") is True
+    )
+    summary["formal_mining_exact_claim_preflight_verified_count"] += int(
+        native_contract.get("formal_mining_exact_claim_preflight_verified") is True
+    )
+    summary["formal_mining_turn_duplicate_audit_verified_count"] += int(
+        native_contract.get("formal_mining_turn_duplicate_audit_verified") is True
+    )
+    summary["formal_mining_turn_duplicate_audited_turn_count_sum"] += int(
+        native_contract.get("formal_mining_turn_duplicate_audited_turn_count") or 0
+    )
+    summary["formal_mining_turn_duplicate_exact_pair_count_sum"] += int(
+        native_contract.get("formal_mining_turn_duplicate_exact_pair_count") or 0
+    )
+    summary["formal_mining_turn_duplicate_near_pair_count_sum"] += int(
+        native_contract.get("formal_mining_turn_duplicate_near_pair_count") or 0
+    )
+    summary["formal_mining_turn_duplicate_phrase_pair_count_sum"] += int(
+        native_contract.get("formal_mining_turn_duplicate_phrase_pair_count") or 0
+    )
+    summary["formal_mining_opening_diversity_audit_verified_count"] += int(
+        native_contract.get("formal_mining_opening_diversity_audit_verified") is True
+    )
+    summary["formal_mining_opening_diversity_audited_turn_count_sum"] += int(
+        native_contract.get("formal_mining_opening_diversity_audited_turn_count") or 0
+    )
+    summary["formal_mining_opening_diversity_short_body_count_sum"] += int(
+        native_contract.get("formal_mining_opening_diversity_short_body_count") or 0
+    )
+    summary[
+        "formal_mining_opening_diversity_concentrated_prefix_count_sum"
+    ] += int(
+        native_contract.get(
+            "formal_mining_opening_diversity_concentrated_prefix_count"
+        )
+        or 0
+    )
+    summary["formal_mining_marker_assignment_segment_count_sum"] += int(
+        native_contract.get("formal_mining_marker_assignment_segment_count") or 0
+    )
+    summary["formal_mining_marker_max_assigned_per_segment"] = max(
+        int(summary.get("formal_mining_marker_max_assigned_per_segment") or 0),
+        int(native_contract.get("formal_mining_marker_max_assigned_per_segment") or 0),
+    )
+    evidence_dispersion = alignment_result.get("evidence_dispersion") if isinstance(alignment_result.get("evidence_dispersion"), dict) else {}
+    if evidence_dispersion:
+        summary["evidence_dispersion_pass_count"] += int(evidence_dispersion.get("pass") is True)
+        summary["evidence_dispersion_span_turns_sum"] += int(evidence_dispersion.get("evidence_span_turns") or 0)
+        summary["evidence_dispersion_max_consecutive_run_sum"] += int(
+            evidence_dispersion.get("max_consecutive_evidence_run") or 0
+        )
+        summary["evidence_dispersion_tail_concentration_sum"] += float(
+            evidence_dispersion.get("tail_concentration") or 0.0
+        )
     summary["qa_generated_after_alignment_count"] += 1
     qa = sample.get("qa") if isinstance(sample.get("qa"), dict) else {}
     qtype = str(qa.get("question_type") or "unknown")
@@ -8726,6 +23909,203 @@ def _update_summary_for_accept(summary: dict[str, Any], sample: dict[str, Any], 
         summary["by_answer_type"][atype] = int(summary["by_answer_type"].get(atype, 0)) + 1
         if qa.get("stage64_api_qa_schema_pass"):
             summary["stage64_api_qa_schema_pass_count"] += 1
+        query_plan_completion_normalizer = (
+            qa.get("stage64_query_plan_completion_normalizer")
+            if isinstance(
+                qa.get("stage64_query_plan_completion_normalizer"), dict
+            )
+            else {}
+        )
+        if query_plan_completion_normalizer.get(
+            "stage64_query_plan_completion_normalizer_used"
+        ):
+            summary[
+                "stage64_query_plan_completion_normalizer_used_count"
+            ] += 1
+            completed_fields = list(
+                query_plan_completion_normalizer.get("completed_fields") or []
+            )
+            summary[
+                "stage64_query_plan_completion_normalizer_completed_field_count"
+            ] += len(completed_fields)
+            field_counts = summary[
+                "stage64_query_plan_completion_normalizer_completed_field_counts"
+            ]
+            for field in completed_fields:
+                field_counts[field] = int(field_counts.get(field) or 0) + 1
+            completed_operation = normalize_space(
+                query_plan_completion_normalizer.get("operation")
+            ) or "unknown"
+            operation_counts = summary[
+                "stage64_query_plan_completion_normalizer_by_operation"
+            ]
+            operation_counts[completed_operation] = int(
+                operation_counts.get(completed_operation) or 0
+            ) + 1
+            contract_type = normalize_space(
+                query_plan_completion_normalizer.get(
+                    "contract_schema_version"
+                )
+            ) or "unknown"
+            contract_counts = summary[
+                "stage64_query_plan_completion_normalizer_contract_type_counts"
+            ]
+            contract_counts[contract_type] = int(
+                contract_counts.get(contract_type) or 0
+            ) + 1
+            completion_evidence = (
+                query_plan_completion_normalizer.get("completion_evidence")
+                if isinstance(
+                    query_plan_completion_normalizer.get(
+                        "completion_evidence"
+                    ),
+                    dict,
+                )
+                else {}
+            )
+            for evidence_field, summary_field in (
+                (
+                    "question_validated",
+                    "stage64_query_plan_completion_question_validated_count",
+                ),
+                (
+                    "options_validated",
+                    "stage64_query_plan_completion_options_validated_count",
+                ),
+                (
+                    "gold_validated",
+                    "stage64_query_plan_completion_gold_validated_count",
+                ),
+                (
+                    "anchor_refs_validated",
+                    "stage64_query_plan_completion_anchor_refs_validated_count",
+                ),
+            ):
+                summary[summary_field] += int(
+                    completion_evidence.get(evidence_field) is True
+                )
+        qa_schema_completion_normalizer = (
+            qa.get("stage64_qa_schema_completion_normalizer")
+            if isinstance(qa.get("stage64_qa_schema_completion_normalizer"), dict)
+            else {}
+        )
+        if qa_schema_completion_normalizer.get(
+            "stage64_qa_schema_completion_normalizer_used"
+        ):
+            summary[
+                "stage64_qa_schema_completion_normalizer_used_count"
+            ] += 1
+            completed_fields = list(
+                qa_schema_completion_normalizer.get("completed_fields") or []
+            )
+            summary[
+                "stage64_qa_schema_completion_normalizer_completed_field_count"
+            ] += len(completed_fields)
+            field_counts = summary[
+                "stage64_qa_schema_completion_normalizer_completed_field_counts"
+            ]
+            for field in completed_fields:
+                field_counts[field] = int(field_counts.get(field) or 0) + 1
+            overwritten_fields = list(
+                qa_schema_completion_normalizer.get("overwritten_fields") or []
+            )
+            summary[
+                "stage64_qa_schema_completion_normalizer_overwritten_field_count"
+            ] += len(overwritten_fields)
+            overwritten_field_counts = summary[
+                "stage64_qa_schema_completion_normalizer_overwritten_field_counts"
+            ]
+            for field in overwritten_fields:
+                overwritten_field_counts[field] = int(
+                    overwritten_field_counts.get(field) or 0
+                ) + 1
+            summary[
+                "stage64_qa_schema_completion_question_alias_completed_count"
+            ] += int(
+                normalize_space(
+                    qa_schema_completion_normalizer.get(
+                        "question_alias_completed_field"
+                    )
+                )
+                in {"question", "question_text"}
+            )
+            summary[
+                "stage64_qa_schema_completion_question_type_answer_type_confusion_repaired_count"
+            ] += int(
+                qa_schema_completion_normalizer.get(
+                    "question_type_answer_type_confusion_repaired"
+                )
+                is True
+            )
+        temporal_option_reference_normalizer = (
+            qa.get("stage64_temporal_state_update_option_reference_normalizer")
+            if isinstance(
+                qa.get("stage64_temporal_state_update_option_reference_normalizer"),
+                dict,
+            )
+            else {}
+        )
+        if temporal_option_reference_normalizer.get(
+            "stage64_temporal_state_update_option_reference_normalizer_used"
+        ):
+            summary[
+                "stage64_temporal_state_update_option_reference_normalizer_used_count"
+            ] += 1
+            summary[
+                "stage64_temporal_state_update_gold_label_reconciled_count"
+            ] += int(
+                temporal_option_reference_normalizer.get("gold_label_reconciled")
+                is True
+            )
+            summary[
+                "stage64_temporal_state_update_gold_answer_text_completed_count"
+            ] += int(
+                temporal_option_reference_normalizer.get("gold_answer_text_completed")
+                is True
+            )
+            summary[
+                "stage64_temporal_state_update_option_reference_normalizer_rewritten_option_count"
+            ] += len(
+                temporal_option_reference_normalizer.get("rewritten_option_labels")
+                or []
+            )
+            summary[
+                "stage64_temporal_state_update_option_reference_normalizer_synchronized_reference_field_count"
+            ] += len(
+                temporal_option_reference_normalizer.get(
+                    "synchronized_reference_fields"
+                )
+                or []
+            )
+        count_option_normalizer = (
+            qa.get("stage64_count_number_duplicate_option_normalizer")
+            if isinstance(qa.get("stage64_count_number_duplicate_option_normalizer"), dict)
+            else {}
+        )
+        if count_option_normalizer.get(
+            "stage64_count_number_duplicate_option_normalizer_used"
+        ):
+            summary["stage64_count_number_duplicate_option_normalizer_used_count"] += 1
+            summary[
+                "stage64_count_number_duplicate_option_normalizer_rewritten_option_count"
+            ] += len(count_option_normalizer.get("rewritten_option_labels") or [])
+        comparison_option_normalizer = (
+            qa.get("stage64_comparison_number_duplicate_option_normalizer")
+            if isinstance(
+                qa.get("stage64_comparison_number_duplicate_option_normalizer"),
+                dict,
+            )
+            else {}
+        )
+        if comparison_option_normalizer.get(
+            "stage64_comparison_number_duplicate_option_normalizer_used"
+        ):
+            summary[
+                "stage64_comparison_number_duplicate_option_normalizer_used_count"
+            ] += 1
+            summary[
+                "stage64_comparison_number_duplicate_option_normalizer_rewritten_option_count"
+            ] += len(comparison_option_normalizer.get("rewritten_option_labels") or [])
     difficulty_subtype = str(sample.get("difficulty_subtype") or qa.get("difficulty_subtype") or "unknown")
     hard_template = str(sample.get("hard_single_choice_template") or qa.get("hard_single_choice_template") or "unknown")
     summary.setdefault("by_difficulty_subtype", {})
@@ -8942,6 +24322,12 @@ def _length_summary_from_samples(samples: list[dict[str, Any]]) -> dict[str, Any
         < target_delta
     )
     fallback_accept_count = sum(1 for meta in metadata_rows if meta.get("length_guard_fallback_used") is True)
+    api_native_dialogue_count = sum(
+        1 for meta in metadata_rows if meta.get("formal_mining_api_native_dialogue_only") is True
+    )
+    local_padding_accept_count = sum(
+        1 for meta in metadata_rows if meta.get("dialogue_local_padding_used") is True
+    )
     return {
         "parent_dialogue_source_counts": dict(
             Counter(str(meta.get("parent_dialogue_source") or "unknown") for meta in metadata_rows).most_common()
@@ -8977,6 +24363,8 @@ def _length_summary_from_samples(samples: list[dict[str, Any]]) -> dict[str, Any
         "length_guard_target_delta": target_delta,
         "length_guard_fallback_used": fallback_accept_count > 0,
         "length_guard_fallback_accept_count": fallback_accept_count,
+        "formal_mining_api_native_dialogue_accept_count": api_native_dialogue_count,
+        "formal_mining_local_padding_accept_count": local_padding_accept_count,
         "fallback_delta": max(
             [int(meta.get("fallback_delta") or 0) for meta in metadata_rows if isinstance(meta.get("fallback_delta"), (int, float))]
             or [0]
@@ -9063,6 +24451,11 @@ def _write_generation_files(
     rejects: list[dict[str, Any]],
     summary: dict[str, Any],
 ) -> None:
+    summary["audit_marked_sample_count"] = len(marked_samples)
+    summary["audit_raw_record_count"] = len(raw_records)
+    summary["audit_reject_count"] = len(rejects)
+    summary["audit_accepted_raw_record_count"] = sum(1 for row in raw_records if row.get("accepted") is True)
+    summary["audit_rejected_raw_record_count"] = sum(1 for row in raw_records if row.get("accepted") is False)
     clean_meta_ok_samples = [sample for sample in clean_samples if assert_no_meta_leakage(sample)[0]]
     valid_samples = [sample for sample in clean_meta_ok_samples if base.base_valid(sample)]
     solver_clean_samples = [sample for sample in clean_meta_ok_samples if base.is_clean(sample)]
@@ -9110,17 +24503,15 @@ def generate_graph_conditioned_api_dialogue_samples(
     # ---- resume: recover already-accepted clean samples so a re-run continues instead of
     # regenerating from scratch. The partial file is the crash-safe append log; if it is
     # missing/empty we fall back to a completed samples.jsonl from a prior finished run.
-    # Resume only restores the ACCEPTED clean set (the downstream contract). The paired
-    # marked/raw artifacts are append-only and are NOT replayed for recovered samples; we
-    # rewrite them at the end from whatever this process produced plus the recovered clean set.
+    # Accepted rows come from the crash-safe partial log. Existing audit artifacts are loaded
+    # separately below and preserved as historical records; missing accepted audits stay missing
+    # and are diagnosed rather than reconstructed.
     partial_path = Path(partial_samples) if partial_samples else output / "samples.partial.jsonl"
     resumed_clean_samples: list[dict[str, Any]] = []
     if not no_resume:
         resumed_clean_samples = read_jsonl_if_exists(partial_path)
         if not resumed_clean_samples:
             resumed_clean_samples = read_jsonl_if_exists(output / "samples.jsonl")
-        if len(resumed_clean_samples) > n_samples:
-            resumed_clean_samples = resumed_clean_samples[:n_samples]
 
     # Propagate the opt-in curriculum mode from api_args onto the policy so the downstream
     # choose_question_type / choose_attack_skill / event-count / length helpers can see it
@@ -9165,6 +24556,13 @@ def generate_graph_conditioned_api_dialogue_samples(
             base_policy["boundary_aware_qa_repair_attempts"] = int(getattr(api_args, "boundary_aware_qa_repair_attempts", 2) or 0)
         except (TypeError, ValueError):
             base_policy["boundary_aware_qa_repair_attempts"] = 2
+    try:
+        stage64_qa_repair_max_attempts = max(
+            0,
+            int(getattr(api_args, "stage64_qa_repair_attempts", 3)),
+        )
+    except (TypeError, ValueError):
+        stage64_qa_repair_max_attempts = 3
     summary = _empty_summary()
     summary["native_curriculum_mode"] = curriculum_mode or "default"
     summary["chained_qa_dependency_targeting"] = bool(base_policy.get("chained_qa_dependency_targeting"))
@@ -9174,14 +24572,70 @@ def generate_graph_conditioned_api_dialogue_samples(
     summary["qa_operation_answer_type_diversification"] = bool(
         base_policy.get("qa_operation_answer_type_diversification")
     )
-    if base_policy.get("qa_operation_answer_type_diversification"):
-        summary["stage64_target_operation_counts"] = dict(
-            Counter(_stage64_target_for_slot(slot, n_samples)["qa_operation"] for slot in range(max(0, n_samples)))
+    formal_stage64_mode = bool(
+        base_policy.get("qa_operation_answer_type_diversification")
+    )
+    stage64_canonical_targets: list[dict[str, Any]] = []
+    if formal_stage64_mode:
+        stage3_operation_plan = (
+            base_policy.get("stage3_operation_plan")
+            if isinstance(base_policy.get("stage3_operation_plan"), dict)
+            else {}
         )
+        operation_shares = (
+            stage3_operation_plan.get("operation_shares")
+            if isinstance(stage3_operation_plan.get("operation_shares"), dict)
+            else None
+        )
+        answer_type_shares = (
+            stage3_operation_plan.get("answer_type_shares_by_operation")
+            if isinstance(stage3_operation_plan.get("answer_type_shares_by_operation"), dict)
+            else None
+        )
+        stage64_canonical_targets = _build_stage64_canonical_targets(
+            n_samples,
+            operation_shares,
+            answer_type_shares,
+        )
+        summary["stage64_target_operation_counts"] = dict(
+            Counter(
+                record["stage64_target"]["qa_operation"]
+                for record in stage64_canonical_targets
+            )
+        )
+        for field, summary_key in (
+            ("reasoning_subtype", "stage64_target_reasoning_subtype_counts"),
+            ("reasoning_template", "stage64_target_reasoning_template_counts"),
+            ("hop_count", "stage64_target_hop_count_counts"),
+            (
+                "hard_negative_strategy",
+                "stage64_target_hard_negative_strategy_counts",
+            ),
+        ):
+            summary[summary_key] = dict(
+                sorted(
+                    Counter(
+                        str(record["stage64_target"].get(field) or "unknown")
+                        for record in stage64_canonical_targets
+                    ).items()
+                )
+            )
+        summary["stage64_target_plan_sha256"] = (
+            stage64_canonical_targets[0]["target_plan_sha256"]
+            if stage64_canonical_targets
+            else None
+        )
+        summary["stage64_target_identity_schema_version"] = (
+            STAGE64_TARGET_IDENTITY_VERSION
+        )
+        summary["stage3_operation_controller_plan_used"] = bool(operation_shares)
     summary["boundary_item_difficulty_target"] = base_policy.get("item_difficulty_target")
     summary["deterministic_permission_hard_negatives"] = bool(base_policy.get("deterministic_permission_hard_negatives"))
     summary["boundary_aware_qa_repair"] = bool(base_policy.get("boundary_aware_qa_repair"))
     summary["boundary_aware_qa_repair_attempts"] = int(base_policy.get("boundary_aware_qa_repair_attempts") or 0)
+    summary["stage64_qa_repair_max_attempts"] = (
+        stage64_qa_repair_max_attempts
+    )
     summary["api_yield_normalizers"] = bool(getattr(api_args, "api_yield_normalizers", False))
     summary["graph_cache_enabled"] = bool(getattr(api_args, "graph_proposal_cache", False))
     summary["query_conditioned_graph_expansion"] = bool(base_policy.get("query_conditioned_graph_expansion"))
@@ -9232,8 +24686,24 @@ def generate_graph_conditioned_api_dialogue_samples(
     # never reject BELOW what the deterministic plan itself asked for, otherwise the plan and the
     # cap contradict each other and the run deadlocks (e.g. plan wants 13 single_choice but a flat
     # 40% cap rejects after 8). So the effective per-type cap = max(global 40% cap, planned quota).
-    _global_qtype_cap = int(round(EASY_V2_MAX_QUESTION_TYPE_SHARE * n_samples)) if curriculum_mode == EASY_V2_MODE else None
-    _global_skill_cap = int(round(EASY_V2_MAX_ATTACK_SKILL_SHARE * n_samples)) if curriculum_mode == EASY_V2_MODE else None
+    legacy_easy_v2_caps_enabled = _legacy_easy_v2_caps_enabled(
+        curriculum_mode,
+        formal_stage64_mode,
+    )
+    summary["easy_v2_legacy_caps_enabled"] = legacy_easy_v2_caps_enabled
+    summary["formal_stage64_legacy_caps_enabled"] = bool(
+        formal_stage64_mode and legacy_easy_v2_caps_enabled
+    )
+    _global_qtype_cap = (
+        int(round(EASY_V2_MAX_QUESTION_TYPE_SHARE * n_samples))
+        if legacy_easy_v2_caps_enabled
+        else None
+    )
+    _global_skill_cap = (
+        int(round(EASY_V2_MAX_ATTACK_SKILL_SHARE * n_samples))
+        if legacy_easy_v2_caps_enabled
+        else None
+    )
     _planned_quota = dict(quota_scheduler.qtype_quota) if quota_scheduler is not None else {}
     # Planned per-skill demand: simulate the scheduler's full plan so the skill cap knows how many
     # of each skill the deterministic plan actually intends. Without this, a flat 40% skill cap
@@ -9265,14 +24735,51 @@ def generate_graph_conditioned_api_dialogue_samples(
     accepted_skill_counts: Counter[str] = Counter()
     planned_cell_log: list[dict[str, Any]] = []
     clean_samples: list[dict[str, Any]] = []
-    marked_samples: list[dict[str, Any]] = []
-    raw_records: list[dict[str, Any]] = []
-    rejects: list[dict[str, Any]] = []
+    if len(resumed_clean_samples) > n_samples:
+        if formal_stage64_mode:
+            raise RuntimeError(
+                "formal Stage64 resume contains more accepted samples than the canonical target plan"
+            )
+        resumed_clean_samples = resumed_clean_samples[:n_samples]
+    stage64_target_ledger = (
+        _Stage64TargetLedger(stage64_canonical_targets, resumed_clean_samples)
+        if formal_stage64_mode
+        else None
+    )
+    if not no_resume:
+        marked_samples, raw_records, rejects, resume_audit_diagnostics = _load_resume_audit_artifacts(
+            output,
+            resumed_clean_samples,
+        )
+    else:
+        marked_samples, raw_records, rejects = [], [], []
+        resume_audit_diagnostics = {
+            "resume_marked_file_row_count": 0,
+            "resume_marked_file_invalid_row_count": 0,
+            "resume_validated_file_row_count": 0,
+            "resume_validated_file_invalid_row_count": 0,
+            "resume_marked_loaded_count": 0,
+            "resume_marked_duplicate_row_count": 0,
+            "resume_raw_file_row_count": 0,
+            "resume_raw_file_invalid_row_count": 0,
+            "resume_raw_loaded_count": 0,
+            "resume_raw_duplicate_row_count": 0,
+            "resume_reject_file_row_count": 0,
+            "resume_reject_file_invalid_row_count": 0,
+            "resume_reject_loaded_count": 0,
+            "resume_reject_duplicate_row_count": 0,
+            "resume_clean_without_marked_count": 0,
+            "resume_clean_without_accepted_raw_count": 0,
+            "resume_marked_without_clean_count": 0,
+            "resume_accepted_raw_without_clean_count": 0,
+            "resume_audit_reconstructed_count": 0,
+        }
+    marked_audit_keys = {_audit_record_key(row, "marked") for row in marked_samples}
+    raw_audit_keys = {_audit_record_key(row, "raw") for row in raw_records}
+    reject_audit_keys = {_audit_record_key(row, "reject") for row in rejects}
 
     # Resume: seed runtime state from recovered accepted samples so generation continues from
     # where a prior (possibly interrupted) run stopped instead of regenerating from scratch.
-    # The marked/raw/reject diagnostic artifacts are NOT replayed for recovered samples (they
-    # have no downstream consumer); they are rebuilt at the end from this process's own records.
     if resumed_clean_samples:
         clean_samples.extend(resumed_clean_samples)
         for _recovered in resumed_clean_samples:
@@ -9280,12 +24787,15 @@ def generate_graph_conditioned_api_dialogue_samples(
             _sk = str(_recovered.get("attack_skill") or "unknown")
             accepted_qtype_counts[_q] += 1
             accepted_skill_counts[_sk] += 1
-        # Advance the deterministic scheduler's round-robin state past the recovered slots so the
-        # remaining slots keep the planned skill/hardness rotation. qtype is a pure function of the
-        # slot index, so resuming the driver at slot=len(clean_samples) keeps the qtype quota
-        # exactly aligned regardless of rr replay.
+        # Replay scheduler state through every prior physical generation slot. Formal Stage64
+        # persists those slots explicitly; legacy mode retains its historical count-based resume.
         if quota_scheduler is not None:
-            for _i in range(len(resumed_clean_samples)):
+            replay_count = (
+                stage64_target_ledger.next_generation_slot
+                if stage64_target_ledger is not None
+                else len(resumed_clean_samples)
+            )
+            for _i in range(replay_count):
                 quota_scheduler.plan_for_index(_i)
     # Normalize the crash-safe partial log to the current accepted set so subsequent per-accept
     # appends stay consistent whether we recovered from the partial file, fell back to a finished
@@ -9300,10 +24810,28 @@ def generate_graph_conditioned_api_dialogue_samples(
     summary["resume_target_count"] = resume_target_count
     summary["resume_remaining_count"] = resume_remaining_count
     summary["resume_no_resume_flag"] = bool(no_resume)
+    summary["stage64_resume_accepted_target_count"] = (
+        len(stage64_target_ledger.accepted_target_indices)
+        if stage64_target_ledger is not None
+        else 0
+    )
+    summary["stage64_resume_pending_target_count"] = (
+        len(stage64_target_ledger.pending_target_indices)
+        if stage64_target_ledger is not None
+        else 0
+    )
+    summary.update(resume_audit_diagnostics)
     logging.info(
         "graph_conditioned_api_dialogue resume: resume_loaded_count=%d resume_target_count=%d "
-        "resume_remaining_count=%d no_resume=%s partial_path=%s",
-        resume_loaded_count, resume_target_count, resume_remaining_count, no_resume, partial_path,
+        "resume_remaining_count=%d marked=%d raw=%d rejects=%d no_resume=%s partial_path=%s",
+        resume_loaded_count,
+        resume_target_count,
+        resume_remaining_count,
+        len(marked_samples),
+        len(raw_records),
+        len(rejects),
+        no_resume,
+        partial_path,
     )
 
     max_api_failures = int(getattr(api_args, "max_api_failures", 50))
@@ -9366,15 +24894,45 @@ def generate_graph_conditioned_api_dialogue_samples(
     # Worker: produce ONE sample attempt as a pure function (no shared-state mutation).
     # It mutates only its OWN local summary copy and a per-sample rng/policy; the serial
     # collector merges the returned delta. This makes sample-level concurrency race-free.
-    def _attempt(attempt_no: int, sample_index: int, planned_cell: dict[str, str] | None) -> dict[str, Any]:
+    def _attempt(
+        attempt_no: int,
+        sample_index: int,
+        planned_cell: dict[str, str] | None,
+        stage64_target_record: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         summary = _empty_summary()  # local delta, merged serially by the collector
         rng = random.Random(rng_seed + 1_000_003 * (sample_index + 1) + attempt_no)
         policy_local = dict(base_policy)
         if planned_cell is not None:
             policy_local["planned_cell"] = planned_cell
         stage64_target = None
-        if base_policy.get("qa_operation_answer_type_diversification"):
-            stage64_target = _stage64_target_for_slot(sample_index, n_samples)
+        target_index = None
+        target_identity = None
+        target_plan_sha256 = None
+        if formal_stage64_mode:
+            if not isinstance(stage64_target_record, dict):
+                raise RuntimeError(
+                    "formal Stage64 worker requires an explicit immutable target record"
+                )
+            target_index = _strict_nonnegative_int(
+                stage64_target_record.get("target_index"),
+                "worker target_index",
+            )
+            stage64_target = copy.deepcopy(
+                stage64_target_record.get("stage64_target")
+            )
+            target_identity = normalize_space(
+                stage64_target_record.get("target_identity")
+            )
+            target_plan_sha256 = normalize_space(
+                stage64_target_record.get("target_plan_sha256")
+            )
+            if (
+                not isinstance(stage64_target, dict)
+                or not target_identity
+                or not target_plan_sha256
+            ):
+                raise RuntimeError("formal Stage64 worker received an invalid target record")
             policy_local["stage64_target"] = stage64_target
         policy = policy_local  # body below references `policy`; keep the name
         seed_row = seed_rows[rng.randrange(len(seed_rows))]
@@ -9382,6 +24940,17 @@ def generate_graph_conditioned_api_dialogue_samples(
         raw_record: dict[str, Any] = {
             "attempt": attempt_no,
             "target_sample_index": sample_index,
+            **(
+                {
+                    "generation_slot_id": sample_index,
+                    "target_index": target_index,
+                    "stage64_target_identity": target_identity,
+                    "stage64_target_id": target_identity,
+                    "stage64_target_plan_sha256": target_plan_sha256,
+                }
+                if formal_stage64_mode
+                else {}
+            ),
             "seed_sample_id": seed_row.get("sample_id") or seed_row.get("source_id"),
             "parent_dialogue_source": parent_dialogue_source,
             "raw_parent_turn_count": len(raw_parent_dialogue_turns),
@@ -9409,6 +24978,53 @@ def generate_graph_conditioned_api_dialogue_samples(
                 round_id=round_id,
             )
             graph_cache_entry = load_graph_cache_entry(graph_cache_dir, graph_cache_key) if graph_cache_enabled else None
+            stage64_target_for_cache = (
+                policy.get("stage64_target")
+                if isinstance(policy, dict) and isinstance(policy.get("stage64_target"), dict)
+                else {}
+            )
+            stage64_operation_for_cache = normalize_space(stage64_target_for_cache.get("qa_operation"))
+            if graph_cache_entry is not None and stage64_operation_for_cache:
+                cached_graph_issues: list[dict[str, Any]] = []
+                if stage64_operation_for_cache in {"comparison", "count"}:
+                    cached_raw_graph = graph_cache_entry.get("raw_graph")
+                    if isinstance(cached_raw_graph, dict):
+                        if stage64_operation_for_cache == "comparison":
+                            cached_graph_issues.extend(
+                                comparison_raw_generation_layout_issues(
+                                    cached_raw_graph,
+                                    stage64_target_for_cache,
+                                )
+                            )
+                        else:
+                            cached_graph_issues.extend(
+                                count_raw_generation_layout_issues(cached_raw_graph)
+                            )
+                    else:
+                        cached_graph_issues.append(
+                            {
+                                "code": f"{stage64_operation_for_cache}_generation_layout_cached_raw_graph_missing",
+                                "path": "$.raw_graph",
+                                "message": f"A cached native {stage64_operation_for_cache} graph must retain its raw eight-role graph for layout verification.",
+                            }
+                        )
+                cached_graph_issues.extend(
+                    semantic_graph_plan_quality_issues(
+                        graph_cache_entry["current_event_plan"],
+                        stage64_operation_for_cache,
+                        stage64_target_for_cache,
+                    )
+                )
+                if cached_graph_issues:
+                    summary["graph_cache_invalidated_count"] += 1
+                    invalidate_graph_cache_entry(graph_cache_dir, graph_cache_key)
+                    raw_record.setdefault("api_graph_retry_diagnostics", []).append(
+                        {
+                            "reason": "stage64_cached_graph_quality_failed",
+                            "issues": copy.deepcopy(cached_graph_issues),
+                        }
+                    )
+                    graph_cache_entry = None
             if graph_cache_entry is not None:
                 summary["graph_cache_hit_count"] += 1
                 summary["graph_cache_reuse_for_dialogue_retry_count"] += 1
@@ -9430,6 +25046,26 @@ def generate_graph_conditioned_api_dialogue_samples(
                     sample_index=sample_index,
                     round_id=round_id,
                 )
+                raw_record["api_graph_meta"] = graph_meta
+                raw_record["api_graph_payload"] = raw_graph
+                raw_record["graph_cache_key"] = graph_cache_key if graph_cache_enabled else None
+                if stage64_operation_for_cache and graph_meta.get("used"):
+                    semantic_issues = semantic_graph_plan_quality_issues(
+                        current_event_plan,
+                        stage64_operation_for_cache,
+                        stage64_target_for_cache,
+                    )
+                    graph_meta["stage64_graph_quality"] = {
+                        "pass": not semantic_issues,
+                        "qa_operation": stage64_operation_for_cache,
+                        "gate_version": GRAPH_CACHE_SCHEMA_VERSION,
+                        "issues": copy.deepcopy(semantic_issues),
+                    }
+                    if semantic_issues:
+                        reasons = sorted({str(issue.get("reason") or "unknown") for issue in semantic_issues})
+                        raise NativeGraphDialogueReject(
+                            f"stage64 graph semantic quality failed: {reasons}; details={semantic_issues[:4]}"
+                        )
                 if graph_cache_enabled and graph_meta.get("used") and isinstance(current_event_plan.get("events"), list):
                     write_graph_cache_entry(
                         graph_cache_dir,
@@ -9480,34 +25116,77 @@ def generate_graph_conditioned_api_dialogue_samples(
             final_dialogue: dict[str, Any] | None = None
             accepted_appended_dialogue_marked: list[dict[str, Any]] = []
             accepted_length_metadata: dict[str, Any] | None = None
+            final_qa_meta: dict[str, Any] = {}
             max_dialogue_retries = int(getattr(api_args, "max_llm_retries", 1)) + 1
             retry_context: dict[str, Any] | None = None
             accepted_seen_anchors: set[str] = set()
             accepted_invalid_anchors: set[str] = set()
             accepted_missing_anchors: set[str] = set()
             accepted_alignment_invalid_count = 0
+            accepted_evidence_dispersion: dict[str, Any] = {}
+            stage64_formal_mining = bool(
+                isinstance(policy, dict) and policy.get("qa_operation_answer_type_diversification")
+            )
             for dialogue_attempt in range(1, max_dialogue_retries + 1):
                 summary["api_dialogue_called_count"] += 1
-                dialogue_proposal, dialogue_meta = call_api_graph_conditioned_dialogue_expansion(
-                    current_event_plan,
-                    seed_row,
-                    legacy,
-                    policy,
-                    api_args,
-                    parent_context=parent_context,
-                    parent_dialogue_source=parent_dialogue_source,
-                    parent_turn_count=len(parent_dialogue_turns),
-                    min_added_turns=min_length_added_turns,
-                    min_added_tokens=min_length_added_tokens,
-                    length_guard_parent_baseline_tokens=length_guard_parent_baseline_tokens,
-                    retry_context=retry_context,
-                )
+                if stage64_formal_mining:
+                    dialogue_proposal, dialogue_meta = call_api_formal_segmented_dialogue_expansion(
+                        current_event_plan,
+                        seed_row,
+                        policy,
+                        api_args,
+                        parent_context=parent_context,
+                        parent_dialogue_source=parent_dialogue_source,
+                        parent_turn_count=len(parent_dialogue_turns),
+                        min_added_turns=min_length_added_turns,
+                        min_added_tokens=min_length_added_tokens,
+                        length_guard_parent_baseline_tokens=length_guard_parent_baseline_tokens,
+                        dialogue_attempt_index=dialogue_attempt,
+                        prior_failure_context=(
+                            compact_formal_dialogue_retry_context(retry_context)
+                        ),
+                    )
+                    summary["api_dialogue_called_count"] += max(
+                        0,
+                        int(dialogue_meta.get("segment_api_call_count") or 0) - 1,
+                    )
+                else:
+                    dialogue_proposal, dialogue_meta = call_api_graph_conditioned_dialogue_expansion(
+                        current_event_plan,
+                        seed_row,
+                        legacy,
+                        policy,
+                        api_args,
+                        parent_context=parent_context,
+                        parent_dialogue_source=parent_dialogue_source,
+                        parent_turn_count=len(parent_dialogue_turns),
+                        min_added_turns=min_length_added_turns,
+                        min_added_tokens=min_length_added_tokens,
+                        length_guard_parent_baseline_tokens=length_guard_parent_baseline_tokens,
+                        retry_context=retry_context,
+                    )
                 raw_record.setdefault("api_dialogue_attempts", []).append(
                     {"attempt": dialogue_attempt, "meta": dialogue_meta, "payload": dialogue_proposal}
                 )
                 _record_api_meta_retry_diagnostics(summary, dialogue_meta)
                 if not dialogue_meta.get("used") or not isinstance(dialogue_proposal, dict):
-                    retry_context = {"previous_error": "dialogue API did not return a valid JSON proposal", "dialogue_meta": dialogue_meta}
+                    retry_context = (
+                        compact_formal_dialogue_retry_context(
+                            {
+                                "previous_error": (
+                                    "dialogue API did not return a valid JSON proposal"
+                                ),
+                                "dialogue_meta": dialogue_meta,
+                            }
+                        )
+                        if stage64_formal_mining
+                        else {
+                            "previous_error": (
+                                "dialogue API did not return a valid JSON proposal"
+                            ),
+                            "dialogue_meta": dialogue_meta,
+                        }
+                    )
                     raw_record.setdefault("dialogue_retry_diagnostics", []).append(
                         {
                             "dialogue_attempt": dialogue_attempt,
@@ -9518,8 +25197,12 @@ def generate_graph_conditioned_api_dialogue_samples(
                     continue
                 if isinstance(dialogue_proposal.get("qa_proposal"), dict):
                     summary["api_qa_proposal_count"] += 1
-                appended_dialogue = current_event_scaffold_turns(current_event_plan) + list(
-                    _as_dialogue_list(appended_dialogue_from_proposal(dialogue_proposal))
+                api_appended_dialogue = list(_as_dialogue_list(appended_dialogue_from_proposal(dialogue_proposal)))
+                deterministic_scaffold_used = not stage64_formal_mining
+                appended_dialogue = (
+                    current_event_scaffold_turns(current_event_plan) + api_appended_dialogue
+                    if deterministic_scaffold_used
+                    else api_appended_dialogue
                 )
                 candidate = validate_appended_dialogue_candidate(
                     appended_dialogue_marked=appended_dialogue,
@@ -9535,13 +25218,33 @@ def generate_graph_conditioned_api_dialogue_samples(
                     parent_baseline_tokens=length_guard_parent_baseline_tokens,
                     fallback_min_added_tokens=fallback_delta,
                     emergency_min_added_tokens=emergency_floor,
+                    require_evidence_dispersion=stage64_formal_mining,
+                    deterministic_scaffold_used=deterministic_scaffold_used,
+                    formal_mining=stage64_formal_mining,
                 )
                 raw_alignment_proposal = candidate.get("raw_alignment_proposal")
                 final_dialogue = candidate.get("final_dialogue")
                 length_metadata = candidate.get("length_metadata") or {}
                 length_metadata["parent_dialogue_source"] = parent_dialogue_source
-                if candidate.get("ignored_event_alignment_proposal"):
+                if deterministic_scaffold_used and candidate.get("ignored_event_alignment_proposal"):
                     summary["deterministic_scaffold_alignment_count"] += 1
+                if candidate.get("reason") == "deterministic_scaffold_not_mining_eligible":
+                    summary["formal_mining_scaffold_reject_count"] += 1
+                    retry_context = {
+                        "previous_error": "deterministic scaffold fallback is not eligible for formal Stage64 mining",
+                        "instruction": (
+                            "Regenerate appended_dialogue_turns from the API without a deterministic scaffold. "
+                            "Naturally carry and disperse every required event in the appended dialogue itself."
+                        ),
+                    }
+                    raw_record.setdefault("dialogue_retry_diagnostics", []).append(
+                        {
+                            "dialogue_attempt": dialogue_attempt,
+                            "reason": "deterministic_scaffold_not_mining_eligible",
+                            "formal_mining_eligible": False,
+                        }
+                    )
+                    continue
                 if candidate.get("reason") == "length":
                     summary["length_retry_count"] += 1
                     summary["length_reject_count"] += 1
@@ -9590,12 +25293,13 @@ def generate_graph_conditioned_api_dialogue_samples(
                 alignment_result = candidate.get("alignment_result")
                 missing_anchors = set(candidate.get("missing_anchors") or set())
                 if candidate.get("pass") is True and isinstance(alignment_result, dict):
-                    if candidate.get("ignored_event_alignment_proposal"):
+                    if deterministic_scaffold_used and candidate.get("ignored_event_alignment_proposal"):
                         summary["deterministic_scaffold_alignment_success_count"] += 1
                     accepted_seen_anchors = set(candidate.get("seen") or set())
                     accepted_invalid_anchors = set(candidate.get("invalid") or set())
                     accepted_missing_anchors = set(missing_anchors)
                     accepted_alignment_invalid_count = int(alignment_result.get("current_anchor_invalid_count") or 0)
+                    accepted_evidence_dispersion = copy.deepcopy(candidate.get("evidence_dispersion") or {})
                     accepted_length_metadata = length_metadata
                     accepted_appended_dialogue_marked = copy.deepcopy(_as_dialogue_list(appended_dialogue))
                     break
@@ -9605,17 +25309,33 @@ def generate_graph_conditioned_api_dialogue_samples(
                         "reason": candidate.get("reason"),
                     }
                     continue
-                _bump_summary_counter(summary, "dialogue_alignment_reject_count")
-                _bump_summary_counter(summary, "unsupported_alignment_count", int(alignment_result.get("unsupported_alignment_count") or 0))
-                _bump_summary_counter(summary, "contradiction_count", int(alignment_result.get("contradiction_count") or 0))
-                if int(alignment_result.get("anchor_leakage_count") or 0):
-                    _bump_summary_counter(summary, "anchor_leak_reject_count")
+                evidence_dispersion = candidate.get("evidence_dispersion") or {}
+                if candidate.get("reason") == "evidence_dispersion":
+                    _bump_summary_counter(summary, "evidence_dispersion_reject_count")
+                    for failure in evidence_dispersion.get("failures") or []:
+                        reason_counts = summary.setdefault("evidence_dispersion_failure_reason", {})
+                        reason_counts[str(failure)] = int(reason_counts.get(str(failure)) or 0) + 1
+                else:
+                    _bump_summary_counter(summary, "dialogue_alignment_reject_count")
+                    _bump_summary_counter(
+                        summary,
+                        "unsupported_alignment_count",
+                        int(alignment_result.get("unsupported_alignment_count") or 0),
+                    )
+                    _bump_summary_counter(
+                        summary,
+                        "contradiction_count",
+                        int(alignment_result.get("contradiction_count") or 0),
+                    )
+                    if int(alignment_result.get("anchor_leakage_count") or 0):
+                        _bump_summary_counter(summary, "anchor_leak_reject_count")
                 retry_context = {
                     "missing_event_instance_ids": alignment_result.get("missing_required_event_instance_ids"),
                     "missing_anchors": sorted(missing_anchors),
                     "unsupported_alignment_count": alignment_result.get("unsupported_alignment_count"),
                     "contradiction_count": alignment_result.get("contradiction_count"),
                     "anchor_leakage_count": alignment_result.get("anchor_leakage_count"),
+                    "evidence_dispersion": copy.deepcopy(evidence_dispersion),
                     "instruction": (
                         "Retry appended_dialogue_turns and event_alignment_proposal only for newly appended turns. "
                         "Parent dialogue is preserved by the program; do not rewrite it, include it, summarize it, or align to it. "
@@ -9630,10 +25350,15 @@ def generate_graph_conditioned_api_dialogue_samples(
                 raw_record.setdefault("dialogue_retry_diagnostics", []).append(
                     {
                         "dialogue_attempt": dialogue_attempt,
-                        "reason": "dialogue_alignment",
+                        "reason": candidate.get("reason") or "dialogue_alignment",
                         "retry_context": copy.deepcopy(retry_context),
                     }
                 )
+                if stage64_formal_mining:
+                    # Accepted segment prefixes are immutable. A full-list alignment repair
+                    # would rewrite them, so formal mining regenerates a fresh candidate instead.
+                    summary["full_regeneration_retry_count"] += 1
+                    continue
                 summary["repair_retry_count"] += 1
                 repair_proposal, repair_meta = call_api_alignment_repair(
                     current_event_plan,
@@ -9648,8 +25373,12 @@ def generate_graph_conditioned_api_dialogue_samples(
                 )
                 _record_api_meta_retry_diagnostics(summary, repair_meta)
                 if repair_meta.get("used") and isinstance(repair_proposal, dict):
-                    repaired_appended = current_event_scaffold_turns(current_event_plan) + list(
-                        _as_dialogue_list(appended_dialogue_from_proposal(repair_proposal))
+                    repaired_api_appended = list(_as_dialogue_list(appended_dialogue_from_proposal(repair_proposal)))
+                    repaired_scaffold_used = not stage64_formal_mining
+                    repaired_appended = (
+                        current_event_scaffold_turns(current_event_plan) + repaired_api_appended
+                        if repaired_scaffold_used
+                        else repaired_api_appended
                     )
                     repaired_candidate = validate_appended_dialogue_candidate(
                         appended_dialogue_marked=repaired_appended,
@@ -9665,6 +25394,9 @@ def generate_graph_conditioned_api_dialogue_samples(
                         parent_baseline_tokens=length_guard_parent_baseline_tokens,
                         fallback_min_added_tokens=fallback_delta,
                         emergency_min_added_tokens=emergency_floor,
+                        require_evidence_dispersion=stage64_formal_mining,
+                        deterministic_scaffold_used=repaired_scaffold_used,
+                        formal_mining=stage64_formal_mining,
                     )
                     raw_record.setdefault("dialogue_retry_diagnostics", []).append(
                         {
@@ -9673,13 +25405,15 @@ def generate_graph_conditioned_api_dialogue_samples(
                             "repair_pass": bool(repaired_candidate.get("pass")),
                             "repair_failure_reason": repaired_candidate.get("reason"),
                             "ignored_event_alignment_proposal": bool(repaired_candidate.get("ignored_event_alignment_proposal")),
+                            "evidence_dispersion": copy.deepcopy(repaired_candidate.get("evidence_dispersion") or {}),
+                            "formal_mining_eligible": bool(repaired_candidate.get("formal_mining_eligible")),
                         }
                     )
-                    if repaired_candidate.get("ignored_event_alignment_proposal"):
+                    if repaired_scaffold_used and repaired_candidate.get("ignored_event_alignment_proposal"):
                         summary["deterministic_scaffold_alignment_count"] += 1
                     if repaired_candidate.get("pass") is True and isinstance(repaired_candidate.get("alignment_result"), dict):
                         summary["repair_success_count"] += 1
-                        if repaired_candidate.get("ignored_event_alignment_proposal"):
+                        if repaired_scaffold_used and repaired_candidate.get("ignored_event_alignment_proposal"):
                             summary["deterministic_scaffold_alignment_success_count"] += 1
                         appended_dialogue = repaired_appended
                         raw_alignment_proposal = repaired_candidate.get("raw_alignment_proposal")
@@ -9691,6 +25425,9 @@ def generate_graph_conditioned_api_dialogue_samples(
                         accepted_invalid_anchors = set(repaired_candidate.get("invalid") or set())
                         accepted_missing_anchors = set(repaired_candidate.get("missing_anchors") or set())
                         accepted_alignment_invalid_count = int(alignment_result.get("current_anchor_invalid_count") or 0)
+                        accepted_evidence_dispersion = copy.deepcopy(
+                            repaired_candidate.get("evidence_dispersion") or {}
+                        )
                         accepted_length_metadata = length_metadata
                         accepted_appended_dialogue_marked = copy.deepcopy(_as_dialogue_list(appended_dialogue))
                         break
@@ -9699,6 +25436,27 @@ def generate_graph_conditioned_api_dialogue_samples(
                 summary["api_dialogue_reject_count"] += 1
                 raw_record["final_reject_reason"] = _final_dialogue_reject_reason(retry_context, alignment_result)
                 raise NativeGraphDialogueReject(f"dialogue alignment did not pass: {retry_context}")
+            if stage64_formal_mining:
+                final_dispersion = (
+                    alignment_result.get("evidence_dispersion")
+                    if isinstance(alignment_result.get("evidence_dispersion"), dict)
+                    else {}
+                )
+                if alignment_result.get("formal_mining_eligible") is not True:
+                    summary["formal_mining_scaffold_reject_count"] += 1
+                    raw_record["final_reject_reason"] = "deterministic_scaffold_not_mining_eligible"
+                    raise NativeGraphDialogueReject(
+                        "formal Stage64 mining rejects deterministic scaffold fallback dialogue"
+                    )
+                if final_dispersion.get("pass") is not True:
+                    summary["evidence_dispersion_reject_count"] += 1
+                    raw_record["final_reject_reason"] = {
+                        "reason": "evidence_dispersion",
+                        "diagnostics": copy.deepcopy(final_dispersion),
+                    }
+                    raise NativeGraphDialogueReject(
+                        f"formal Stage64 mining evidence dispersion failed: {final_dispersion.get('failures')}"
+                    )
             summary["api_dialogue_valid_count"] += 1
             summary["current_anchor_seen_count"] += len(accepted_seen_anchors)
             summary["current_anchor_invalid_count"] += len(accepted_invalid_anchors) + accepted_alignment_invalid_count
@@ -9722,7 +25480,91 @@ def generate_graph_conditioned_api_dialogue_samples(
             else:
                 qa_question_type = plan_qtype or "ordering"
             qa_proposal_for_build = dialogue_proposal.get("qa_proposal") if isinstance(dialogue_proposal, dict) else None
-            try:
+            if stage64_formal_mining:
+                summary["stage64_final_qa_attempt_count"] += 1
+                final_qa_payload, final_qa_meta = call_api_stage64_final_qa(
+                    current_event_plan,
+                    alignment_result["current_alignment"],
+                    policy.get("stage64_target") if isinstance(policy.get("stage64_target"), dict) else None,
+                    accepted_appended_dialogue_marked,
+                    hashes,
+                    api_args,
+                    item_difficulty_target=(
+                        policy.get("item_difficulty_target") or policy.get("boundary_item_difficulty_target")
+                    ),
+                )
+                raw_record.setdefault("api_stage64_final_qa_attempts", []).append(
+                    {
+                        "frozen_dependencies": copy.deepcopy(hashes),
+                        "meta": final_qa_meta,
+                        "payload": final_qa_payload,
+                    }
+                )
+                _record_api_meta_retry_diagnostics(summary, final_qa_meta)
+                qa_proposal_for_build = (
+                    final_qa_payload.get("qa_proposal")
+                    if isinstance(final_qa_payload, dict)
+                    else None
+                )
+                if not final_qa_meta.get("used") or not isinstance(qa_proposal_for_build, dict):
+                    summary["stage64_final_qa_failed_count"] += 1
+                    raise NativeGraphDialogueReject(
+                        f"formal final QA-only generation failed after frozen alignment: {final_qa_meta}"
+                    )
+                summary["stage64_final_qa_success_count"] += 1
+                summary["api_qa_proposal_count"] += 1
+            stage64_qa_repair_audit: dict[str, Any] = {}
+            if stage64_formal_mining:
+                try:
+                    qa, qa_proposal_for_build = (
+                        build_stage64_qa_with_local_repairs(
+                            current_event_plan=current_event_plan,
+                            graph_update=graph_update,
+                            current_alignment=alignment_result[
+                                "current_alignment"
+                            ],
+                            initial_qa_proposal=copy.deepcopy(
+                                qa_proposal_for_build
+                            ),
+                            question_type=qa_question_type,
+                            rng=rng,
+                            hashes=hashes,
+                            final_dialogue=final_dialogue,
+                            policy=policy,
+                            seed_row=seed_row,
+                            appended_dialogue_turns=(
+                                accepted_appended_dialogue_marked
+                            ),
+                            api_args=api_args,
+                            max_repair_attempts=(
+                                stage64_qa_repair_max_attempts
+                            ),
+                            item_difficulty_target=(
+                                policy.get("item_difficulty_target")
+                                or policy.get(
+                                    "boundary_item_difficulty_target"
+                                )
+                            ),
+                            audit=stage64_qa_repair_audit,
+                        )
+                    )
+                except Exception:
+                    _record_stage64_qa_local_repair_audit(
+                        summary,
+                        raw_record,
+                        stage64_qa_repair_audit,
+                    )
+                    raise
+                _record_stage64_qa_local_repair_audit(
+                    summary,
+                    raw_record,
+                    stage64_qa_repair_audit,
+                )
+                if isinstance(dialogue_proposal, dict):
+                    dialogue_proposal["qa_proposal"] = copy.deepcopy(
+                        qa_proposal_for_build
+                    )
+            else:
                 qa = build_qa_from_current_graph_and_alignment(
                     current_event_plan,
                     graph_update,
@@ -9735,61 +25577,6 @@ def generate_graph_conditioned_api_dialogue_samples(
                     policy,
                     seed_row=seed_row,
                 )
-            except Exception as qa_exc:
-                if not (
-                    isinstance(policy, dict)
-                    and policy.get("qa_operation_answer_type_diversification")
-                    and _is_stage64_qa_repairable_error(qa_exc)
-                ):
-                    raise
-                summary["stage64_qa_repair_attempt_count"] += 1
-                repair_payload, repair_meta = call_api_stage64_qa_repair(
-                    current_event_plan,
-                    alignment_result["current_alignment"],
-                    qa_proposal_for_build if isinstance(qa_proposal_for_build, dict) else None,
-                    policy.get("stage64_target") if isinstance(policy.get("stage64_target"), dict) else None,
-                    str(qa_exc),
-                    accepted_appended_dialogue_marked,
-                    api_args,
-                )
-                raw_record.setdefault("api_stage64_qa_repair_attempts", []).append(
-                    {
-                        "failure_reason": str(qa_exc),
-                        "meta": repair_meta,
-                        "payload": repair_payload,
-                    }
-                )
-                _record_api_meta_retry_diagnostics(summary, repair_meta)
-                repaired_qa_proposal = repair_payload.get("qa_proposal") if isinstance(repair_payload, dict) else None
-                if not repair_meta.get("used") or not isinstance(repaired_qa_proposal, dict):
-                    summary["stage64_qa_repair_failed_count"] += 1
-                    _bump_failure_reason(summary, "stage64_qa_repair_api_failed")
-                    reason_counts = summary.setdefault("stage64_qa_repair_failure_reason", {})
-                    reason_counts["api_failed"] = int(reason_counts.get("api_failed") or 0) + 1
-                    raise qa_exc
-                try:
-                    qa = build_qa_from_current_graph_and_alignment(
-                        current_event_plan,
-                        graph_update,
-                        alignment_result["current_alignment"],
-                        repaired_qa_proposal,
-                        qa_question_type,
-                        rng,
-                        hashes,
-                        final_dialogue,
-                        policy,
-                        seed_row=seed_row,
-                    )
-                except Exception as repaired_exc:
-                    summary["stage64_qa_repair_failed_count"] += 1
-                    reason = normalize_space(str(repaired_exc)) or type(repaired_exc).__name__
-                    reason_counts = summary.setdefault("stage64_qa_repair_failure_reason", {})
-                    reason_counts[reason[:160]] = int(reason_counts.get(reason[:160]) or 0) + 1
-                    raise repaired_exc
-                summary["stage64_qa_repair_success_count"] += 1
-                summary["stage64_qa_repair_saved_full_regeneration_count"] += 1
-                if isinstance(dialogue_proposal, dict):
-                    dialogue_proposal["qa_proposal"] = repaired_qa_proposal
             if _is_easy_curriculum(policy):
                 _clean_qa_option_display_text(qa)
             clean_sample = build_clean_sample(
@@ -9802,7 +25589,216 @@ def generate_graph_conditioned_api_dialogue_samples(
                 hashes=hashes,
                 length_metadata=accepted_length_metadata or {},
             )
+            if formal_stage64_mode:
+                clean_sample.update(
+                    {
+                        "generation_slot_id": sample_index,
+                        "target_index": target_index,
+                        "stage64_target": copy.deepcopy(stage64_target),
+                        "stage64_target_identity": target_identity,
+                        "stage64_target_id": target_identity,
+                        "stage64_target_plan_sha256": target_plan_sha256,
+                    }
+                )
+                clean_sample["metadata"].update(
+                    {
+                        "generation_slot_id": sample_index,
+                        "stage64_target_index": target_index,
+                        "stage64_target_identity": target_identity,
+                        "stage64_target_id": target_identity,
+                        "stage64_target_plan_sha256": target_plan_sha256,
+                    }
+                )
             validate_final_clean_sample(clean_sample, known_anchors, hashes)
+            marker_scheduler_summary = (
+                dialogue_meta.get("marker_scheduler_summary")
+                if isinstance(dialogue_meta.get("marker_scheduler_summary"), dict)
+                else {}
+            )
+            exact_claim_preflight = (
+                dialogue_meta.get("exact_claim_preflight")
+                if isinstance(dialogue_meta.get("exact_claim_preflight"), dict)
+                else {}
+            )
+            turn_duplicate_audit_summary = (
+                dialogue_meta.get("turn_duplicate_audit_summary")
+                if isinstance(dialogue_meta.get("turn_duplicate_audit_summary"), dict)
+                else {}
+            )
+            opening_diversity_audit_summary = (
+                dialogue_meta.get("opening_diversity_audit_summary")
+                if isinstance(
+                    dialogue_meta.get("opening_diversity_audit_summary"), dict
+                )
+                else {}
+            )
+            parent_context_provenance = (
+                dialogue_meta.get("parent_context_provenance")
+                if isinstance(
+                    dialogue_meta.get("parent_context_provenance"), dict
+                )
+                else {}
+            )
+            accepted_prefix_context_provenance = (
+                dialogue_meta.get("accepted_prefix_context_provenance")
+                if isinstance(
+                    dialogue_meta.get("accepted_prefix_context_provenance"), dict
+                )
+                else {}
+            )
+            clean_sample["metadata"].update(
+                {
+                    "formal_mining_parent_context_schema_version": (
+                        parent_context_provenance.get("schema_version")
+                    ),
+                    "formal_mining_parent_prompt_audit_version": (
+                        parent_context_provenance.get(
+                            "prompt_audit_schema_version"
+                        )
+                    ),
+                    "formal_mining_parent_prompt_audit_verified": bool(
+                        parent_context_provenance.get(
+                            "parent_prompt_audit_verified"
+                        )
+                    ),
+                    "formal_mining_parent_verbatim_exposure_count": int(
+                        parent_context_provenance.get(
+                            "parent_verbatim_exposure_count"
+                        )
+                        or 0
+                    ),
+                    "formal_mining_parent_prompt_audit_sha256": (
+                        parent_context_provenance.get("audit_sha256")
+                    ),
+                    "formal_mining_parent_audited_prompt_count": int(
+                        parent_context_provenance.get("audited_prompt_count") or 0
+                    ),
+                    "formal_mining_segment_api_call_count": int(
+                        dialogue_meta.get("segment_api_call_count") or 0
+                    ),
+                    "formal_mining_internal_retry_disabled_for_parent_audit": bool(
+                        parent_context_provenance.get(
+                            "internal_retry_disabled_for_parent_audit"
+                        )
+                    ),
+                    "formal_mining_accepted_prefix_context_schema_version": (
+                        accepted_prefix_context_provenance.get("schema_version")
+                    ),
+                    "formal_mining_accepted_prefix_prompt_audit_version": (
+                        accepted_prefix_context_provenance.get(
+                            "prompt_audit_schema_version"
+                        )
+                    ),
+                    "formal_mining_current_exact_claim_exemption_version": (
+                        accepted_prefix_context_provenance.get(
+                            "current_exact_claim_exemption_schema_version"
+                        )
+                    ),
+                    "formal_mining_accepted_prefix_prompt_audit_verified": bool(
+                        accepted_prefix_context_provenance.get(
+                            "accepted_prefix_prompt_audit_verified"
+                        )
+                    ),
+                    "formal_mining_accepted_prefix_verbatim_exposure_count": int(
+                        accepted_prefix_context_provenance.get(
+                            "accepted_prefix_verbatim_exposure_count"
+                        )
+                        or 0
+                    ),
+                    "formal_mining_accepted_prefix_prompt_audit_sha256": (
+                        accepted_prefix_context_provenance.get("summary_sha256")
+                    ),
+                    "formal_mining_accepted_prefix_audited_prompt_count": int(
+                        accepted_prefix_context_provenance.get(
+                            "audited_prompt_count"
+                        )
+                        or 0
+                    ),
+                    "formal_mining_turn_duplicate_audit_version": (
+                        turn_duplicate_audit_summary.get("schema_version")
+                    ),
+                    "formal_mining_turn_duplicate_audit_verified": bool(
+                        turn_duplicate_audit_summary.get("pass")
+                    ),
+                    "formal_mining_turn_duplicate_audit_sha256": (
+                        turn_duplicate_audit_summary.get("summary_sha256")
+                    ),
+                    "formal_mining_turn_duplicate_exact_pair_count": int(
+                        turn_duplicate_audit_summary.get("exact_duplicate_pair_count") or 0
+                    ),
+                    "formal_mining_turn_duplicate_near_pair_count": int(
+                        turn_duplicate_audit_summary.get("near_duplicate_pair_count") or 0
+                    ),
+                    "formal_mining_turn_duplicate_phrase_pair_count": int(
+                        turn_duplicate_audit_summary.get("phrase_containment_pair_count") or 0
+                    ),
+                    "formal_mining_opening_diversity_audit_version": (
+                        opening_diversity_audit_summary.get("schema_version")
+                    ),
+                    "formal_mining_opening_diversity_audit_verified": bool(
+                        opening_diversity_audit_summary.get("pass")
+                    ),
+                    "formal_mining_opening_diversity_audit_sha256": (
+                        opening_diversity_audit_summary.get("summary_sha256")
+                    ),
+                    "formal_mining_opening_diversity_concentrated_prefix_count": int(
+                        opening_diversity_audit_summary.get(
+                            "accepted_concentrated_prefix_count"
+                        )
+                        or 0
+                    ),
+                    "formal_mining_requested_item_difficulty_target": (
+                        marker_scheduler_summary.get(
+                            "requested_item_difficulty_target"
+                        )
+                    ),
+                    "formal_mining_primary_event_instance_ids": copy.deepcopy(
+                        marker_scheduler_summary.get("primary_event_instance_ids") or []
+                    ),
+                    "formal_mining_primary_markers": copy.deepcopy(
+                        marker_scheduler_summary.get("primary_markers") or []
+                    ),
+                    "formal_mining_target_primary_evidence_band": (
+                        marker_scheduler_summary.get("target_primary_evidence_band")
+                    ),
+                    "formal_mining_realized_primary_evidence_bands": copy.deepcopy(
+                        marker_scheduler_summary.get(
+                            "realized_primary_evidence_bands"
+                        )
+                        or []
+                    ),
+                    "formal_mining_primary_evidence_placement_pass": bool(
+                        marker_scheduler_summary.get(
+                            "primary_evidence_placement_pass"
+                        )
+                    ),
+                    "stage64_qa_repair_attempts_used": int(
+                        stage64_qa_repair_audit.get(
+                            "repair_attempt_count"
+                        )
+                        or 0
+                    ),
+                    "stage64_qa_repair_max_attempts": int(
+                        stage64_qa_repair_audit.get("max_repair_attempts")
+                        or 0
+                    ),
+                    "stage64_qa_chosen_proposal_sha256": (
+                        stage64_qa_repair_audit.get(
+                            "chosen_candidate_sha256"
+                        )
+                    ),
+                    "stage64_qa_frozen_context_sha256": (
+                        stage64_qa_repair_audit.get(
+                            "frozen_context_sha256"
+                        )
+                    ),
+                    "stage64_qa_frozen_context_verified": bool(
+                        stage64_qa_repair_audit.get(
+                            "frozen_context_verified"
+                        )
+                    ),
+                }
+            )
             clean_sample["native_contract"] = {
                 "valid": True,
                 "mode": "graph_conditioned_api_dialogue",
@@ -9812,8 +25808,437 @@ def generate_graph_conditioned_api_dialogue_samples(
                 "current_graph_dialogue_alignment_pass": True,
                 "qa_generated_after_alignment": True,
                 "old_qa_reused": False,
+                "formal_mining_eligible": bool(alignment_result.get("formal_mining_eligible", True)),
+                "deterministic_scaffold_used": False if stage64_formal_mining else None,
+                "dialogue_local_padding_used": bool(
+                    (accepted_length_metadata or {}).get("dialogue_local_padding_used")
+                ),
+                "formal_mining_api_native_dialogue_only": bool(
+                    (accepted_length_metadata or {}).get("formal_mining_api_native_dialogue_only")
+                ),
+                "formal_mining_segmented_dialogue": bool(dialogue_meta.get("segmented")),
+                "formal_mining_prefix_hash_chain_verified": bool(
+                    dialogue_meta.get("prefix_hash_chain_verified")
+                ),
+                "formal_mining_final_prefix_hash": dialogue_meta.get("final_prefix_hash"),
+                "formal_mining_parent_context_schema_version": (
+                    parent_context_provenance.get("schema_version")
+                ),
+                "formal_mining_parent_prompt_audit_version": (
+                    parent_context_provenance.get("prompt_audit_schema_version")
+                ),
+                "formal_mining_parent_prompt_audit_verified": bool(
+                    parent_context_provenance.get("parent_prompt_audit_verified")
+                ),
+                "formal_mining_parent_verbatim_exposure_count": int(
+                    parent_context_provenance.get(
+                        "parent_verbatim_exposure_count"
+                    )
+                    or 0
+                ),
+                "formal_mining_parent_prompt_audit_sha256": (
+                    parent_context_provenance.get("audit_sha256")
+                ),
+                "formal_mining_parent_audited_prompt_count": int(
+                    parent_context_provenance.get("audited_prompt_count") or 0
+                ),
+                "formal_mining_segment_api_call_count": int(
+                    dialogue_meta.get("segment_api_call_count") or 0
+                ),
+                "formal_mining_internal_retry_disabled_for_parent_audit": bool(
+                    parent_context_provenance.get(
+                        "internal_retry_disabled_for_parent_audit"
+                    )
+                ),
+                "formal_mining_parent_turns_used_for_output_duplicate_audit": bool(
+                    parent_context_provenance.get(
+                        "full_parent_turns_used_for_output_duplicate_audit"
+                    )
+                ),
+                "formal_mining_accepted_prefix_context_schema_version": (
+                    accepted_prefix_context_provenance.get("schema_version")
+                ),
+                "formal_mining_accepted_prefix_prompt_audit_version": (
+                    accepted_prefix_context_provenance.get(
+                        "prompt_audit_schema_version"
+                    )
+                ),
+                "formal_mining_current_exact_claim_exemption_version": (
+                    accepted_prefix_context_provenance.get(
+                        "current_exact_claim_exemption_schema_version"
+                    )
+                ),
+                "formal_mining_accepted_prefix_prompt_audit_verified": bool(
+                    accepted_prefix_context_provenance.get(
+                        "accepted_prefix_prompt_audit_verified"
+                    )
+                ),
+                "formal_mining_accepted_prefix_verbatim_exposure_count": int(
+                    accepted_prefix_context_provenance.get(
+                        "accepted_prefix_verbatim_exposure_count"
+                    )
+                    or 0
+                ),
+                "formal_mining_accepted_prefix_prompt_audit_sha256": (
+                    accepted_prefix_context_provenance.get("summary_sha256")
+                ),
+                "formal_mining_accepted_prefix_audited_prompt_count": int(
+                    accepted_prefix_context_provenance.get("audited_prompt_count")
+                    or 0
+                ),
+                "formal_mining_accepted_prefix_raw_text_recorded": (
+                    accepted_prefix_context_provenance.get(
+                        "raw_accepted_prefix_text_recorded"
+                    )
+                ),
+                "formal_mining_marker_scheduler_version": marker_scheduler_summary.get(
+                    "scheduler_version"
+                ),
+                "formal_mining_marker_scheduler_verified": bool(
+                    marker_scheduler_summary.get("all_markers_assigned_once_under_cap")
+                ),
+                "formal_mining_marker_cap_per_segment": marker_scheduler_summary.get(
+                    "marker_cap_per_segment"
+                ),
+                "formal_mining_marker_assignment_segment_count": marker_scheduler_summary.get(
+                    "marker_assignment_segment_count"
+                ),
+                "formal_mining_marker_max_assigned_per_segment": marker_scheduler_summary.get(
+                    "max_assigned_markers_per_segment"
+                ),
+                "formal_mining_marker_schedule_audit_hash": marker_scheduler_summary.get(
+                    "schedule_audit_hash"
+                ),
+                "formal_mining_difficulty_evidence_placement_applicable": bool(
+                    marker_scheduler_summary.get(
+                        "difficulty_evidence_placement_applicable"
+                    )
+                ),
+                "formal_mining_requested_item_difficulty_target": (
+                    marker_scheduler_summary.get("requested_item_difficulty_target")
+                ),
+                "formal_mining_primary_event_instance_ids": copy.deepcopy(
+                    marker_scheduler_summary.get("primary_event_instance_ids") or []
+                ),
+                "formal_mining_primary_markers": copy.deepcopy(
+                    marker_scheduler_summary.get("primary_markers") or []
+                ),
+                "formal_mining_target_primary_evidence_band": (
+                    marker_scheduler_summary.get("target_primary_evidence_band")
+                ),
+                "formal_mining_realized_primary_evidence_bands": copy.deepcopy(
+                    marker_scheduler_summary.get("realized_primary_evidence_bands")
+                    or []
+                ),
+                "formal_mining_primary_evidence_placement_pass": bool(
+                    marker_scheduler_summary.get("primary_evidence_placement_pass")
+                ),
+                "formal_mining_exact_claim_preflight_version": exact_claim_preflight.get(
+                    "schema_version"
+                ),
+                "formal_mining_exact_claim_preflight_verified": bool(
+                    exact_claim_preflight.get("pass")
+                ),
+                "formal_mining_exact_claim_original_accept_count": exact_claim_preflight.get(
+                    "original_claim_accept_count"
+                ),
+                "formal_mining_exact_claim_canonical_rewrite_count": exact_claim_preflight.get(
+                    "canonical_claim_rewrite_count"
+                ),
+                "formal_mining_exact_claim_map_sha256": exact_claim_preflight.get(
+                    "validated_claim_map_sha256"
+                ),
+                "formal_mining_turn_duplicate_audit_version": (
+                    turn_duplicate_audit_summary.get("schema_version")
+                ),
+                "formal_mining_turn_duplicate_audit_verified": bool(
+                    turn_duplicate_audit_summary.get("pass")
+                ),
+                "formal_mining_turn_duplicate_audited_turn_count": int(
+                    turn_duplicate_audit_summary.get("audited_segment_turn_count") or 0
+                ),
+                "formal_mining_turn_duplicate_exact_pair_count": int(
+                    turn_duplicate_audit_summary.get("exact_duplicate_pair_count") or 0
+                ),
+                "formal_mining_turn_duplicate_near_pair_count": int(
+                    turn_duplicate_audit_summary.get("near_duplicate_pair_count") or 0
+                ),
+                "formal_mining_turn_duplicate_phrase_pair_count": int(
+                    turn_duplicate_audit_summary.get("phrase_containment_pair_count") or 0
+                ),
+                "formal_mining_turn_duplicate_audit_sha256": (
+                    turn_duplicate_audit_summary.get("summary_sha256")
+                ),
+                "formal_mining_opening_diversity_audit_version": (
+                    opening_diversity_audit_summary.get("schema_version")
+                ),
+                "formal_mining_opening_diversity_audit_verified": bool(
+                    opening_diversity_audit_summary.get("pass")
+                ),
+                "formal_mining_opening_diversity_audited_turn_count": int(
+                    opening_diversity_audit_summary.get("audited_segment_turn_count")
+                    or 0
+                ),
+                "formal_mining_opening_diversity_short_body_count": int(
+                    opening_diversity_audit_summary.get("short_or_empty_body_count")
+                    or 0
+                ),
+                "formal_mining_opening_diversity_concentrated_prefix_count": int(
+                    opening_diversity_audit_summary.get(
+                        "accepted_concentrated_prefix_count"
+                    )
+                    or 0
+                ),
+                "formal_mining_opening_diversity_audit_sha256": (
+                    opening_diversity_audit_summary.get("summary_sha256")
+                ),
+                "stage64_qa_repair_attempts_used": int(
+                    stage64_qa_repair_audit.get("repair_attempt_count")
+                    or 0
+                ),
+                "stage64_qa_repair_max_attempts": int(
+                    stage64_qa_repair_audit.get("max_repair_attempts")
+                    or 0
+                ),
+                "stage64_qa_chosen_proposal_sha256": (
+                    stage64_qa_repair_audit.get(
+                        "chosen_candidate_sha256"
+                    )
+                ),
+                "stage64_qa_frozen_context_sha256": (
+                    stage64_qa_repair_audit.get(
+                        "frozen_context_sha256"
+                    )
+                ),
+                "stage64_qa_frozen_context_verified": bool(
+                    stage64_qa_repair_audit.get(
+                        "frozen_context_verified"
+                    )
+                ),
+                "formal_mining_qa_generated_after_frozen_alignment": bool(
+                    stage64_formal_mining
+                    and final_qa_meta.get("used") is True
+                    and final_qa_meta.get("frozen_dependencies") == hashes
+                    and stage64_qa_repair_audit.get(
+                        "frozen_dependencies"
+                    )
+                    == hashes
+                    and stage64_qa_repair_audit.get(
+                        "frozen_context_verified"
+                    )
+                    is True
+                    and bool(
+                        stage64_qa_repair_audit.get(
+                            "chosen_candidate_sha256"
+                        )
+                    )
+                ),
                 "ordering_identity_gold": qa.get("question_type") == "ordering" and qa.get("gold") == list(LETTERS[: len(qa.get("gold") or [])]),
             }
+            if stage64_formal_mining:
+                if clean_sample["native_contract"]["dialogue_local_padding_used"]:
+                    raise NativeGraphDialogueReject(
+                        "formal Stage64 mining rejects locally padded dialogue"
+                    )
+                if clean_sample["native_contract"]["formal_mining_api_native_dialogue_only"] is not True:
+                    raise NativeGraphDialogueReject(
+                        "formal Stage64 mining requires API-native appended dialogue"
+                    )
+                if clean_sample["native_contract"]["formal_mining_segmented_dialogue"] is not True:
+                    raise NativeGraphDialogueReject(
+                        "formal Stage64 mining requires segmented API-native appended dialogue"
+                    )
+                if clean_sample["native_contract"]["formal_mining_prefix_hash_chain_verified"] is not True:
+                    raise NativeGraphDialogueReject(
+                        "formal Stage64 mining requires a verified immutable prefix hash chain"
+                    )
+                if (
+                    clean_sample["native_contract"].get(
+                        "formal_mining_parent_context_schema_version"
+                    )
+                    != FORMAL_PARENT_CONTEXT_SCHEMA_VERSION
+                    or clean_sample["native_contract"].get(
+                        "formal_mining_parent_prompt_audit_version"
+                    )
+                    != FORMAL_PARENT_PROMPT_AUDIT_VERSION
+                    or clean_sample["native_contract"].get(
+                        "formal_mining_parent_prompt_audit_verified"
+                    )
+                    is not True
+                    or int(
+                        clean_sample["native_contract"].get(
+                            "formal_mining_parent_verbatim_exposure_count"
+                        )
+                        or 0
+                    )
+                    != 0
+                    or not normalize_space(
+                        clean_sample["native_contract"].get(
+                            "formal_mining_parent_prompt_audit_sha256"
+                        )
+                    )
+                    or clean_sample["native_contract"].get(
+                        "formal_mining_parent_turns_used_for_output_duplicate_audit"
+                    )
+                    is not True
+                    or int(
+                        clean_sample["native_contract"].get(
+                            "formal_mining_parent_audited_prompt_count"
+                        )
+                        or 0
+                    )
+                    != int(
+                        clean_sample["native_contract"].get(
+                            "formal_mining_segment_api_call_count"
+                        )
+                        or 0
+                    )
+                    or clean_sample["native_contract"].get(
+                        "formal_mining_internal_retry_disabled_for_parent_audit"
+                    )
+                    is not True
+                ):
+                    raise NativeGraphDialogueReject(
+                        "formal Stage64 mining requires zero parent-verbatim prompt exposure and full-parent output duplicate auditing"
+                    )
+                if (
+                    clean_sample["native_contract"].get(
+                        "formal_mining_accepted_prefix_context_schema_version"
+                    )
+                    != FORMAL_ACCEPTED_PREFIX_CONTEXT_SCHEMA_VERSION
+                    or clean_sample["native_contract"].get(
+                        "formal_mining_accepted_prefix_prompt_audit_version"
+                    )
+                    != FORMAL_ACCEPTED_PREFIX_PROMPT_AUDIT_VERSION
+                    or clean_sample["native_contract"].get(
+                        "formal_mining_current_exact_claim_exemption_version"
+                    )
+                    != FORMAL_CURRENT_EXACT_CLAIM_EXEMPTION_VERSION
+                    or clean_sample["native_contract"].get(
+                        "formal_mining_accepted_prefix_prompt_audit_verified"
+                    )
+                    is not True
+                    or int(
+                        clean_sample["native_contract"].get(
+                            "formal_mining_accepted_prefix_verbatim_exposure_count"
+                        )
+                        or 0
+                    )
+                    != 0
+                    or not normalize_space(
+                        clean_sample["native_contract"].get(
+                            "formal_mining_accepted_prefix_prompt_audit_sha256"
+                        )
+                    )
+                    or int(
+                        clean_sample["native_contract"].get(
+                            "formal_mining_accepted_prefix_audited_prompt_count"
+                        )
+                        or 0
+                    )
+                    != int(
+                        clean_sample["native_contract"].get(
+                            "formal_mining_segment_api_call_count"
+                        )
+                        or 0
+                    )
+                    or clean_sample["native_contract"].get(
+                        "formal_mining_accepted_prefix_raw_text_recorded"
+                    )
+                    is not False
+                ):
+                    raise NativeGraphDialogueReject(
+                        "formal Stage64 mining requires zero accepted-prefix-verbatim prompt exposure"
+                    )
+                if clean_sample["native_contract"]["formal_mining_marker_scheduler_verified"] is not True:
+                    raise NativeGraphDialogueReject(
+                        "formal Stage64 mining requires complete, unique capped marker scheduling"
+                    )
+                if (
+                    clean_sample["native_contract"].get(
+                        "formal_mining_difficulty_evidence_placement_applicable"
+                    )
+                    is True
+                    and clean_sample["native_contract"].get(
+                        "formal_mining_primary_evidence_placement_pass"
+                    )
+                    is not True
+                ):
+                    raise NativeGraphDialogueReject(
+                        "formal Stage64 mining requires primary evidence in the requested difficulty band"
+                    )
+                if clean_sample["native_contract"]["formal_mining_exact_claim_preflight_verified"] is not True:
+                    raise NativeGraphDialogueReject(
+                        "formal Stage64 mining requires a verified exact-claim lexical preflight"
+                    )
+                if (
+                    clean_sample["native_contract"].get(
+                        "formal_mining_turn_duplicate_audit_version"
+                    )
+                    != FORMAL_SEGMENT_TURN_DUPLICATE_AUDIT_VERSION
+                    or clean_sample["native_contract"].get(
+                        "formal_mining_turn_duplicate_audit_verified"
+                    )
+                    is not True
+                    or any(
+                        int(
+                            clean_sample["native_contract"].get(counter_key) or 0
+                        )
+                        for counter_key in (
+                            "formal_mining_turn_duplicate_exact_pair_count",
+                            "formal_mining_turn_duplicate_near_pair_count",
+                            "formal_mining_turn_duplicate_phrase_pair_count",
+                        )
+                    )
+                ):
+                    raise NativeGraphDialogueReject(
+                        "formal Stage64 mining requires a verified duplicate-free segmented dialogue audit"
+                    )
+                if (
+                    clean_sample["native_contract"].get(
+                        "formal_mining_opening_diversity_audit_version"
+                    )
+                    != FORMAL_SEGMENT_OPENING_DIVERSITY_AUDIT_VERSION
+                    or clean_sample["native_contract"].get(
+                        "formal_mining_opening_diversity_audit_verified"
+                    )
+                    is not True
+                    or int(
+                        clean_sample["native_contract"].get(
+                            "formal_mining_opening_diversity_concentrated_prefix_count"
+                        )
+                        or 0
+                    )
+                ):
+                    raise NativeGraphDialogueReject(
+                        "formal Stage64 mining requires a verified opening-diverse segmented dialogue audit"
+                    )
+                if (
+                    int(clean_sample["native_contract"].get("formal_mining_marker_cap_per_segment") or 0)
+                    != FORMAL_DIALOGUE_MAX_MARKERS_PER_SEGMENT
+                    or int(clean_sample["native_contract"].get("formal_mining_marker_max_assigned_per_segment") or 0)
+                    > FORMAL_DIALOGUE_MAX_MARKERS_PER_SEGMENT
+                ):
+                    raise NativeGraphDialogueReject(
+                        "formal Stage64 mining marker scheduling exceeded the production cap"
+                    )
+                if clean_sample["native_contract"]["formal_mining_qa_generated_after_frozen_alignment"] is not True:
+                    raise NativeGraphDialogueReject(
+                        "formal Stage64 mining requires final QA after frozen dialogue alignment"
+                    )
+                clean_sample["evidence_dispersion"] = copy.deepcopy(accepted_evidence_dispersion)
+                clean_sample["native_contract"]["evidence_dispersion_gate_pass"] = bool(
+                    accepted_evidence_dispersion.get("pass")
+                )
+                clean_sample["native_contract"]["evidence_span_turns"] = int(
+                    accepted_evidence_dispersion.get("evidence_span_turns") or 0
+                )
+                clean_sample["native_contract"]["max_consecutive_evidence_run"] = int(
+                    accepted_evidence_dispersion.get("max_consecutive_evidence_run") or 0
+                )
+                clean_sample["native_contract"]["evidence_tail_concentration"] = float(
+                    accepted_evidence_dispersion.get("tail_concentration") or 0.0
+                )
             if qa.get("stage64_api_qa_schema_pass"):
                 clean_sample["native_contract"]["qa_operation_answer_type_diversification"] = True
                 clean_sample["native_contract"]["stage64_api_qa_schema_pass"] = True
@@ -9821,6 +26246,9 @@ def generate_graph_conditioned_api_dialogue_samples(
 
             final_qtype = str(qa.get("question_type") or "unknown")
             final_skill = str(clean_sample.get("attack_skill") or "unknown")
+            final_graph_skill = str(
+                current_event_plan.get("attack_skill") or "unknown"
+            )
             # planned vs final diagnostics (recorded for every mode that has a planned cell).
             difficulty_cell = f"{final_qtype}|{final_skill}"
             planned_qtype = (planned_cell or {}).get("question_type") if planned_cell else None
@@ -9832,13 +26260,27 @@ def generate_graph_conditioned_api_dialogue_samples(
                 "planned_attack_skill": planned_skill,
                 "final_question_type": final_qtype,
                 "final_attack_skill": final_skill,
+                "final_graph_attack_skill": final_graph_skill,
                 "question_type_matches_plan": (planned_qtype is None) or (planned_qtype == final_qtype),
-                "attack_skill_matches_plan": (planned_skill is None) or (planned_skill == final_skill),
+                "attack_skill_matches_plan": (planned_skill is None)
+                or (planned_skill == final_graph_skill),
                 "difficulty_cell": difficulty_cell,
             }
 
             marked_sample = {
                 "clean_sample": clean_sample,
+                **(
+                    {
+                        "generation_slot_id": sample_index,
+                        "target_index": target_index,
+                        "stage64_target": copy.deepcopy(stage64_target),
+                        "stage64_target_identity": target_identity,
+                        "stage64_target_id": target_identity,
+                        "stage64_target_plan_sha256": target_plan_sha256,
+                    }
+                    if formal_stage64_mode
+                    else {}
+                ),
                 "current_event_plan": current_event_plan,
                 "dialogue_marked": accepted_appended_dialogue_marked,
                 "appended_dialogue_marked": accepted_appended_dialogue_marked,
@@ -9855,6 +26297,8 @@ def generate_graph_conditioned_api_dialogue_samples(
                     "retry_diagnostics": copy.deepcopy(raw_record.get("dialogue_retry_diagnostics") or []),
                     "alignment_result": alignment_result,
                     "length_metadata": accepted_length_metadata,
+                    "evidence_dispersion": copy.deepcopy(accepted_evidence_dispersion),
+                    "formal_mining_eligible": bool(alignment_result.get("formal_mining_eligible", True)),
                 },
             }
             raw_record["accepted"] = True
@@ -9873,10 +26317,17 @@ def generate_graph_conditioned_api_dialogue_samples(
                 "final_qtype": final_qtype,
                 "final_skill": final_skill,
                 "planned_cell": dict(planned_cell) if planned_cell else None,
+                "generation_slot_id": sample_index,
+                "target_index": target_index,
+                "stage64_target_record": copy.deepcopy(stage64_target_record),
                 "attempt_no": attempt_no,
             }
         except Exception as exc:
             summary["api_failure_count"] += 1
+            if "api_graph_payload" not in raw_record and hasattr(exc, "api_graph_payload"):
+                raw_record["api_graph_payload"] = copy.deepcopy(getattr(exc, "api_graph_payload"))
+            if "api_graph_meta" not in raw_record and hasattr(exc, "api_graph_meta"):
+                raw_record["api_graph_meta"] = copy.deepcopy(getattr(exc, "api_graph_meta"))
             failure_reason = _failure_reason_from_exception(exc, raw_record)
             _bump_failure_reason(summary, failure_reason)
             if failure_reason == "anchor_leak":
@@ -9891,6 +26342,18 @@ def generate_graph_conditioned_api_dialogue_samples(
             reject = {
                 "attempt": attempt_no,
                 "target_sample_index": sample_index,
+                **(
+                    {
+                        "generation_slot_id": sample_index,
+                        "target_index": target_index,
+                        "stage64_target": copy.deepcopy(stage64_target),
+                "stage64_target_identity": target_identity,
+                "stage64_target_id": target_identity,
+                "stage64_target_plan_sha256": target_plan_sha256,
+                    }
+                    if formal_stage64_mode
+                    else {}
+                ),
                 "seed_sample_id": seed_row.get("sample_id") or seed_row.get("source_id"),
                 "error_type": type(exc).__name__,
                 "reason": failure_reason,
@@ -9902,6 +26365,9 @@ def generate_graph_conditioned_api_dialogue_samples(
                 "local_summary": summary,
                 "raw_record": raw_record,
                 "reject": reject,
+                "generation_slot_id": sample_index,
+                "target_index": target_index,
+                "stage64_target_record": copy.deepcopy(stage64_target_record),
                 "attempt_no": attempt_no,
             }
 
@@ -9913,6 +26379,17 @@ def generate_graph_conditioned_api_dialogue_samples(
         'accepted' | 'rejected' | 'cap_rejected' (easy_v2 hard cap converted an accept)."""
         nonlocal attempts
         _merge_local_summary(summary, result["local_summary"])
+        if formal_stage64_mode:
+            target_record = result.get("stage64_target_record")
+            expected_target_index = (
+                target_record.get("target_index")
+                if isinstance(target_record, dict)
+                else None
+            )
+            if result.get("target_index") != expected_target_index:
+                raise RuntimeError(
+                    "formal Stage64 worker result target_index disagrees with its assignment"
+                )
         if result["status"] == "accept":
             final_qtype = result["final_qtype"]
             final_skill = result["final_skill"]
@@ -9920,7 +26397,7 @@ def generate_graph_conditioned_api_dialogue_samples(
             raw_record = result["raw_record"]
             # easy_v2 hard cap on the ACCEPTED set: convert an over-cap accept into a reject so
             # the distribution cannot drift. Checked serially against the live accepted counts.
-            if curriculum_mode == EASY_V2_MODE:
+            if legacy_easy_v2_caps_enabled:
                 cap_reason = None
                 qtype_cap = _qtype_cap(final_qtype)
                 skill_cap = _skill_cap(final_skill)
@@ -9929,30 +26406,53 @@ def generate_graph_conditioned_api_dialogue_samples(
                 elif skill_cap is not None and accepted_skill_counts[final_skill] >= skill_cap:
                     cap_reason = ("easy_v2_attack_skill_cap", f"attack_skill cap reached for {final_skill} (>= {skill_cap})")
                 if cap_reason is not None:
-                    _bump_failure_reason(summary, cap_reason[0])
-                    summary["api_failure_count"] += 1
+                    summary["distribution_cap_reject_count"] = int(
+                        summary.get("distribution_cap_reject_count") or 0
+                    ) + 1
+                    cap_reason_counts = summary.setdefault(
+                        "distribution_cap_reject_reason_counts", {}
+                    )
+                    cap_reason_counts[cap_reason[0]] = int(
+                        cap_reason_counts.get(cap_reason[0]) or 0
+                    ) + 1
                     raw_record["accepted"] = False
                     raw_record["final_reject_reason"] = cap_reason[0]
-                    rejects.append(
-                        {
-                            "attempt": result["attempt_no"],
-                            "target_sample_index": len(clean_samples),
-                            "seed_sample_id": raw_record.get("seed_sample_id"),
-                            "error_type": "NativeGraphDialogueReject",
-                            "reason": cap_reason[0],
-                            "error": cap_reason[1],
-                            "raw_record": copy.deepcopy(raw_record),
-                        }
-                    )
-                    raw_records.append(raw_record)
+                    reject_row = {
+                        "attempt": result["attempt_no"],
+                        "target_sample_index": result["generation_slot_id"],
+                        "generation_slot_id": result["generation_slot_id"],
+                        "target_index": result.get("target_index"),
+                        "stage64_target": copy.deepcopy(
+                            raw_record.get("stage64_target")
+                        ),
+                        "stage64_target_identity": raw_record.get(
+                            "stage64_target_identity"
+                        ),
+                        "stage64_target_id": raw_record.get("stage64_target_id"),
+                        "stage64_target_plan_sha256": raw_record.get(
+                            "stage64_target_plan_sha256"
+                        ),
+                        "seed_sample_id": raw_record.get("seed_sample_id"),
+                        "error_type": "NativeGraphDialogueReject",
+                        "reason": cap_reason[0],
+                        "error": cap_reason[1],
+                        "raw_record": copy.deepcopy(raw_record),
+                    }
+                    _append_unique_audit_row(rejects, reject_audit_keys, reject_row, "reject")
+                    _append_unique_audit_row(raw_records, raw_audit_keys, raw_record, "raw")
                     return "cap_rejected"
             if result["planned_cell"] is not None:
                 planned_cell_log.append(dict(clean_sample["curriculum_diagnostics"]))
+            if stage64_target_ledger is not None:
+                stage64_target_ledger.accept(
+                    result["generation_slot_id"],
+                    clean_sample,
+                )
             accepted_qtype_counts[final_qtype] += 1
             accepted_skill_counts[final_skill] += 1
             clean_samples.append(clean_sample)
-            marked_samples.append(result["marked_sample"])
-            raw_records.append(raw_record)
+            _append_unique_audit_row(marked_samples, marked_audit_keys, result["marked_sample"], "marked")
+            _append_unique_audit_row(raw_records, raw_audit_keys, raw_record, "raw")
             # Crash-safe checkpoint: append each accepted clean sample to the partial log and
             # flush immediately so an interrupted run resumes from here. Runs serially in the
             # collector, so the append order matches clean_samples (concurrency-safe).
@@ -9960,8 +26460,8 @@ def generate_graph_conditioned_api_dialogue_samples(
             _update_summary_for_accept(summary, clean_sample, result["current_event_plan"], result["alignment_result"])
             resolved = "accepted"
         else:
-            rejects.append(result["reject"])
-            raw_records.append(result["raw_record"])
+            _append_unique_audit_row(rejects, reject_audit_keys, result["reject"], "reject")
+            _append_unique_audit_row(raw_records, raw_audit_keys, result["raw_record"], "raw")
             resolved = "rejected"
         if int(getattr(api_args, "checkpoint_every", 0) or 0):
             do_ckpt = result["status"] != "accept" or (len(clean_samples) % int(getattr(api_args, "checkpoint_every")) == 0)
@@ -9974,6 +26474,10 @@ def generate_graph_conditioned_api_dialogue_samples(
                 temp_summary["challenger_generation_sources"] = {
                     "current_method.native_challenger_generation.graph_conditioned_api_dialogue": len(clean_samples)
                 }
+                if stage64_target_ledger is not None:
+                    temp_summary.update(
+                        stage64_target_ledger.quota_summary(clean_samples)
+                    )
                 _write_generation_files(output, clean_samples, marked_samples, raw_records, rejects, temp_summary)
         return resolved
 
@@ -9995,12 +26499,19 @@ def generate_graph_conditioned_api_dialogue_samples(
             return f"{pc.get('question_type')}|{pc.get('attack_skill')}"
         return "unplanned"
 
+    def _stage64_target_record_for_slot(slot: int) -> dict[str, Any] | None:
+        if stage64_target_ledger is None:
+            return None
+        return stage64_target_ledger.claim(slot)
+
     def _record_skip(slot: int, last_status: str) -> None:
         skipped_slots.add(slot)
         reason = f"max_attempts_per_sample_exceeded:{last_status}"
         skipped_slot_reasons[reason] = skipped_slot_reasons.get(reason, 0) + 1
         cell = _cell_label_for_slot(slot)
         skipped_by_cell[cell] = skipped_by_cell.get(cell, 0) + 1
+        if stage64_target_ledger is not None:
+            stage64_target_ledger.skip(slot)
         _bump_failure_reason(summary, "slot_skipped_attempt_cap")
 
     # Circuit breaker: if we skip this many slots in a row WITHOUT any new accept, conclude no
@@ -10028,8 +26539,12 @@ def generate_graph_conditioned_api_dialogue_samples(
         # slot = plan cursor; advances on accept or skip. In the no-skip case slot stays equal
         # to len(clean_samples) (byte-equivalent to the old loop); a skip advances the cursor so
         # the next planned cell comes from the next quota-queue position (reallocation).
-        # Resume: start the cursor past the recovered accepted slots.
-        slot = len(clean_samples)
+        # Formal Stage64 physical slots are persisted and independent from target identities.
+        slot = (
+            stage64_target_ledger.next_generation_slot
+            if stage64_target_ledger is not None
+            else len(clean_samples)
+        )
         while len(clean_samples) < n_samples and attempts < max_attempts and consecutive_api_failures <= max_consecutive_api_failures:
             if per_sample_attempt_cap_enabled and slot_attempt_counts.get(slot, 0) >= max_attempts_per_sample:
                 _record_skip(slot, "exhausted")
@@ -10042,7 +26557,18 @@ def generate_graph_conditioned_api_dialogue_samples(
             attempts += 1
             slot_attempt_counts[slot] = slot_attempt_counts.get(slot, 0) + 1
             planned_cell = _planned_cell_for_slot(slot)
-            status = _collect(_attempt(attempts, slot, planned_cell))
+            stage64_target_record = _stage64_target_record_for_slot(slot)
+            if formal_stage64_mode and stage64_target_record is None:
+                summary["stopped_reason"] = "stage64_target_pool_exhausted"
+                break
+            status = _collect(
+                _attempt(
+                    attempts,
+                    slot,
+                    planned_cell,
+                    stage64_target_record,
+                )
+            )
             if status == "accepted":
                 attempts_for_accepted.append(slot_attempt_counts.get(slot, 1))
                 slot_accepted.add(slot)
@@ -10058,15 +26584,19 @@ def generate_graph_conditioned_api_dialogue_samples(
         import concurrent.futures as _futures
 
         with _futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
-            in_flight: dict[Any, int] = {}  # future -> slot it targets
-            # Resume: start the cursor past the recovered accepted slots.
-            next_slot = len(clean_samples)
+            in_flight: dict[Any, tuple[int, int | None]] = {}
+            # Resume after the largest persisted physical slot, never after clean count.
+            next_slot = (
+                stage64_target_ledger.next_generation_slot
+                if stage64_target_ledger is not None
+                else len(clean_samples)
+            )
             while len(clean_samples) < n_samples and attempts < max_attempts and consecutive_api_failures <= max_consecutive_api_failures:
                 # advance next_slot past any already-accepted or skipped slots
                 while next_slot in slot_accepted or next_slot in skipped_slots:
                     next_slot += 1
                 # top up the in-flight pool, one future per distinct live slot
-                live_slots = set(in_flight.values())
+                live_slots = {assignment[0] for assignment in in_flight.values()}
                 while (
                     len(in_flight) < concurrency
                     and attempts < max_attempts
@@ -10084,8 +26614,23 @@ def generate_graph_conditioned_api_dialogue_samples(
                     attempts += 1
                     slot_attempt_counts[s] = slot_attempt_counts.get(s, 0) + 1
                     planned_cell = _planned_cell_for_slot(s)
-                    fut = executor.submit(_attempt, attempts, s, planned_cell)
-                    in_flight[fut] = s
+                    stage64_target_record = _stage64_target_record_for_slot(s)
+                    if formal_stage64_mode and stage64_target_record is None:
+                        summary["stopped_reason"] = "stage64_target_pool_exhausted"
+                        break
+                    fut = executor.submit(
+                        _attempt,
+                        attempts,
+                        s,
+                        planned_cell,
+                        stage64_target_record,
+                    )
+                    in_flight[fut] = (
+                        s,
+                        stage64_target_record.get("target_index")
+                        if isinstance(stage64_target_record, dict)
+                        else None,
+                    )
                     live_slots.add(s)
                 if per_sample_attempt_cap_enabled and consecutive_skips >= max_consecutive_skips:
                     # no feasible cell left: stop submitting, drain in-flight, then shortfall.
@@ -10095,8 +26640,13 @@ def generate_graph_conditioned_api_dialogue_samples(
                     break
                 done, _pending = _futures.wait(set(in_flight), return_when=_futures.FIRST_COMPLETED)
                 for fut in done:
-                    s = in_flight.pop(fut)
-                    status = _collect(fut.result())
+                    s, expected_target_index = in_flight.pop(fut)
+                    result = fut.result()
+                    if result.get("target_index") != expected_target_index:
+                        raise RuntimeError(
+                            "formal Stage64 concurrent worker changed target identity"
+                        )
+                    status = _collect(result)
                     if status == "accepted":
                         attempts_for_accepted.append(slot_attempt_counts.get(s, 1))
                         slot_accepted.add(s)
@@ -10108,8 +26658,13 @@ def generate_graph_conditioned_api_dialogue_samples(
                 summary["stopped_reason"] = "max_consecutive_api_failures"
             # drain remaining completed workers (do not submit new ones)
             for fut in list(in_flight):
-                s = in_flight.pop(fut)
-                status = _collect(fut.result())
+                s, expected_target_index = in_flight.pop(fut)
+                result = fut.result()
+                if result.get("target_index") != expected_target_index:
+                    raise RuntimeError(
+                        "formal Stage64 concurrent worker changed target identity"
+                    )
+                status = _collect(result)
                 if status == "accepted":
                     attempts_for_accepted.append(slot_attempt_counts.get(s, 1))
                     slot_accepted.add(s)
@@ -10126,6 +26681,23 @@ def generate_graph_conditioned_api_dialogue_samples(
     # Planned vs final + difficulty_cell diagnostics (foundation for closed-loop controller).
     summary["accepted_question_type_counts"] = dict(sorted(accepted_qtype_counts.items()))
     summary["accepted_attack_skill_counts"] = dict(sorted(accepted_skill_counts.items()))
+    summary["accepted_planned_graph_skill_counts"] = dict(
+        sorted(
+            Counter(
+                str(
+                    (
+                        sample.get("curriculum_diagnostics")
+                        if isinstance(sample.get("curriculum_diagnostics"), dict)
+                        else {}
+                    ).get("planned_attack_skill")
+                    or "unplanned"
+                )
+                for sample in clean_samples
+            ).items()
+        )
+    )
+    if stage64_target_ledger is not None:
+        summary.update(stage64_target_ledger.quota_summary(clean_samples))
     summary["difficulty_cell_counts"] = dict(
         sorted(Counter(s.get("difficulty_cell", "unknown") for s in clean_samples).items())
     )
@@ -10163,6 +26735,30 @@ def generate_graph_conditioned_api_dialogue_samples(
                 == "hard_single_choice"
             ).items()
         )
+    )
+    dispersion_rows = [
+        sample.get("evidence_dispersion")
+        for sample in clean_samples
+        if isinstance(sample.get("evidence_dispersion"), dict)
+    ]
+    summary["evidence_dispersion_accepted_count"] = len(dispersion_rows)
+    summary["evidence_dispersion_gate_pass_count_final"] = sum(
+        1 for row in dispersion_rows if row.get("pass") is True
+    )
+    summary["evidence_dispersion_span_turns_mean"] = _mean_numeric(
+        [row.get("evidence_span_turns") for row in dispersion_rows]
+    )
+    summary["evidence_dispersion_max_consecutive_run_mean"] = _mean_numeric(
+        [row.get("max_consecutive_evidence_run") for row in dispersion_rows]
+    )
+    summary["evidence_dispersion_tail_concentration_mean"] = _mean_numeric(
+        [row.get("tail_concentration") for row in dispersion_rows]
+    )
+    summary["formal_mining_ineligible_accepted_count"] = sum(
+        1
+        for sample in clean_samples
+        if isinstance(sample.get("native_contract"), dict)
+        and sample["native_contract"].get("formal_mining_eligible") is False
     )
     # per-sample attempt-cap diagnostics
     summary["skipped_sample_slot_count"] = len(skipped_slots)

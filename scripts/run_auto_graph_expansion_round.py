@@ -67,12 +67,14 @@ if str(ROOT) not in sys.path:
 import generate_r2_llm_graph_expansion_challenger as roundgen  # noqa: E402
 import generate_v13_pilot as v13  # noqa: E402
 from current_method import api_challenger_generation as current_generation  # noqa: E402
+from current_method import build_stage3_parent_v2 as stage3_parent_builder  # noqa: E402
 from current_method import challenger_policy_update as current_policy  # noqa: E402
 from current_method import difficulty_controller as current_difficulty  # noqa: E402
 from current_method import frontier_selection as current_frontier  # noqa: E402
 from current_method import native_challenger_generation as native_generation  # noqa: E402
 from current_method import report_builder as current_reports  # noqa: E402
 from current_method import seed_audit as current_seed_audit  # noqa: E402
+from current_method import stage3_operation_controller as stage3_operations  # noqa: E402
 
 
 QUESTION_TYPES = ("single_choice", "multi_select", "ordering", "state_reconstruction")
@@ -95,9 +97,23 @@ DEFAULT_R2_PARENT_DIR = ROOT / "eval_sets/graph_expansion_challenger_v1/r2_auto_
 DEFAULT_R2_EVAL_DIR = ROOT / "eval_reports/graph_expansion_challenger_v1/solver_r2_ctx9216_full_eval"
 DEFAULT_R2_MERGED = ROOT / "outputs/qwen3_4b_lora_r2_frontier_plus_clean_replay_s0_s2_from_r1_e1_ctx9216_full_merged"
 DEFAULT_R2_ADAPTER = ROOT / "outputs/qwen3_4b_lora_r2_frontier_plus_clean_replay_s0_s2_from_r1_e1_ctx9216_full"
+DEFAULT_ACTIVE_SOLVER_NAME = "solver_base_restart_stage2_accepted"
+DEFAULT_ACTIVE_SOLVER_MERGED = (
+    ROOT / "base_restart_current_method_validation/accepted_models/solver_base_restart_stage2_merged"
+)
+DEFAULT_ACTIVE_SOLVER_ADAPTER = (
+    ROOT / "base_restart_current_method_validation/05_stage2_repair_topup_from_stage1/training/models/adapter"
+)
+DEFAULT_STAGE64_POLICY_SOURCE = (
+    ROOT / "base_restart_current_method_validation/64_qa_operation_answer_type_anchor_diversification_probe/reports"
+)
 DEFAULT_RUN_NAME = "current_method_r3_from_r2"
 DEFAULT_RUN_ROOT = ROOT / "current_method_runs/current_method_r3_from_r2"
 DEFAULT_R2_SAMPLE0_5_PARENT_DIR = ROOT / "eval_sets/graph_expansion_challenger_v1/r2_auto_full_sample0_5_complete"
+STAGE3_ITEM_DIFFICULTY_TARGETS = {"easy", "boundary", "harder_boundary", "hard"}
+FORMAL_STAGE3_MIN_LENGTH_DELTA_TOKENS = 4000
+FORMAL_STAGE3_MIN_CHALLENGER_MAX_TOKENS = 8192
+FORMAL_STAGE3_CHALLENGER_TOKEN_HEADROOM = 1536
 
 
 @dataclass(frozen=True)
@@ -146,7 +162,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--round-number", type=int, default=3)
     parser.add_argument("--parent-round-id", default="r2")
     parser.add_argument("--parent-round-number", type=int, default=2)
-    parser.add_argument("--fixed-solver-name", default="solver_r2_ctx9216_full", help="For provenance, e.g. solver_r2_ctx9216_full.")
+    parser.add_argument(
+        "--fixed-solver-name",
+        default="solver_r2_ctx9216_full",
+        help="Solver provenance name. Stage64 automatically promotes the legacy default to accepted base-restart Stage2.",
+    )
     parser.add_argument("--parent-mode", choices=("clean_v1", "round_dataset"), default="round_dataset")
     parser.add_argument("--parent-dir", default=str(DEFAULT_R2_SAMPLE0_5_PARENT_DIR), help="Required for --parent-mode round_dataset.")
     parser.add_argument("--policy-source-eval-dir", default=str(DEFAULT_R2_EVAL_DIR))
@@ -164,6 +184,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--full", action="store_true", help="Use 1000/150/450 split size.")
     parser.add_argument("--train-only", action="store_true", help="Generate/evaluate only the train split. Useful for incremental train-only parent datasets.")
     parser.add_argument("--seed", type=int, default=20260610)
+    parser.add_argument(
+        "--solver-eval-seed",
+        type=int,
+        default=20260711,
+        help="Fixed Stage2 solver-evaluation seed; independent of the per-batch challenger generation seed.",
+    )
     parser.add_argument("--min-added-turns", type=int, default=48)
     parser.add_argument("--max-added-turns", type=int, default=88)
     parser.add_argument("--min-extension-delta", type=int, default=8)
@@ -287,6 +313,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--solver-model", default=str(DEFAULT_R2_MERGED))
     parser.add_argument("--solver-tokenizer", default=None)
     parser.add_argument("--solver-adapter", default=str(DEFAULT_R2_ADAPTER))
+    parser.add_argument(
+        "--accepted-stage2-solver-model",
+        default=str(DEFAULT_ACTIVE_SOLVER_MERGED),
+        help="Reference path that defines the accepted base-restart Stage2 merged checkpoint.",
+    )
+    parser.add_argument(
+        "--accepted-stage2-solver-adapter",
+        default=str(DEFAULT_ACTIVE_SOLVER_ADAPTER),
+        help="Reference path for the accepted base-restart Stage2 adapter used as a later training parent.",
+    )
     parser.add_argument("--base-model", default=str(DEFAULT_BASE_MODEL))
     parser.add_argument("--max-length", type=int, default=15360)
     parser.add_argument("--max-model-len", type=int, default=16384)
@@ -302,8 +338,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--challenger-temperature", type=float, default=0.25)
     parser.add_argument("--challenger-max-tokens", type=int, default=2048,
                         help="Max output tokens for the dialogue-expansion API call. Lowered from 4096: observed appended dialogue is ~1082 tokens, so 2048 gives ample headroom while truncating runaway generations and reducing latency.")
-    parser.add_argument("--graph-expansion-max-tokens", type=int, default=2048,
-                        help="Max output tokens for the graph/event-plan API call. Raised from 1024 to 2048 after observing invalid_json truncation failures; the event-plan JSON for 3-8 events can exceed 1024.")
+    parser.add_argument("--graph-expansion-max-tokens", type=int, default=4096,
+                        help="Max output tokens for the canonical graph/event-plan API call. Stage3 semantic graphs with 5-8 events can exceed 2048 and otherwise truncate into invalid JSON.")
+    parser.add_argument(
+        "--graph-semantic-retries",
+        type=int,
+        default=1,
+        help="Validator-guided API correction attempts for canonical Stage3 graph failures.",
+    )
     parser.add_argument("--parent-context-tail-turns", type=int, default=12)
     parser.add_argument("--parent-context-relevant-turns", type=int, default=24)
     parser.add_argument("--dialogue-api-parent-token-budget", type=int, default=2048)
@@ -350,6 +392,85 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Opt-in API selfplay mode for anchor-first QA operation / answer-type diversification. "
             "The API challenger must emit qa_operation/answer_type/query_plan; default generation remains unchanged."
+        ),
+    )
+    parser.add_argument(
+        "--stage64-qa-repair-attempts",
+        type=int,
+        default=3,
+        help=(
+            "Maximum QA-only repair calls after one frozen Stage64 final-QA proposal fails "
+            "local validation. The graph, dialogue, alignment, and dependency hashes remain "
+            "immutable; default 3."
+        ),
+    )
+    parser.add_argument(
+        "--allow-nonaccepted-stage64-solver",
+        action="store_true",
+        help="Diagnostic-only override for Stage64 runs using a checkpoint other than accepted base-restart Stage2.",
+    )
+    parser.add_argument(
+        "--stage64-mining-output-dir",
+        default=None,
+        help="Stage64 semantic/balanced/permutation mining output; defaults to <run-root>/stage64_mining.",
+    )
+    parser.add_argument(
+        "--stage64-min-reliable-frontier",
+        type=int,
+        default=300,
+        help="Minimum accumulated robust-frontier count required before a later grouped train/heldout split.",
+    )
+    parser.add_argument(
+        "--stage3-operation-state-path",
+        default=None,
+        help=(
+            "Persistent qa_operation|answer_type controller state. Defaults to "
+            "<run-root>/../stage3_operation_controller_state_v5.json."
+        ),
+    )
+    parser.add_argument(
+        "--stage3-min-operation-share",
+        type=float,
+        default=0.08,
+        help="Exploration floor for every Stage3 QA operation in the next challenger batch.",
+    )
+    parser.add_argument(
+        "--skip-stage3-operation-controller-update",
+        action="store_true",
+        help="Do not update Stage3 operation shares after cyclic recalibration.",
+    )
+    parser.add_argument(
+        "--stage3-batch-closure",
+        choices=("off", "dry-run", "execute"),
+        default="off",
+        help=(
+            "After the Stage3 search recalibration, invoke stage3_batch_closure.py. "
+            "dry-run validates and publishes the exact hardening/final-eval plan; execute "
+            "runs the recoverable closure. Default off preserves search-only mining."
+        ),
+    )
+    parser.add_argument(
+        "--stage3-closure-output-dir",
+        default=None,
+        help=(
+            "Output directory for stage3_batch_closure.py; defaults to "
+            "<stage64-mining-output-dir>/batch_closure."
+        ),
+    )
+    parser.add_argument(
+        "--stage3-final-eval-seed",
+        type=int,
+        default=20260712,
+        help="Independent cyclic-K5 seed used only by the final Stage3 closure evaluation.",
+    )
+    parser.add_argument(
+        "--stage3-max-hardening-retries",
+        type=int,
+        default=2,
+        help=(
+            "Additional challenger-response/local-validation retries for the one-pass "
+            "QA rewrite in Stage3 closure (0..2). This is not a repeated solver-feedback "
+            "difficulty round."
         ),
     )
     parser.add_argument(
@@ -450,6 +571,31 @@ def safe_name(value: str) -> str:
 
 def normalize(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def inject_stage3_operation_plan(
+    policy: dict[str, Any],
+    plan: dict[str, Any],
+    *,
+    explicit_item_difficulty_target: str | None,
+) -> dict[str, Any]:
+    output = dict(policy)
+    output["stage3_operation_plan"] = plan
+    explicit_target = normalize(explicit_item_difficulty_target)
+    controller_target = normalize(plan.get("item_difficulty_target"))
+    if explicit_target:
+        if explicit_target not in STAGE3_ITEM_DIFFICULTY_TARGETS:
+            raise ValueError(f"Unsupported explicit Stage3 item difficulty target: {explicit_target!r}")
+        output["item_difficulty_target"] = explicit_target
+        output["item_difficulty_target_source"] = "explicit_cli"
+    elif controller_target:
+        if controller_target not in STAGE3_ITEM_DIFFICULTY_TARGETS:
+            raise RuntimeError(
+                f"Stage3 operation-controller emitted invalid item difficulty target: {controller_target!r}"
+            )
+        output["item_difficulty_target"] = controller_target
+        output["item_difficulty_target_source"] = "stage3_operation_controller"
+    return output
 
 
 def stable_hash(text: str, length: int = 16) -> str:
@@ -751,6 +897,10 @@ def generation_args(args: argparse.Namespace, policy: dict[str, Any], config_inf
         question_type_mix=question_type_mix,
         max_attempt_multiplier=args.max_attempt_multiplier,
         qa_operation_answer_type_diversification=bool(args.qa_operation_answer_type_diversification),
+        stage64_qa_repair_attempts=max(
+            0,
+            int(args.stage64_qa_repair_attempts),
+        ),
     )
 
 
@@ -1186,7 +1336,13 @@ def generate_round(args: argparse.Namespace, spec: RoundSpec, policy: dict[str, 
         "requested_size": {"train": args.n_train, "dev": args.n_dev, "heldout_per_split": args.heldout_per_split},
         "size_note": "Full requested size selected." if args.full else "Pilot size selected to control API/eval budget while preserving split structure.",
         "challenger": policy.get("challenger"),
-        "fixed_solver": {"name": spec.fixed_solver_name, "model": args.solver_model, "adapter": args.solver_adapter, "modified_or_trained": False},
+        "fixed_solver": {
+            "name": spec.fixed_solver_name,
+            "model": args.solver_model,
+            "adapter": args.solver_adapter,
+            "modified_or_trained": False,
+            "stage64_provenance": args.stage64_solver_provenance,
+        },
         "train": split_summary(train_samples),
         "dev": split_summary(dev_samples),
         "heldout": split_summary(heldout_samples),
@@ -1502,6 +1658,389 @@ def reject_legacy_output_name(path: Path, label: str) -> None:
         raise RuntimeError(f"{label} must not use legacy old_* naming: {resolved}")
 
 
+def enforce_formal_stage3_length_contract(args: argparse.Namespace) -> dict[str, Any] | None:
+    """Require cumulative +4k growth for newly generated formal Stage3 data."""
+
+    if not bool(getattr(args, "qa_operation_answer_type_diversification", False)):
+        return None
+
+    skip_generation = bool(getattr(args, "skip_generation", False))
+    try:
+        requested_delta = int(getattr(args, "min_length_delta_tokens", 0) or 0)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("--min-length-delta-tokens must be an integer") from exc
+    try:
+        requested_max_tokens = int(getattr(args, "challenger_max_tokens", 0) or 0)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("--challenger-max-tokens must be an integer") from exc
+
+    if skip_generation:
+        return {
+            "mode": "existing_generation_recalibration",
+            "enforced_for_this_invocation": False,
+            "minimum_delta_tokens": FORMAL_STAGE3_MIN_LENGTH_DELTA_TOKENS,
+            "requested_delta_tokens": requested_delta,
+            "requested_challenger_max_tokens": requested_max_tokens,
+            "effective_challenger_max_tokens": requested_max_tokens,
+        }
+
+    if requested_delta < FORMAL_STAGE3_MIN_LENGTH_DELTA_TOKENS:
+        raise RuntimeError(
+            "Formal Stage3/Stage64 generation requires --min-length-delta-tokens >= "
+            f"{FORMAL_STAGE3_MIN_LENGTH_DELTA_TOKENS}; got {requested_delta}. "
+            "Use --skip-generation only when recalibrating an already generated dataset."
+        )
+
+    minimum_completion_budget = max(
+        FORMAL_STAGE3_MIN_CHALLENGER_MAX_TOKENS,
+        requested_delta + FORMAL_STAGE3_CHALLENGER_TOKEN_HEADROOM,
+    )
+    effective_max_tokens = max(requested_max_tokens, minimum_completion_budget)
+    args.challenger_max_tokens = effective_max_tokens
+    return {
+        "mode": "formal_stage3_generation",
+        "enforced_for_this_invocation": True,
+        "minimum_delta_tokens": FORMAL_STAGE3_MIN_LENGTH_DELTA_TOKENS,
+        "requested_delta_tokens": requested_delta,
+        "requested_challenger_max_tokens": requested_max_tokens,
+        "minimum_challenger_max_tokens": minimum_completion_budget,
+        "effective_challenger_max_tokens": effective_max_tokens,
+    }
+
+
+def verify_formal_stage3_generation_summary(
+    args: argparse.Namespace,
+    generation_summary: dict[str, Any],
+    *,
+    effective_challenger_max_tokens: int,
+) -> dict[str, Any]:
+    """Fail closed if a formal generation backend did not apply the +4k guard."""
+
+    contract = getattr(args, "stage3_length_contract", None)
+    if not isinstance(contract, dict) or not contract.get("enforced_for_this_invocation"):
+        return generation_summary
+
+    requested_delta = int(getattr(args, "min_length_delta_tokens", 0) or 0)
+    summary_delta = int(generation_summary.get("min_length_delta_tokens") or 0)
+    target_delta = int(generation_summary.get("length_guard_target_delta") or 0)
+    generated_count = int(generation_summary.get("generated_count") or 0)
+    below_requested = int(generation_summary.get("rows_below_min_length_delta") or 0)
+    below_4000 = int(generation_summary.get("rows_below_4000_delta") or 0)
+    api_native_dialogue_count = int(
+        generation_summary.get("formal_mining_api_native_dialogue_accept_count") or 0
+    )
+    local_padding_accept_count = int(
+        generation_summary.get("formal_mining_local_padding_accept_count") or 0
+    )
+    segmented_dialogue_count = int(
+        generation_summary.get("formal_mining_segmented_dialogue_accept_count") or 0
+    )
+    prefix_hash_verified_count = int(
+        generation_summary.get("formal_mining_prefix_hash_chain_verified_count") or 0
+    )
+    final_qa_after_frozen_count = int(
+        generation_summary.get("formal_mining_final_qa_after_frozen_alignment_count") or 0
+    )
+    marker_scheduler_verified_count = int(
+        generation_summary.get("formal_mining_marker_scheduler_verified_count") or 0
+    )
+    exact_claim_preflight_verified_count = int(
+        generation_summary.get("formal_mining_exact_claim_preflight_verified_count") or 0
+    )
+    turn_duplicate_audit_version = str(
+        generation_summary.get("formal_mining_turn_duplicate_audit_version") or ""
+    ).strip()
+    turn_duplicate_audit_verified_count = int(
+        generation_summary.get("formal_mining_turn_duplicate_audit_verified_count") or 0
+    )
+    turn_duplicate_pair_count = sum(
+        int(generation_summary.get(field) or 0)
+        for field in (
+            "formal_mining_turn_duplicate_exact_pair_count_sum",
+            "formal_mining_turn_duplicate_near_pair_count_sum",
+            "formal_mining_turn_duplicate_phrase_pair_count_sum",
+        )
+    )
+    opening_diversity_audit_version = str(
+        generation_summary.get("formal_mining_opening_diversity_audit_version")
+        or ""
+    ).strip()
+    opening_diversity_audit_verified_count = int(
+        generation_summary.get(
+            "formal_mining_opening_diversity_audit_verified_count"
+        )
+        or 0
+    )
+    opening_diversity_concentrated_prefix_count = int(
+        generation_summary.get(
+            "formal_mining_opening_diversity_concentrated_prefix_count_sum"
+        )
+        or 0
+    )
+    issues: list[str] = []
+    if generation_summary.get("length_guard_enabled") is not True:
+        issues.append("length_guard_enabled is not true")
+    if summary_delta < requested_delta:
+        issues.append(f"summary min_length_delta_tokens={summary_delta} < requested={requested_delta}")
+    if generated_count > 0 and target_delta < requested_delta:
+        issues.append(f"summary length_guard_target_delta={target_delta} < requested={requested_delta}")
+    if below_requested:
+        issues.append(f"rows_below_min_length_delta={below_requested}")
+    if below_4000:
+        issues.append(f"rows_below_4000_delta={below_4000}")
+    if local_padding_accept_count:
+        issues.append(f"formal_mining_local_padding_accept_count={local_padding_accept_count}")
+    if generated_count > 0 and api_native_dialogue_count != generated_count:
+        issues.append(
+            "formal_mining_api_native_dialogue_accept_count="
+            f"{api_native_dialogue_count} != generated_count={generated_count}"
+        )
+    for field, count in (
+        ("formal_mining_segmented_dialogue_accept_count", segmented_dialogue_count),
+        ("formal_mining_prefix_hash_chain_verified_count", prefix_hash_verified_count),
+        ("formal_mining_final_qa_after_frozen_alignment_count", final_qa_after_frozen_count),
+        ("formal_mining_marker_scheduler_verified_count", marker_scheduler_verified_count),
+        (
+            "formal_mining_exact_claim_preflight_verified_count",
+            exact_claim_preflight_verified_count,
+        ),
+        (
+            "formal_mining_turn_duplicate_audit_verified_count",
+            turn_duplicate_audit_verified_count,
+        ),
+        (
+            "formal_mining_opening_diversity_audit_verified_count",
+            opening_diversity_audit_verified_count,
+        ),
+    ):
+        if generated_count > 0 and count != generated_count:
+            issues.append(f"{field}={count} != generated_count={generated_count}")
+    if generated_count > 0 and not turn_duplicate_audit_version:
+        issues.append("formal_mining_turn_duplicate_audit_version is missing")
+    if turn_duplicate_pair_count:
+        issues.append(
+            "formal_mining accepted turn duplicate pair count="
+            f"{turn_duplicate_pair_count}"
+        )
+    if generated_count > 0 and not opening_diversity_audit_version:
+        issues.append("formal_mining_opening_diversity_audit_version is missing")
+    if opening_diversity_concentrated_prefix_count:
+        issues.append(
+            "formal_mining accepted concentrated opening prefix count="
+            f"{opening_diversity_concentrated_prefix_count}"
+        )
+    if issues:
+        raise RuntimeError("Formal Stage3 generation violated the cumulative length contract: " + "; ".join(issues))
+
+    audited = dict(generation_summary)
+    audited["length_guard_target_delta"] = max(target_delta, requested_delta)
+    audited["formal_stage3_length_contract"] = {
+        **contract,
+        "effective_challenger_max_tokens": int(effective_challenger_max_tokens),
+        "summary_verified": True,
+    }
+    audited["challenger_max_tokens"] = int(effective_challenger_max_tokens)
+    audited["formal_stage3_parent_cleanliness"] = getattr(
+        args,
+        "stage3_parent_cleanliness_audit",
+        None,
+    )
+    return audited
+
+
+def enforce_formal_stage3_parent_cleanliness(
+    args: argparse.Namespace,
+    seed_rows: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Reject historical locally padded parents before formal API generation."""
+
+    if not bool(getattr(args, "qa_operation_answer_type_diversification", False)):
+        return None
+    if bool(getattr(args, "skip_generation", False)):
+        return {
+            "enforced_for_this_invocation": False,
+            "reason": "existing_generation_recalibration",
+        }
+
+    affected_rows: list[dict[str, Any]] = []
+    detected_turn_count = 0
+    for row_index, row in enumerate(seed_rows):
+        _dialogue, turns = stage3_parent_builder.dialogue_and_turns(row)
+        detected = stage3_parent_builder.detect_historical_deterministic_padding(turns)
+        if not detected:
+            continue
+        detected_turn_count += len(detected)
+        affected_rows.append(
+            {
+                "row_index": row_index,
+                "sample_id": row.get("sample_id") or row.get("source_id"),
+                "detected_turn_count": len(detected),
+                "detected_turn_ids": [item.get("turn_id") for item in detected],
+            }
+        )
+
+    if affected_rows:
+        raise RuntimeError(
+            "Formal Stage3 parent admission rejected historical deterministic dialogue padding: "
+            f"affected_rows={len(affected_rows)}/{len(seed_rows)}, "
+            f"detected_turns={detected_turn_count}, examples={affected_rows[:3]}. "
+            "Rebuild the Stage2 parent file with "
+            "scripts/current_method/build_stage3_parent_v2.py "
+            "--strip-historical-deterministic-padding."
+        )
+    return {
+        "enforced_for_this_invocation": True,
+        "parent_row_count": len(seed_rows),
+        "affected_row_count": 0,
+        "detected_turn_count": 0,
+        "cleanup_version": stage3_parent_builder.DETERMINISTIC_PADDING_CLEANUP_VERSION,
+        "known_padding_signature_sha256": (
+            stage3_parent_builder.deterministic_padding_signature_sha256()
+        ),
+    }
+
+
+def enforce_stage64_solver_provenance(args: argparse.Namespace) -> dict[str, Any] | None:
+    """Prevent Stage64 mining from silently falling back to the legacy R2 chain."""
+
+    if not bool(getattr(args, "qa_operation_answer_type_diversification", False)):
+        return None
+    accepted_model = Path(args.accepted_stage2_solver_model).resolve()
+    accepted_adapter = Path(args.accepted_stage2_solver_adapter).resolve()
+    requested_model = Path(args.solver_model).resolve()
+    requested_adapter = Path(args.solver_adapter).resolve() if args.solver_adapter else None
+    issues: list[str] = []
+    if requested_model != accepted_model:
+        issues.append(f"solver_model={requested_model} expected={accepted_model}")
+    if requested_adapter is not None and requested_adapter != accepted_adapter:
+        issues.append(f"solver_adapter={requested_adapter} expected={accepted_adapter} or empty")
+    if str(args.fixed_solver_name) != DEFAULT_ACTIVE_SOLVER_NAME:
+        issues.append(
+            f"fixed_solver_name={args.fixed_solver_name!r} expected={DEFAULT_ACTIVE_SOLVER_NAME!r}"
+        )
+
+    source_dir = Path(args.policy_source_eval_dir).resolve()
+    source_summary_path = source_dir / "solver_eval_summary.json"
+    source_model: Path | None = None
+    if source_summary_path.exists():
+        source_summary = read_json(source_summary_path)
+        source_model_raw = source_summary.get("model") if isinstance(source_summary, dict) else None
+        if source_model_raw:
+            source_model = Path(str(source_model_raw)).resolve()
+            if source_model != accepted_model:
+                issues.append(
+                    f"policy_source_solver={source_model} expected={accepted_model} ({source_summary_path})"
+                )
+    elif not args.policy:
+        issues.append(f"policy source lacks solver_eval_summary.json: {source_summary_path}")
+
+    if issues and not bool(getattr(args, "allow_nonaccepted_stage64_solver", False)):
+        raise RuntimeError(
+            "Stage64 requires the accepted base-restart Stage2 solver and matching policy provenance; "
+            + "; ".join(issues)
+            + ". Use --allow-nonaccepted-stage64-solver only for explicitly labeled diagnostics."
+        )
+    return {
+        "profile": "accepted_base_restart_stage2" if not issues else "diagnostic_override",
+        "fixed_solver_name": str(args.fixed_solver_name),
+        "requested_model": str(args.solver_model),
+        "resolved_model": str(requested_model),
+        "accepted_model": str(accepted_model),
+        "requested_adapter": str(args.solver_adapter or ""),
+        "resolved_adapter": str(requested_adapter) if requested_adapter else None,
+        "accepted_adapter": str(accepted_adapter),
+        "policy_source_eval_dir": str(source_dir),
+        "policy_source_model": str(source_model) if source_model else None,
+        "diagnostic_override": bool(issues),
+        "issues": issues,
+    }
+
+
+def validate_stage3_batch_closure_args(args: argparse.Namespace) -> dict[str, Any]:
+    """Fail closed before a Stage3 closure can spend API or solver compute."""
+
+    mode = str(getattr(args, "stage3_batch_closure", "off") or "off")
+    if mode not in {"off", "dry-run", "execute"}:
+        raise RuntimeError(f"Unsupported --stage3-batch-closure mode: {mode!r}")
+    retries = int(getattr(args, "stage3_max_hardening_retries", 2))
+    if retries < 0 or retries > 2:
+        raise RuntimeError("--stage3-max-hardening-retries must be between 0 and 2")
+    contract: dict[str, Any] = {
+        "enabled": mode != "off",
+        "mode": mode,
+        "max_hardening_retries": retries,
+    }
+    if mode == "off":
+        return contract
+    if not bool(getattr(args, "qa_operation_answer_type_diversification", False)):
+        raise RuntimeError(
+            "--stage3-batch-closure requires --qa-operation-answer-type-diversification"
+        )
+    if bool(getattr(args, "skip_eval", False)):
+        raise RuntimeError("--stage3-batch-closure is incompatible with --skip-eval")
+    if mode == "execute" and bool(
+        getattr(args, "allow_nonaccepted_stage64_solver", False)
+    ):
+        raise RuntimeError(
+            "--stage3-batch-closure execute forbids --allow-nonaccepted-stage64-solver; "
+            "the hardening and final verdict require the accepted Stage2 solver"
+        )
+
+    search_seed = int(getattr(args, "solver_eval_seed", getattr(args, "seed", 0)))
+    final_seed = int(getattr(args, "stage3_final_eval_seed", 20260712))
+    if search_seed == final_seed:
+        raise RuntimeError(
+            "--stage3-final-eval-seed must differ from --solver-eval-seed "
+            f"(both are {search_seed})"
+        )
+
+    expected = {
+        "max_model_len": 32768,
+        "max_new_tokens": 80,
+        "temperature": 1.0,
+        "top_p": 0.9,
+    }
+    actual = {
+        "max_model_len": int(getattr(args, "max_model_len", 0)),
+        "max_new_tokens": int(getattr(args, "max_new_tokens", 0)),
+        "temperature": float(effective_stage64_k5_eval_temperature(args)),
+        "top_p": float(getattr(args, "top_p", 0.0)),
+    }
+    mismatches = {
+        key: {"actual": actual[key], "required": required}
+        for key, required in expected.items()
+        if (
+            actual[key] != required
+            if isinstance(required, int)
+            else abs(float(actual[key]) - float(required)) > 1e-12
+        )
+    }
+    if mismatches:
+        raise RuntimeError(
+            "Stage3 closure requires the fixed pre-hardening search config "
+            "max_model_len=32768, max_new_tokens=80, temperature=1.0, top_p=0.9; "
+            f"mismatches={mismatches}"
+        )
+
+    config_path = project_path(getattr(args, "config", DEFAULT_CONFIG))
+    if not config_path.is_file():
+        raise RuntimeError(
+            "Stage3 closure requires an existing challenger --config before dry-run/execute: "
+            f"{config_path}"
+        )
+    contract.update(
+        {
+            "search_eval_seed": search_seed,
+            "final_eval_seed": final_seed,
+            "independent_eval_seeds": True,
+            "search_eval_config": actual,
+            "challenger_config": str(config_path.resolve()),
+            "diagnostic_solver_override_allowed": False if mode == "execute" else None,
+        }
+    )
+    return contract
+
+
 def finalize_current_method_args(args: argparse.Namespace) -> argparse.Namespace:
     if "old_improved" in args.run_name or "old_method" in args.run_name:
         raise RuntimeError(f"run_name must not contain legacy naming: {args.run_name}")
@@ -1509,18 +2048,47 @@ def finalize_current_method_args(args: argparse.Namespace) -> argparse.Namespace
         args.n_train = 1800 if not args.train_only else 1000
         args.n_dev = 150
         args.heldout_per_split = 150
+    args.stage3_length_contract = enforce_formal_stage3_length_contract(args)
+    if args.qa_operation_answer_type_diversification and not args.allow_nonaccepted_stage64_solver:
+        if str(args.fixed_solver_name) == "solver_r2_ctx9216_full":
+            args.fixed_solver_name = DEFAULT_ACTIVE_SOLVER_NAME
+        if project_path(args.solver_model).resolve() == DEFAULT_R2_MERGED.resolve():
+            args.solver_model = str(project_path(args.accepted_stage2_solver_model))
+        if args.solver_adapter and project_path(args.solver_adapter).resolve() == DEFAULT_R2_ADAPTER.resolve():
+            args.solver_adapter = str(project_path(args.accepted_stage2_solver_adapter))
+    if args.qa_operation_answer_type_diversification and int(args.max_model_len) == 16384:
+        args.max_model_len = 32768
+    if args.qa_operation_answer_type_diversification and int(args.max_length) == 15360:
+        args.max_length = 32000
+    args.stage3_batch_closure_contract = validate_stage3_batch_closure_args(args)
     args.run_root = str(project_path(args.run_root))
     run_root = Path(args.run_root)
+    if args.qa_operation_answer_type_diversification:
+        legacy_policy_source = project_path(DEFAULT_R2_EVAL_DIR).resolve()
+        requested_policy_source = project_path(args.policy_source_eval_dir).resolve()
+        if requested_policy_source == legacy_policy_source:
+            args.policy_source_eval_dir = str(DEFAULT_STAGE64_POLICY_SOURCE)
     args.parent_dir = str(project_path(args.parent_dir))
     args.policy_source_eval_dir = str(project_path(args.policy_source_eval_dir))
     args.config = str(project_path(args.config))
     args.solver_model = str(project_path(args.solver_model))
     args.solver_adapter = optional_project_path(args.solver_adapter)
+    args.accepted_stage2_solver_model = str(project_path(args.accepted_stage2_solver_model))
+    args.accepted_stage2_solver_adapter = str(project_path(args.accepted_stage2_solver_adapter))
     args.base_model = str(project_path(args.base_model))
     if args.difficulty_state_path:
         args.difficulty_state_path = str(project_path(args.difficulty_state_path))
+    args.stage3_operation_state_path = str(
+        project_path(args.stage3_operation_state_path)
+        if args.stage3_operation_state_path
+        else run_root.parent / "stage3_operation_controller_state_v5.json"
+    )
+    if args.stage3_closure_output_dir:
+        args.stage3_closure_output_dir = str(project_path(args.stage3_closure_output_dir))
     if args.solver_tokenizer:
         args.solver_tokenizer = str(project_path(args.solver_tokenizer))
+    elif args.qa_operation_answer_type_diversification:
+        args.solver_tokenizer = str(project_path(args.base_model))
     args.output_dir = str(project_path(args.output_dir) if args.output_dir else run_root / "generation")
     args.report_dir = str(project_path(args.report_dir) if args.report_dir else run_root / "reports")
     args.policy_dir = str(run_root / "policy")
@@ -1544,6 +2112,7 @@ def finalize_current_method_args(args: argparse.Namespace) -> argparse.Namespace
         Path(args.partial_samples).parent.mkdir(parents=True, exist_ok=True)
     if Path(args.failed_api_calls).name != "failed_api_calls.jsonl":
         Path(args.failed_api_calls).parent.mkdir(parents=True, exist_ok=True)
+    args.stage64_solver_provenance = enforce_stage64_solver_provenance(args)
     return args
 
 
@@ -1793,6 +2362,12 @@ def maybe_run_training_pipeline(args: argparse.Namespace, report: dict[str, Any]
     report_dir = Path(args.report_dir)
     if args.require_quality_audit_before_train and not quality_audit_passed(report_dir):
         raise RuntimeError("Training blocked: no passing quality audit file found in reports/.")
+    stage64_provenance = getattr(args, "stage64_solver_provenance", None)
+    if stage64_provenance and stage64_provenance.get("profile") != "accepted_base_restart_stage2":
+        raise RuntimeError(
+            "Training blocked: Stage3 must start from the accepted base-restart Stage2 merged "
+            "checkpoint; diagnostic solver overrides are evaluation-only."
+        )
     required = {
         "dev_or_heldout_frontier_count": report.get("dev_or_heldout_frontier_count") == 0,
         "frontier_count": int(report.get("frontier_count") or 0) > 0,
@@ -1824,9 +2399,8 @@ def maybe_run_training_pipeline(args: argparse.Namespace, report: dict[str, Any]
         "--report-dir",
         str(Path(args.report_dir) / "training"),
         "--base-model",
-        str(args.base_model),
-        "--init-adapter-dir",
-        str(args.solver_adapter),
+        str(args.solver_model),
+        "--no-valid",
         "--adapter-output-dir",
         str(model_dir),
         "--merged-output-dir",
@@ -1984,6 +2558,392 @@ def ensure_solver_eval_placeholder_for_skip_eval(samples: list[dict[str, Any]]) 
         }
 
 
+def attach_stage3_generation_protocol_from_raw_audit(
+    samples: list[dict[str, Any]],
+    raw_audit_path: Path,
+    *,
+    require_existing_fingerprint: bool = False,
+) -> dict[str, Any]:
+    """Bind generated samples to the exact semantic graph gate that accepted them."""
+
+    raw_rows = read_jsonl(raw_audit_path)
+    accepted_by_sample: dict[str, dict[str, Any]] = {}
+    for row in raw_rows:
+        if not isinstance(row, dict) or row.get("accepted") is not True:
+            continue
+        sample_id = normalize(row.get("sample_id"))
+        if not sample_id:
+            raise RuntimeError(f"Accepted Stage3 raw audit row lacks sample_id: {raw_audit_path}")
+        if sample_id in accepted_by_sample:
+            raise RuntimeError(f"Duplicate accepted Stage3 raw audit sample_id: {sample_id}")
+        accepted_by_sample[sample_id] = row
+
+    sample_ids = [normalize(sample.get("sample_id")) for sample in samples]
+    if any(not sample_id for sample_id in sample_ids) or len(sample_ids) != len(set(sample_ids)):
+        raise RuntimeError("Stage3 generated sample_id values must be non-empty and unique")
+    missing = sorted(set(sample_ids) - set(accepted_by_sample))
+    unexpected = sorted(set(accepted_by_sample) - set(sample_ids))
+    if missing or unexpected:
+        raise RuntimeError(
+            "Stage3 generation/raw-audit sample mismatch: "
+            f"missing_accepted_audit={missing[:5]} unexpected_accepted_audit={unexpected[:5]}"
+        )
+
+    gate_versions: Counter[str] = Counter()
+    for sample, sample_id in zip(samples, sample_ids):
+        if require_existing_fingerprint:
+            stage3_operations.validate_generation_protocol(sample)
+        graph_meta = accepted_by_sample[sample_id].get("api_graph_meta")
+        graph_meta = graph_meta if isinstance(graph_meta, dict) else {}
+        quality = graph_meta.get("semantic_graph_v2_quality")
+        quality = quality if isinstance(quality, dict) else {}
+        gate_version = normalize(quality.get("gate_version"))
+        if quality.get("pass") is not True or not gate_version:
+            raise RuntimeError(
+                f"Stage3 accepted raw audit lacks a passing semantic graph gate: {sample_id}"
+            )
+        if gate_version != stage3_operations.REQUIRED_GRAPH_GATE_VERSION:
+            raise RuntimeError(
+                "Stage3 controller refuses stale semantic graph protocol: "
+                f"sample_id={sample_id} gate_version={gate_version!r} "
+                f"required={stage3_operations.REQUIRED_GRAPH_GATE_VERSION!r}"
+            )
+        if not require_existing_fingerprint:
+            stage3_operations.attach_generation_protocol(
+                sample,
+                graph_gate_version=gate_version,
+            )
+        gate_versions[gate_version] += 1
+    return {
+        "raw_audit_path": str(raw_audit_path.resolve()),
+        "sample_count": len(samples),
+        "gate_versions": dict(sorted(gate_versions.items())),
+        "generation_protocol": stage3_operations.generation_protocol(),
+    }
+
+
+def effective_stage64_k5_eval_temperature(args: argparse.Namespace) -> float:
+    """Resolve the dedicated cyclic-K5 temperature advertised by the CLI."""
+
+    dedicated = float(getattr(args, "k5_eval_temperature", 0.0) or 0.0)
+    fallback = float(getattr(args, "temperature", 0.7))
+    return dedicated if dedicated > 0.0 else fallback
+
+
+def build_stage64_recalibration_command(
+    args: argparse.Namespace,
+    *,
+    input_path: Path,
+    output_dir: Path,
+    report_dir: Path,
+    solver_eval_seed: int,
+) -> list[str]:
+    command = [
+        sys.executable,
+        str(SCRIPTS / "current_method/recalibrate_stage64_shuffled_frontier.py"),
+        "--input",
+        str(input_path),
+        "--output-dir",
+        str(output_dir),
+        "--report-dir",
+        str(report_dir),
+        "--base-model",
+        str(args.base_model),
+        "--solver-model",
+        str(args.solver_model),
+        "--solver-tokenizer",
+        str(args.solver_tokenizer or args.base_model),
+        "--accepted-stage2-solver-model",
+        str(args.accepted_stage2_solver_model),
+        "--k-eval",
+        "5",
+        "--permutation-mode",
+        "cyclic",
+        "--min-frontier-permutation-share",
+        "1.0",
+        "--group-level",
+        "lineage_group",
+        "--heldout-ratio",
+        "0",
+        "--seed",
+        str(solver_eval_seed),
+        "--generation-seed",
+        str(args.seed),
+        "--max-model-len",
+        str(args.max_model_len),
+        "--max-new-tokens",
+        str(args.max_new_tokens),
+        "--temperature",
+        str(effective_stage64_k5_eval_temperature(args)),
+        "--top-p",
+        str(args.top_p),
+        "--gpu-memory-utilization",
+        str(args.gpu_memory_utilization),
+    ]
+    if args.allow_nonaccepted_stage64_solver:
+        command.append("--allow-nonaccepted-solver")
+    return command
+
+
+def build_stage3_batch_closure_command(
+    args: argparse.Namespace,
+    *,
+    mining_root: Path,
+    search_recalibration_dir: Path,
+    output_dir: Path,
+) -> list[str]:
+    """Build the thin runner boundary around stage3_batch_closure.py."""
+
+    contract = validate_stage3_batch_closure_args(args)
+    mode = str(contract["mode"])
+    if mode == "off":
+        raise RuntimeError("Cannot build a Stage3 batch-closure command when mode is off")
+    command = [
+        sys.executable,
+        str(SCRIPTS / "current_method/stage3_batch_closure.py"),
+        "--batch-run-dir",
+        str(mining_root),
+        "--search-recalibration-dir",
+        str(search_recalibration_dir),
+        "--output-dir",
+        str(output_dir),
+        "--generation-seed",
+        str(args.seed),
+        "--search-eval-seed",
+        str(contract["search_eval_seed"]),
+        "--final-eval-seed",
+        str(contract["final_eval_seed"]),
+        "--accepted-stage2-solver-model",
+        str(args.accepted_stage2_solver_model),
+        "--base-model",
+        str(args.base_model),
+        "--config",
+        str(args.config),
+        "--max-hardening-retries",
+        str(contract["max_hardening_retries"]),
+        "--gpu-memory-utilization",
+        str(args.gpu_memory_utilization),
+        "--dry-run" if mode == "dry-run" else "--execute",
+    ]
+    return command
+
+
+def run_stage64_robust_mining(args: argparse.Namespace, samples: list[dict[str, Any]]) -> dict[str, Any]:
+    """Run the mandatory Stage64 semantic, balance, and all-position mining closure."""
+
+    closure_contract = validate_stage3_batch_closure_args(args)
+    solver_eval_seed = int(getattr(args, "solver_eval_seed", args.seed))
+    generation_protocol_audit = attach_stage3_generation_protocol_from_raw_audit(
+        samples,
+        Path(args.output_dir) / "graph_conditioned_api_dialogue_raw.jsonl",
+        require_existing_fingerprint=bool(getattr(args, "skip_generation", False)),
+    )
+    input_path = Path(args.output_dir) / "samples.jsonl"
+    current_generation.write_jsonl(input_path, samples)
+    mining_root = (
+        project_path(args.stage64_mining_output_dir)
+        if args.stage64_mining_output_dir
+        else Path(args.run_root) / "stage64_mining"
+    )
+    shuffled_dir = mining_root / "shuffled"
+    recalibrated_dir = mining_root / "recalibrated"
+    recalibrated_reports = recalibrated_dir / "reports"
+    shuffle_cmd = [
+        sys.executable,
+        str(SCRIPTS / "current_method/shuffle_stage64_options.py"),
+        "--input",
+        str(input_path),
+        "--output-dir",
+        str(shuffled_dir),
+        "--seed",
+        str(args.seed),
+    ]
+    logging.info("Stage64 shuffle/quality command: %s", " ".join(shuffle_cmd))
+    subprocess.run(shuffle_cmd, cwd=str(ROOT), check=True)
+    shuffle_summary = read_json(shuffled_dir / "option_shuffle_summary.json")
+    quality = shuffle_summary.get("quality") if isinstance(shuffle_summary, dict) else {}
+    quality_passed = int((quality or {}).get("accepted_count") or 0)
+
+    recalibration_summary: dict[str, Any] | None = None
+    if quality_passed and not args.skip_eval:
+        recalibrate_cmd = build_stage64_recalibration_command(
+            args,
+            input_path=shuffled_dir / "clean_samples.jsonl",
+            output_dir=recalibrated_dir,
+            report_dir=recalibrated_reports,
+            solver_eval_seed=solver_eval_seed,
+        )
+        logging.info("Stage64 robust recalibration command: %s", " ".join(recalibrate_cmd))
+        subprocess.run(recalibrate_cmd, cwd=str(ROOT), check=True)
+        recalibration_summary = read_json(recalibrated_dir / "recalibration_summary.json")
+
+    closure_mode = str(closure_contract["mode"])
+    batch_closure: dict[str, Any] = {
+        "mode": closure_mode,
+        "contract": closure_contract,
+        "invoked": False,
+        "status": "off" if closure_mode == "off" else "search_recalibration_unavailable",
+        "output_dir": None,
+        "manifest_path": None,
+        "manifest": None,
+        "counts": {},
+    }
+    if closure_mode != "off" and isinstance(recalibration_summary, dict):
+        closure_output_dir = (
+            project_path(args.stage3_closure_output_dir)
+            if getattr(args, "stage3_closure_output_dir", None)
+            else mining_root / "batch_closure"
+        )
+        closure_cmd = build_stage3_batch_closure_command(
+            args,
+            mining_root=mining_root,
+            search_recalibration_dir=recalibrated_dir,
+            output_dir=closure_output_dir,
+        )
+        logging.info("Stage3 batch closure command: %s", " ".join(closure_cmd))
+        subprocess.run(closure_cmd, cwd=str(ROOT), check=True)
+        manifest_path = closure_output_dir / "closure_manifest.json"
+        if not manifest_path.is_file():
+            raise RuntimeError(
+                "stage3_batch_closure.py completed without publishing closure_manifest.json: "
+                f"{manifest_path}"
+            )
+        closure_manifest = read_json(manifest_path)
+        closure_counts = closure_manifest.get("counts")
+        if not isinstance(closure_counts, dict):
+            raise RuntimeError(f"Stage3 closure manifest lacks counts: {manifest_path}")
+        batch_closure = {
+            "mode": closure_mode,
+            "contract": closure_contract,
+            "invoked": True,
+            "status": str(closure_manifest.get("status") or "unknown"),
+            "output_dir": str(closure_output_dir.resolve()),
+            "manifest_path": str(manifest_path.resolve()),
+            "manifest": closure_manifest,
+            "counts": closure_counts,
+        }
+
+    search_frontier_count = (
+        int(recalibration_summary.get("frontier_count") or 0)
+        if isinstance(recalibration_summary, dict)
+        else 0
+    )
+    closure_final_frontier_raw = (batch_closure.get("counts") or {}).get(
+        "final_reliable_frontier"
+    )
+    closure_final_frontier_count = (
+        int(closure_final_frontier_raw)
+        if isinstance(closure_final_frontier_raw, int)
+        and not isinstance(closure_final_frontier_raw, bool)
+        else None
+    )
+    frontier_count = (
+        closure_final_frontier_count
+        if closure_final_frontier_count is not None
+        else search_frontier_count
+    )
+    minimum = max(1, int(args.stage64_min_reliable_frontier or 300))
+    operation_state_path = Path(
+        getattr(args, "stage3_operation_state_path", None)
+        or (Path(args.run_root).parent / "stage3_operation_controller_state_v5.json")
+    )
+    operation_controller: dict[str, Any] = {
+        "state_path": str(operation_state_path),
+        "updated": False,
+        "reason": "no_cyclic_recalibration",
+        "evaluation_phase": "pre_hardening_search",
+    }
+    controller_samples_path = recalibrated_dir / "clean_samples.jsonl"
+    if (
+        isinstance(recalibration_summary, dict)
+        and controller_samples_path.exists()
+        and not bool(getattr(args, "skip_stage3_operation_controller_update", False))
+    ):
+        controller_state = stage3_operations.update_state(
+            samples_path=controller_samples_path,
+            state_path=operation_state_path,
+            accepted_solver_model=str(args.accepted_stage2_solver_model),
+            minimum_operation_share=float(getattr(args, "stage3_min_operation_share", 0.08)),
+        )
+        operation_controller = {
+            "state_path": str(operation_state_path.resolve()),
+            "updated": True,
+            "reason": "pre_hardening_search_cyclic_k5_aggregate_consumed",
+            "evaluation_phase": "pre_hardening_search",
+            "batch_count": len(controller_state.get("batches") or []),
+            "aggregate_sample_count": int((controller_state.get("aggregate") or {}).get("sample_count") or 0),
+            "next_plan": controller_state.get("stage3_operation_plan"),
+            "extra_solver_evaluation_run": False,
+        }
+    elif bool(getattr(args, "skip_stage3_operation_controller_update", False)):
+        operation_controller["reason"] = "explicitly_skipped"
+    summary = {
+        "method": "stage64_robust_batch_mining",
+        "input": str(input_path),
+        "generated_sample_count": len(samples),
+        "mining_root": str(mining_root),
+        "fixed_solver_provenance": args.stage64_solver_provenance,
+        "generation_seed": int(args.seed),
+        "solver_eval_seed": solver_eval_seed,
+        "requested_k5_eval_temperature": float(
+            getattr(args, "k5_eval_temperature", 0.0) or 0.0
+        ),
+        "effective_k5_eval_temperature": effective_stage64_k5_eval_temperature(args),
+        "k5_eval_temperature_source": (
+            "k5_eval_temperature"
+            if float(getattr(args, "k5_eval_temperature", 0.0) or 0.0) > 0.0
+            else "temperature_fallback"
+        ),
+        "formal_stage3_length_contract": getattr(args, "stage3_length_contract", None),
+        "generation_protocol_audit": generation_protocol_audit,
+        "quality": quality,
+        "shuffle": shuffle_summary.get("shuffle") if isinstance(shuffle_summary, dict) else None,
+        "evaluation_skipped": bool(args.skip_eval),
+        "recalibration": recalibration_summary,
+        "stage3_batch_closure": batch_closure,
+        "search_robust_frontier_count": search_frontier_count,
+        "final_reliable_frontier_count": closure_final_frontier_count,
+        "robust_frontier_count": frontier_count,
+        "minimum_reliable_frontier_before_split": minimum,
+        "minimum_count_reached_in_this_batch": frontier_count >= minimum,
+        "automatic_training_blocked": True,
+        "stage3_operation_controller": operation_controller,
+        "status": (
+            "no_semantic_quality_passed"
+            if quality_passed == 0
+            else "quality_only_eval_skipped"
+            if args.skip_eval
+            else "robust_frontier_mined"
+        ),
+    }
+    write_json(mining_root / "stage64_mining_summary.json", summary)
+    write_json(Path(args.report_dir) / "stage64_mining_summary.json", summary)
+    lines = [
+        "# Stage64 Robust Batch Mining",
+        "",
+        f"- generated samples: {len(samples)}",
+        f"- semantic quality passed: {quality_passed}",
+        f"- search robust frontier: {search_frontier_count}",
+        f"- final reliable frontier: {closure_final_frontier_count}",
+        f"- effective reliable frontier: {frontier_count}",
+        f"- fixed solver: {args.stage64_solver_provenance.get('resolved_model') if args.stage64_solver_provenance else None}",
+        f"- decoding/eval skipped: {bool(args.skip_eval)}",
+        f"- Stage3 batch closure: {batch_closure['mode']} ({batch_closure['status']})",
+        f"- output: `{mining_root}`",
+        "- automatic training: blocked; accumulate reliable frontier across batches, then make one grouped split.",
+        "",
+    ]
+    report_text = "\n".join(lines)
+    (mining_root / "stage64_mining_report.md").write_text(report_text, encoding="utf-8")
+    (Path(args.report_dir) / "stage64_mining_report.md").write_text(report_text, encoding="utf-8")
+    if args.run_training_pipeline:
+        raise RuntimeError(
+            "Stage64 automatic training is blocked in batch-mining mode. Accumulate at least "
+            f"{minimum} robust frontier rows, create one parent-group split, then launch training explicitly."
+        )
+    return summary
+
+
 def run_current_method(args: argparse.Namespace) -> int:
     args = finalize_current_method_args(args)
     logging.basicConfig(level=getattr(logging, args.log_level.upper()), format="%(levelname)s %(message)s")
@@ -2017,6 +2977,10 @@ def run_current_method(args: argparse.Namespace) -> int:
         run_name=args.run_name,
         round_id=round_label(args),
         parent_round_id=args.parent_round_id,
+    )
+    args.stage3_parent_cleanliness_audit = enforce_formal_stage3_parent_cleanliness(
+        args,
+        seed_rows,
     )
 
     policy_dir = Path(args.policy_dir)
@@ -2059,6 +3023,46 @@ def run_current_method(args: argparse.Namespace) -> int:
         if compiled_policy.get("policy_fallback_used"):
             raise RuntimeError("current_method policy fallback was used; default flow requires challenger_api policy.")
 
+    if args.qa_operation_answer_type_diversification:
+        operation_state_path = Path(args.stage3_operation_state_path)
+        if operation_state_path.exists():
+            operation_state = read_json(operation_state_path)
+            stage3_operations.validate_state_protocol(operation_state)
+            state_solver = normalize(operation_state.get("accepted_solver_model"))
+            expected_solver = str(Path(args.accepted_stage2_solver_model).resolve())
+            if state_solver and str(Path(state_solver).resolve()) != expected_solver:
+                raise RuntimeError(
+                    "Stage3 operation-controller state was built with a different solver: "
+                    f"{state_solver} != {expected_solver}"
+                )
+            prior_operation_plan = operation_state.get("stage3_operation_plan")
+            if not isinstance(prior_operation_plan, dict) or not prior_operation_plan:
+                raise RuntimeError(
+                    f"Stage3 operation-controller state lacks stage3_operation_plan: {operation_state_path}"
+                )
+            compiled_policy = inject_stage3_operation_plan(
+                compiled_policy,
+                prior_operation_plan,
+                explicit_item_difficulty_target=args.boundary_item_difficulty_target,
+            )
+            compiled_policy["stage3_operation_controller_state_path"] = str(
+                operation_state_path.resolve()
+            )
+            logging.info(
+                "Stage3 operation controller: injected prior plan from %s "
+                "(shares=%s, item_difficulty_target=%s, source=%s)",
+                operation_state_path,
+                prior_operation_plan.get("operation_shares"),
+                compiled_policy.get("item_difficulty_target"),
+                compiled_policy.get("item_difficulty_target_source"),
+            )
+        else:
+            logging.info(
+                "Stage3 operation controller: no prior state at %s; using initial deterministic quotas",
+                operation_state_path,
+            )
+        write_json(policy_dir / "challenger_policy.compiled.json", compiled_policy)
+
     if args.skip_generation:
         samples = current_generation.load_samples(Path(args.output_dir) / "samples.jsonl")
         generation_summary = read_json(Path(args.output_dir) / "generation_summary.json")
@@ -2075,6 +3079,7 @@ def run_current_method(args: argparse.Namespace) -> int:
                     int(args.min_length_delta_tokens) + 1024,
                 )
             native_api_args.graph_expansion_max_tokens = args.graph_expansion_max_tokens
+            native_api_args.graph_semantic_retries = args.graph_semantic_retries
             native_api_args.generation_concurrency = args.generation_concurrency
             native_api_args.max_attempts_per_sample = args.max_attempts_per_sample
             native_api_args.max_api_failures = args.max_api_failures
@@ -2087,6 +3092,10 @@ def run_current_method(args: argparse.Namespace) -> int:
             native_api_args.boundary_aware_qa_planner = bool(args.boundary_aware_qa_planner)
             native_api_args.stage33_compat_boundary_planner = bool(args.stage33_compat_boundary_planner)
             native_api_args.qa_operation_answer_type_diversification = bool(args.qa_operation_answer_type_diversification)
+            native_api_args.stage64_qa_repair_attempts = max(
+                0,
+                int(args.stage64_qa_repair_attempts),
+            )
             native_api_args.boundary_item_difficulty_target = args.boundary_item_difficulty_target
             native_api_args.deterministic_permission_hard_negatives = bool(args.deterministic_permission_hard_negatives)
             native_api_args.boundary_aware_qa_repair = bool(args.boundary_aware_qa_repair)
@@ -2158,7 +3167,10 @@ def run_current_method(args: argparse.Namespace) -> int:
             compiled_policy["controller_state_path"] = str(difficulty_state_path)
             compiled_policy["controller_source_solver"] = controller_source_solver
             compiled_policy["length_guard"] = {
-                "length_guard_enabled": bool(int(args.round_number or 0) >= 4 and int(args.min_length_delta_tokens or 0) > 0),
+                "length_guard_enabled": bool(
+                    (int(args.round_number or 0) >= 4 or args.qa_operation_answer_type_diversification)
+                    and int(args.min_length_delta_tokens or 0) > 0
+                ),
                 "round_number": int(args.round_number or 0),
                 "min_length_delta_tokens": int(args.min_length_delta_tokens or 0),
                 "length_guard_parent_baseline_tokens": int(args.length_guard_parent_baseline_tokens or 0),
@@ -2198,6 +3210,21 @@ def run_current_method(args: argparse.Namespace) -> int:
             no_resume=args.no_resume,
         )
         generation_summary = read_json(Path(args.output_dir) / "generation_summary.json")
+        if args.qa_operation_answer_type_diversification:
+            effective_challenger_max_tokens = int(
+                getattr(native_api_args, "challenger_max_tokens", args.challenger_max_tokens)
+                if native_api_args is not None
+                else args.challenger_max_tokens
+            )
+            generation_summary = verify_formal_stage3_generation_summary(
+                args,
+                generation_summary,
+                effective_challenger_max_tokens=effective_challenger_max_tokens,
+            )
+            write_json(Path(args.output_dir) / "generation_summary.json", generation_summary)
+            native_summary_path = Path(args.output_dir) / "native_generation_summary.json"
+            if native_summary_path.exists():
+                write_json(native_summary_path, generation_summary)
     else:
         samples, generation_summary = current_generation.generate_samples(
             seed_rows=seed_rows,
@@ -2208,6 +3235,11 @@ def run_current_method(args: argparse.Namespace) -> int:
             failed_api_calls=args.failed_api_calls,
             seed_source=seed_path,
         )
+
+    if args.qa_operation_answer_type_diversification:
+        stage64_summary = run_stage64_robust_mining(args, samples)
+        print(json.dumps(stage64_summary, ensure_ascii=False, indent=2))
+        return 0
 
     solver_summary = current_reports.run_solver_evaluations(
         samples=samples,

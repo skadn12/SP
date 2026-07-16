@@ -1,136 +1,94 @@
 # 跨阶段能力增长评估面板
 
-这个文档说明如何验证 self-play 是否真的带来逐阶段能力增长。
+这个面板支持两种模式：历史 Stage64 复现，以及真正的 Stage3 评估。Stage3 模式回答三个配对问题：Stage1 是否超过 base、Stage2 是否超过 Stage1、Stage3 是否在 reliable Stage3 heldout 上超过固定的 accepted Stage2。
 
-核心问题是：
+## 评估口径
 
-```text
-Stage1 solver 在 Stage1 heldout 上是否超过 base？
-Stage2 solver 在 Stage2 heldout 上是否超过 Stage1？
-Stage64 solver 在 Stage64 heldout 上是否超过 Stage2？
-```
+- `sampled_first_draw` 是一次 K-sample 运行中的第一个 completion，不是独立 greedy K1。
+- 新版 `--run-original` 默认额外运行独立 `K=1, temperature=0`，报告优先使用 `greedy_k1`；可用 `--skip-greedy-original` 关闭。
+- K5 soft 是五次 exact correctness 的平均，不是 pass@5。
+- 所有阶段比较按相同 `sample_id` 配对，并报告 improved、regressed 和双侧 exact McNemar p 值。
+- Stage1/Stage2 heldout 参与过模型选择，属于 validation；论文主结果还需要冻结、未参与选择的新 test。
 
-只看训练集准确率或单轮 frontier yield 不够。每一阶段都需要一个由上一阶段 solver 校准出来的 heldout frontier，然后用固定评测方式比较不同 solver。
+## 使用
 
-## 脚本
-
-```text
-scripts/current_method/cross_stage_eval_panel.py
-```
-
-默认行为是读取已有评测 JSON，汇总成 Markdown 报告，不会重新跑模型：
+只汇总已有产物：
 
 ```bash
 python scripts/current_method/cross_stage_eval_panel.py \
   --panel-dir base_restart_current_method_validation/70_cross_stage_eval_panel
 ```
 
-输出：
-
-```text
-base_restart_current_method_validation/70_cross_stage_eval_panel/cross_stage_eval_report.md
-```
-
-如果需要重新跑 original-format verifier：
+重新运行 sampled K5 和独立 greedy K1：
 
 ```bash
 python scripts/current_method/cross_stage_eval_panel.py \
   --panel-dir base_restart_current_method_validation/70_cross_stage_eval_panel \
   --run-original \
   --k-eval 5 \
-  --max-model-len 32768 \
-  --gpu-memory-utilization 0.90
+  --seed 20260711 \
+  --max-model-len 32768
 ```
 
-如果需要重新跑 SFT chat-format eval：
+旧 chat summaries 使用 `sampling_k=5`，而新版 chat 默认 `sampling_k=1`。collector 会拒绝参数不匹配的旧产物，防止静默混用。
+
+## 当前可支持的结论
+
+现有 original-format 产物尚未单独跑 greedy K1，因此下面是 sampled first-draw 配对诊断：
+
+| comparison | paired n | improved | regressed | net | exact p | 判断 |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| Stage1 vs base on Stage1 heldout | 22 | 7 | 0 | +7 | 0.0156 | 小样本 validation 正向证据 |
+| Stage2 vs Stage1 on Stage2 heldout | 30 | 6 | 5 | +1 | 1.0000 | 尚未证明阶段收益 |
+| old Stage64 vs Stage2 on legacy Stage64 heldout | 83 | 2 | 4 | -2 | 0.6875 | legacy，仅诊断 |
+
+因此不能再写“Stage1 和 Stage2 的逐阶段收益都已成立”。准确表述是：Stage1 有小样本 validation 证据；Stage2 当前只净增 1/30；Stage64 尚无可靠 heldout。
+
+## 旧 Stage64 产物为什么是 legacy
+
+旧 408 frontier 同时受以下问题影响：
+
+1. 使用的是历史 legacy R2 checkpoint，不是 base-restart accepted Stage2；
+2. K1/K5 解码产生大量乱码，宽松 parser 会从任意文本中捞取 A-D；
+3. gold 极度偏 A；
+4. option shuffle 后沿用了 shuffle 前的 eval 标签；
+5. 492 条中有 63 条规范化后完全重复选项，45 条存在 gold 多标签歧义；
+6. 481 条选项仍依赖 `raw_qa_*` 泛化槽，且 answer type / operation/subtype / distractor 语义大量错配。
+
+71 目录用正确 accepted Stage2 做了健康的单排列重评，得到 15 条 frontier 候选，但其中 2 条仍是重复/歧义选项。73 目录对结构合格的 429 条做全部 cyclic positions，结果为 0 robust frontier、368 robust easy5、5 robust hard0、56 position-sensitive。76 目录加入完整语义门禁后，旧 492 条 0 条合格。因此这些结果只能用于诊断，不能作为正式 train/heldout。
+
+## 新 Stage64 heldout 接入
+
+完成 permutation-robust 重校准后，显式传入新路径：
 
 ```bash
 python scripts/current_method/cross_stage_eval_panel.py \
-  --panel-dir base_restart_current_method_validation/70_cross_stage_eval_panel \
+  --panel-dir /path/to/new_panel \
+  --stage64-heldout /path/to/frontier_heldout.jsonl \
+  --stage64-chat-heldout /path/to/frontier_heldout_sft.jsonl \
+  --stage64-heldout-calibrated \
+  --run-original
+```
+
+只有在以下条件全部满足时才能使用 `--stage64-heldout-calibrated`：选项唯一性 gate 通过、accepted Stage2 固定、cyclic permutations 完成、所有排列均为 frontier、按 `parent_sample_id` 切分且 test 未参与模型选择。
+
+## Stage3 模式
+
+Stage3 训练完成后使用：
+
+```bash
+python scripts/current_method/cross_stage_eval_panel.py \
+  --panel-dir /path/to/stage3_panel \
+  --stage3-model /path/to/stage3_merged \
+  --stage3-heldout /path/to/frontier_heldout.jsonl \
+  --stage3-chat-heldout /path/to/frontier_heldout_sft.jsonl \
+  --stage3-hard0 /path/to/diagnostic_hard0_samples.jsonl \
+  --stage3-easy5 /path/to/diagnostic_easy5_samples.jsonl \
+  --run-original \
   --run-chat \
-  --max-length 32000 \
-  --max-model-len 32768 \
-  --chunk-size 8 \
-  --gpu-memory-utilization 0.90
+  --k-eval 5 \
+  --seed 20260711 \
+  --max-model-len 32768
 ```
 
-## 当前面板结论
-
-当前已经跑出的面板显示：
-
-| solver | Stage1 heldout | Stage2 heldout | Stage64 heldout |
-| --- | ---: | ---: | ---: |
-| base | 45.45% | 43.33% | 97.59% |
-| stage1 | 77.27% | 53.33% | 97.59% |
-| stage2 | 63.64% | 56.67% | 97.59% |
-| stage64 | 36.36% | 16.67% | 95.18% |
-
-可以得到三个判断：
-
-1. Stage1 的能力增长成立：`77.27% > 45.45%`。
-2. Stage2 的能力增长成立，但幅度较小：`56.67% > 53.33%`。
-3. Stage64 当前 heldout 不能作为能力增长证据，因为 base、Stage1、Stage2 在这个 heldout 上已经接近满分。
-
-## Stage64 当前问题
-
-Stage64 这轮确实做了 option shuffle，也做了 gold label 重平衡和基于旧 `frontier_label` 的 train/heldout 重新切分，用来避免 gold label 分布偏置。但这不是“重新用 solver 评估后再筛 frontier”。
-
-shuffle 之后，如果继续沿用 shuffle 前的 `solver_eval` 和 frontier 标记，就会出现一个问题：
-
-```text
-样本的选项位置变了，
-但 frontier/heldout 难度标签没有重新用固定 solver 评估。
-```
-
-因此当前 Stage64 heldout 已经不是严格的 Stage2-calibrated frontier。它可以用于检查格式、泄漏、gold label 是否平衡和 clean retention，但不能用于证明 Stage64 solver 超过 Stage2 solver。
-
-## 已执行的重校准结果
-
-我们已经对 shuffled 492 条 clean samples 执行了固定 Stage2 solver 的重新评估和 frontier 重筛。输出目录：
-
-```text
-base_restart_current_method_validation/71_stage64_shuffled_recalibrated_stage2
-```
-
-重校准结果：
-
-| bucket | count |
-| --- | ---: |
-| 0/5 | 49 |
-| 1/5 | 4 |
-| 2/5 | 5 |
-| 3/5 | 3 |
-| 4/5 | 3 |
-| 5/5 | 428 |
-
-按新的 bucket 重筛后：
-
-```text
-frontier_total: 15
-frontier_train: 12
-frontier_heldout: 3
-hard0_diagnostic: 49
-easy5_diagnostic: 428
-```
-
-这说明原来的 408 frontier 在 label shuffle 后大部分变成了 Stage2 solver 已经稳定会做的 easy5。也就是说，旧 frontier 里确实存在很强的选项标签/位置偏置污染。
-
-因此不建议把这 12 条 recalibrated frontier_train 当作正式 Stage64 训练集。它只能用于 smoke test；若要做论文里的 Stage64 能力增长，需要继续生成或挖掘更多 shuffle 后仍处于 1/5-4/5 区间的 frontier。
-
-## 正确闭环
-
-Stage64 后续应按这个流程重做：
-
-```text
-1. 生成 Stage64 API self-play 样本
-2. option shuffle
-3. 清空或忽略旧 solver_eval
-4. 用固定 Stage2 solver 重新评估 shuffle 后样本
-5. 根据新的评估结果重新筛 frontier / hard0 / easy5
-6. 从重新筛出的 frontier 切 train / heldout
-7. 训练 Stage64 solver
-8. 在新的 Stage64 heldout 上比较 Stage64 solver 和 Stage2 solver
-9. 同时在 Stage1/Stage2 heldout 与外部合并集上检查遗忘
-```
-
-论文里可以把 Stage1/Stage2 作为已经成立的逐阶段增长证据；Stage64 在完成重新校准前，应描述为“题目类型多样化模块与诊断结果”，不要直接写成已经证明第三阶段能力增长。
+Stage3 模式注册 `base/stage1/stage2/stage3` 四个模型，主比较为 Stage3 vs Stage2。报告仍保留 Stage1/Stage2 retention，并且不会把新结果写成 Stage64 或 legacy。可靠 heldout 必须按 `lineage_group` 整组切分，正式 heldout 不能参与 train mix 或训练期 validation。

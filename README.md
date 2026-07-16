@@ -1,6 +1,6 @@
 # Current Method Self-Play 代码包
 
-这是“当前方法”的干净 GitHub 代码包，包含从 parent pool 生成 self-play 样本、API challenger 扩展对话、Stage64 API QA 多样化、质量验证、frontier 选择、train mix 构建、可选 solver 训练与评测所需的主线代码。
+这是“当前方法”的干净 GitHub 代码包，包含从 parent pool 生成 self-play 样本、API challenger 扩展对话、Stage3 API QA 多样化、质量验证、可靠 frontier 累积、train mix 构建、solver 训练与评测所需的主线代码。
 
 注意：这里整理的是**当前方法主线代码**，不是整个工作区的 r1-r5 历史归档。模型权重、运行缓存、API key 和 149G 工作区内容都没有放进来。
 
@@ -9,18 +9,23 @@
 ## 当前方法实验流程
 
 ```text
-1. 准备 parent pool / seed rows
-   -> 2. 构建 challenger policy / curriculum
-   -> 3. API 生成 graph event plan
-   -> 4. API 生成 appended dialogue + qa_proposal
-   -> 5. 本地验证 graph/dialogue/QA/长度/泄漏
-   -> 6. 输出 clean_samples / reject logs / summary
-   -> 7. solver eval + frontier selection
-   -> 8. 构建 train mix
-   -> 9. 可选：LoRA 训练、merge、vLLM 评测
+1. 用本地 Qwen3-4B 从 Stage2 evidence turns 重建 canonical graph
+   -> 2. fail-closed 审计并产出 stage3_parent_v3
+   -> 3. 构建 challenger policy / curriculum
+   -> 4. API 生成 graph event plan
+   -> 5. API 生成 appended dialogue + qa_proposal
+   -> 6. 本地验证 graph/dialogue/QA/长度/泄漏
+   -> 7. 输出 clean_samples / reject logs / summary
+   -> 8. solver eval + frontier selection
+   -> 9. 构建 train mix
+   -> 10. 可选：LoRA 训练、merge、vLLM 评测
 ```
 
-Stage64 模式是当前方法中的题目类型扩展模块：它把原来比较单一的状态类/选择类问题，扩展成按 `qa_operation` 和 `answer_type` 控制的多题型 self-play 数据。API challenger 负责生成最终 `qa_proposal`，本地代码负责检查这些新题型是否真的满足目标类型和图证据约束。
+Stage3 继续 accepted Stage2 solver 的 self-play。历史 CLI 名 `--qa-operation-answer-type-diversification` 和部分 `stage64_*` artifact 保留兼容，但新实验结论应称为 Stage3。当前 schema 仍是 `single_choice_mcq`，正式 target 在 API 前固定 `qa_operation`、合法 `answer_type`、reasoning subtype/template、hop count 和 hard-negative strategy，并在 solver feedback hardening 后保持这些字段不变。
+
+完整的 Stage2 -> Stage3 执行顺序、门禁和命令见 [`docs/STAGE3_SELFPLAY_ROUND.md`](docs/STAGE3_SELFPLAY_ROUND.md)。
+
+Stage3 graph payload schema 仍是 `semantic_graph_v2`，但 cache key / gate namespace 已升级为 `semantic_graph_v16`。v16 保留 v15 的 reasoning-ledger、temporal anti-shortcut、formal-evidence 和 neutral/filler 隔离，并新增 `visibility` / `relation_lookup` 的固定八事件 role layout、字段等式和 parent-collision correction；retry 只引用事件 ID 和字段关系，不重复 parent 原文。历史 v15 run173 为 5/7，失败集中在这两类。v16 定向验证中，visibility 为 1/1，relation_lookup 为 1/1（后者使用一次 validator-guided correction）；这只是定向证据，正式 dialogue/QA 前仍需新目录中的 fresh 7-operation v16 graph-only gate。通过后再做小批量 mining，生成后立即 shuffle/balance，用固定 accepted Stage2 solver 对全部 cyclic positions 做 search K5；再对 easy5/hard0/position-sensitive 做一次冻结 graph/dialogue/gold 的 QA-only feedback rewrite，并以独立 seed 做 final cyclic K5。
 
 ## 目录结构
 
@@ -34,6 +39,8 @@ Stage64 模式是当前方法中的题目类型扩展模块：它把原来比较
   docs/
     CODE_MAP.md
     CROSS_STAGE_EVAL_PANEL.md
+    STAGE3_SELFPLAY_ROUND.md
+    STAGE64_RELIABLE_FRONTIER_MINING.md
     GITHUB.md
   scripts/
     run_auto_graph_expansion_round.py
@@ -45,8 +52,12 @@ Stage64 模式是当前方法中的题目类型扩展模块：它把原来比较
     run_round_solver_training_pipeline.py
     build_r2_frontier_plus_clean_replay_train.py
     merge_custom_lora_adapter.py
+    old_method/
+      run_old_improved_gate200.py
+      run_old_improved_gate400_sample0_5.py
     current_method/
       *.py
+      stage64_quality.py
   train_qwen3_lora_sft.py
 ```
 
@@ -64,31 +75,63 @@ cp configs/config.example.json config.json
 - `api.base_url`
 - `api.model`
 
-运行 10 条 Stage64 API smoke test：
+正式生成前，先用本地 Qwen3-4B 重建并严格审计 Stage2 canonical graph。这个步骤不调用付费 API；模型请求只包含 evidence turn ID、speaker 和 text，不包含旧 graph 的 entity/slot/value/status/time，也不包含旧 QA、options 或 gold。下面的实际 artifact 路径命令从主工作区 `/root/autodl-tmp/gxy-selfplay` 运行：
 
 ```bash
-python scripts/run_auto_graph_expansion_round.py \
-  --run-name stage64_api_selfplay10 \
-  --run-root runs/stage64_api_selfplay10/run \
-  --output-dir runs/stage64_api_selfplay10 \
-  --report-dir runs/stage64_api_selfplay10/reports \
-  --parent-dir /path/to/topup_combined_frontier_pool.jsonl \
-  --generation-backend native_current_method \
-  --native-challenger-mode graph_conditioned_api_dialogue \
-  --native-curriculum-mode r3_long_easy_v2 \
-  --qa-operation-answer-type-diversification \
-  --train-only \
-  --n-train 10 \
-  --max-llm-retries 1 \
-  --max-attempts-per-sample 4 \
-  --max-api-failures 50 \
-  --min-added-turns 24 \
-  --min-length-delta-tokens 4000 \
-  --generation-concurrency 1 \
-  --llm-timeout 180
+python scripts/current_method/rebuild_stage2_canonical_graphs.py \
+  --input base_restart_current_method_validation/05_stage2_repair_topup_from_stage1/train_mix/frontier_train.jsonl \
+  --output-dir base_restart_current_method_validation/172_stage2_canonical_graph_rebuild_v3_semantic_audited_final \
+  --model /root/autodl-tmp/Qwen3-4B \
+  --max-rows 0 \
+  --minimum-events-per-parent 2 \
+  --semantic-exclusion-jsonl data/stage2_semantic_audit_exclusions_v1.jsonl \
+  --forbidden-jsonl base_restart_current_method_validation/01_mining500_train/train_mix/frontier_heldout.jsonl \
+  --forbidden-jsonl base_restart_current_method_validation/04_stage2_train_from_stage1/train_mix/frontier_heldout.jsonl \
+  --forbidden-jsonl base_restart_current_method_validation/05_stage2_repair_topup_from_stage1/train_mix/frontier_heldout.jsonl
+
+python scripts/current_method/audit_stage2_canonical_rebuild.py \
+  --source base_restart_current_method_validation/05_stage2_repair_topup_from_stage1/train_mix/frontier_train.jsonl \
+  --rebuild-dir base_restart_current_method_validation/172_stage2_canonical_graph_rebuild_v3_semantic_audited_final \
+  --forbidden-jsonl base_restart_current_method_validation/01_mining500_train/train_mix/frontier_heldout.jsonl \
+  --forbidden-jsonl base_restart_current_method_validation/04_stage2_train_from_stage1/train_mix/frontier_heldout.jsonl \
+  --forbidden-jsonl base_restart_current_method_validation/05_stage2_repair_topup_from_stage1/train_mix/frontier_heldout.jsonl \
+  --output base_restart_current_method_validation/172_stage2_canonical_graph_rebuild_v3_semantic_audited_final/canonical_rebuild_audit.json
 ```
 
-`--parent-dir` 需要指向已有 parent pool JSONL，例如 mined frontier pool。这个代码包不包含 parent data。
+正式 artifact schema 是 `stage2_canonical_graph_rebuild_v3`。当前语义审计后产物包含 `77` 个 canonical graphs、`385` 个 canonical events 和 `77` 个 `stage3_parent_v3`；171 个 exclusions 中包含独立语义审计隔离的 18 个 events，eligible event rejection、row-atomic rejection 和 heldout exact overlap 均为 `0`。原始 78 行中的 1 行没有任何 clean linked evidence，因此整行隔离，未用无链接对话补事件；`fallback_event_count=0`。重建命令默认禁用 fallback，正式运行不要添加兼容参数 `--allow-dialogue-fallback`。保留的长 structured parent atoms 及其 `depends_on` 对 challenger 仍然可读，省略的只是 parent dialogue utterance；终态误链规则也已收紧为严格 entity/fact-word 匹配。`rebuild_summary.json` 仍明确记录 `training_authorized=false`。
+
+历史目录 `161_stage2_canonical_graph_rebuild_v2_final` 虽通过当时的结构审计，但后续语义复审发现 11 个坏 events，因此不可作为 Stage3 parent，也不可用于 graph-only smoke。
+
+然后才运行 7 条 graph-only API smoke：
+
+```bash
+python scripts/current_method/stage3_graph_only_smoke.py \
+  --input base_restart_current_method_validation/172_stage2_canonical_graph_rebuild_v3_semantic_audited_final/stage3_parent_v3.jsonl \
+  --output-dir runs/stage3_graph_smoke \
+  --n 7 \
+  --max-attempts-per-sample 2 \
+  --minimum-pass-rate 0.70 \
+  --graph-semantic-retries 1 \
+  --confirm-api-calls
+```
+
+The v16 graph-only gate freezes the full operation/reasoning target before
+each request and uses one validator-guided correction. Historical v14 `7/7`
+and v15 run173 `5/7` results are not v16 full-gate evidence. The v16 targeted
+visibility and relation checks both pass, but failed raw graphs remain outside
+mining; only rows from a newly passed seven-operation v16 graph gate may enter
+the next stage.
+
+`--parent-dir` 需要指向本次运行要使用的 parent pool JSONL，例如 mined frontier pool。包内只有 `data/README.md` 列出的精选复现数据，不保证包含示例命令所需的完整 parent pool。
+
+开启兼容 flag 后，主入口不会再走普通“当前位置 K5 -> frontier”路径。生成结束后会自动运行 semantic gate、全部 cyclic positions K5 和解码健康门禁，产物写入 `<run-root>/stage64_mining/`。单批自动训练被硬阻止；先跨批累积至少 300 条 robust frontier，再统一做 `lineage_group` split，并在 frontier 过滤后从已评估位置重物化均衡 gold。
+
+运行回归测试时要显式覆盖两组目录：
+
+```bash
+python -m unittest discover -s tests -p 'test_*.py'
+python -m unittest discover -s scripts/current_method -p 'test_*.py'
+```
 
 ## 核心代码说明
 
@@ -98,7 +141,7 @@ python scripts/run_auto_graph_expansion_round.py \
 | --- | --- | --- |
 | `scripts/run_auto_graph_expansion_round.py` | 全流程入口 | 当前方法主入口。负责读取 parent rows、构建 policy、调用 native/API generator、写报告，并可选触发 solver eval、frontier selection 和训练流程。 |
 | `scripts/current_method/native_challenger_generation.py` | 生成入口分发 | native current-method generator 的分发层。`graph_conditioned_api_dialogue` 模式会转到 `native_api_graph_dialogue_expansion.py`。 |
-| `scripts/current_method/native_api_graph_dialogue_expansion.py` | challenger 生成核心 | 当前 API self-play 的核心文件。包含 graph/event-plan API prompt、dialogue API prompt、Stage64 `qa_proposal` 处理、alignment、schema、长度和泄漏验证、reject 记录、样本落盘。 |
+| `scripts/current_method/native_api_graph_dialogue_expansion.py` | challenger 生成核心 | 当前 API self-play 的核心文件。包含 interleaved target ledger、reasoning signature、graph/event-plan API prompt、validator-guided semantic retry、`semantic_graph_v16` cache isolation、visibility/relation fixed-role contract、formal evidence exact-claim 与 neutral graph-fact isolation、dialogue/API QA、temporal anti-shortcut、alignment、长度和泄漏验证。 |
 
 ### API 调用与历史兼容依赖
 
@@ -123,6 +166,12 @@ python scripts/run_auto_graph_expansion_round.py \
 | 文件 | 实验流程位置 | 作用 |
 | --- | --- | --- |
 | `scripts/current_method/native_api_graph_dialogue_expansion.py` | Stage64 API 主实现 | `--qa-operation-answer-type-diversification` 的核心实现。负责把每个样本分配到不同 `qa_operation` / `answer_type`，要求 API 生成对应题型的最终 `qa_proposal`，并做本地验证。 |
+| `scripts/current_method/stage64_quality.py` | Stage64 语义门禁 | 在 graph cache 写入/复用前检查 semantic slot、问题式 value 和 operation-specific graph prerequisites；在 QA 形成后统一检查 answer surface、问题/答案类型、operation/subtype、multi-anchor reasoning 和同实体/同 slot hard negative。 |
+| `scripts/current_method/semantic_graph_v2.py` | Stage3 graph schema | 对 API graph delta 做不修复、不补齐的 canonical schema 与 operation-specific 验证；payload schema 名与 `semantic_graph_v16` cache/gate namespace 有意分离。 |
+| `scripts/current_method/stage3_graph_only_smoke.py` | Stage3 graph-only gate | 在生成 dialogue/QA 和加载 solver 前，用小批付费 API 调用验证 graph 通过率，支持 validator-guided correction，并保存 raw reject。 |
+| `scripts/current_method/stage3_operation_controller.py` | Stage3 operation controller | 直接消费 cyclic K5 aggregate，更新下一批 `qa_operation|answer_type` 配额，不额外重跑 solver。 |
+| `scripts/current_method/stage3_solver_feedback_mining.py` | Stage3 solver-feedback QA mining | 分类四类 cyclic K5 结果，冻结 graph/dialogue/gold/reasoning target，导出 harden/soften/position-repair 请求和诊断/retention manifest。 |
+| `scripts/current_method/stage3_batch_closure.py` | Stage3 batch closure | 可恢复地执行一次 QA feedback rewrite、候选合并、reshuffle 和独立 final cyclic K5；不会自动训练。 |
 | `scripts/current_method/qa_operation_answer_type_anchor_diversification_probe.py` | Stage64 probe / 分析 | 用于 anchor-first QA operation / answer type diversification 的 probe、诊断和数据整理，主要分析题型覆盖、anchor 使用和答案类型分布。 |
 
 ### Seed、数据准备和审计
@@ -131,6 +180,9 @@ python scripts/run_auto_graph_expansion_round.py \
 | --- | --- | --- |
 | `scripts/current_method/prepare_locomo_current_method_seed.py` | seed 准备 | 从 LoCoMo / parent data 准备 current-method seed rows，并记录 provenance。 |
 | `scripts/current_method/seed_audit.py` | seed 审计 | 检查 train/dev/heldout provenance，防止 forbidden seed 或 split 泄漏。 |
+| `scripts/current_method/rebuild_stage2_canonical_graphs.py` | Stage2 canonical graph 重建 | 用本地 Qwen3-4B 从 evidence-only 请求重新抽取事件；旧 graph/QA 语义标签不进入模型请求，旧事件逐个重抽取或隔离，支持独立语义审计 exclusion manifest，默认禁用 dialogue fallback，输出 `stage2_canonical_graph_rebuild_v3` 与正式 `stage3_parent_v3.jsonl`。 |
+| `scripts/current_method/audit_stage2_canonical_rebuild.py` | canonical rebuild 严格审计 | 只读、fail-closed 地核对源事件处置、请求字段、canonical graph、parent 一致性和 heldout exact overlap；不修复或准入数据。 |
+| `scripts/current_method/build_stage3_parent_v2.py` | legacy parent 迁移兼容 | 仅保留给旧产物迁移和诊断；它不能重建被污染的 Stage2 graph，不是正式 Stage3 parent 入口。 |
 | `scripts/current_method/api_challenger_generation.py` | 基础生成/验证适配 | 当前方法复用的基础 adapter，包含 JSONL 读写、样本验证、solver eval 接口、clean/valid 判断等公共逻辑。 |
 
 ### Frontier、报告和诊断
@@ -141,6 +193,9 @@ python scripts/run_auto_graph_expansion_round.py \
 | `scripts/current_method/report_builder.py` | 报告生成 | 汇总生成质量、frontier yield、题型分布、solver 表现、长度统计等。 |
 | `scripts/current_method/cross_stage_eval_panel.py` | 跨阶段能力验证 | 汇总或复跑 Stage1/Stage2/Stage64 heldout 上的 solver 对比，验证 self-play 是否真的逐阶段提升。 |
 | `scripts/current_method/recalibrate_stage64_shuffled_frontier.py` | Stage64 shuffle 后重校准 | 清空旧 solver/frontier 字段，用固定 Stage2 solver 重评估 shuffled clean samples，并重新筛 frontier / hard0 / easy5 / grouped heldout。 |
+| `scripts/current_method/shuffle_stage64_options.py` | 可复现 option balance | 先拒绝重复/歧义选项，再在 option arity × attack skill 内确定性平衡 gold label；绝不携带旧 `solver_eval`。 |
+| `scripts/current_method/external_generalization_report.py` | 外部评估审计 | 按 `record_id` 做配对统计、exact McNemar 和 gold-label 分层，避免把小样本 bucket 差异写成因果收益。 |
+| `scripts/current_method/accumulate_stage64_reliable_frontier.py` | 跨批 frontier 累积 | 只接受健康、语义合格、全部位置稳定的 frontier；达到默认 300 条后做 lineage-group split，再从已评估 cyclic positions 重物化 balanced train/heldout。 |
 | `scripts/current_method/write_base_restart_validation_summary.py` | 验证汇总 | 为 base restart / current-method validation 运行写总览 summary。 |
 | `scripts/current_method/diagnostics_context_ablation.py` | 诊断实验 | 做 context ablation，分析 solver 对 parent context / evidence window 的依赖。 |
 | `scripts/current_method/eval_api_14b_samples.py` | API solver 评测 | 用 API 模型评测样本，可用于快速 sanity check 或外部 judge。 |
@@ -152,6 +207,7 @@ python scripts/run_auto_graph_expansion_round.py \
 | `scripts/current_method/build_base_restart_train_mix.py` | train mix 构建 | base restart 早期 train mix 构建脚本。 |
 | `scripts/current_method/build_base_restart_stage2_train_mix.py` | stage2 train mix 构建 | 当前方法 stage2 train mix 构建，支持 frontier、clean replay、top-up 等组合。 |
 | `scripts/current_method/build_base_restart_stage2_repair_train_mix.py` | repair train mix 构建 | 用于 stage2 repair/top-up 的 train mix 构建。 |
+| `scripts/current_method/build_stage3_train_mix.py` | Stage3 train mix | 强制消费 training-ready manifest，正式 heldout 只做排除，选择 Stage1/Stage2 replay，派生 train-only validation 并写 SHA256 provenance。 |
 | `scripts/current_method/build_chained_parent_expansion_probe.py` | chained parent probe | 构建 chained parent expansion 相关 probe。 |
 | `scripts/current_method/build_chained_parent_v2_from_child_v2.py` | chained parent v2 | 从 child v2 构建 parent v2，用于链式 parent/child 数据实验。 |
 | `scripts/build_r2_frontier_plus_clean_replay_train.py` | 训练数据构建 wrapper | 根据 frontier + clean replay 构建 solver SFT train JSONL。当前训练 wrapper 会调用它。 |
@@ -160,7 +216,7 @@ python scripts/run_auto_graph_expansion_round.py \
 
 | 文件 | 实验流程位置 | 作用 |
 | --- | --- | --- |
-| `scripts/run_round_solver_training_pipeline.py` | 训练总入口 | 可选流程：构建 train data、训练 LoRA、merge adapter、运行 smoke/full eval。 |
+| `scripts/run_round_solver_training_pipeline.py` | 训练总入口 | 支持 audited prepared train file；校验 summary/SHA256 和 checkpoint base，训练新 LoRA、merge adapter、运行 smoke/full eval。 |
 | `train_qwen3_lora_sft.py` | LoRA SFT 训练 | 基础 Qwen3 LoRA SFT 训练脚本。 |
 | `scripts/merge_custom_lora_adapter.py` | adapter merge | 将 LoRA adapter merge 到 base model。 |
 | `scripts/eval_v13_pilot.py` | MCQ 评测工具 | 非 vLLM / 通用评测逻辑和解析工具。 |
@@ -176,7 +232,7 @@ python scripts/run_auto_graph_expansion_round.py \
 
 ### Stage64 是什么
 
-Stage64 最大的贡献是**题目类型多样化**。它把当前方法从“主要生成一种宽泛的单选状态判断题”，推进到“按 QA operation 和 answer type 明确控制的多类型题目生成”。
+Stage64 的贡献是 **single-choice MCQ 内部的语义题型多样化**。它把当前方法从“主要生成一种宽泛的单选状态判断题”，推进到“按 QA operation 和 answer type 明确控制不同推理操作”。它目前不等同于 multi-select / ordering 等输出 schema 多样化。
 
 它重点解决的是：同样是长对话状态追踪，训练数据不应该总是问“哪个选项仍然为真”，而应该覆盖更多真实推理操作，例如：
 
@@ -229,10 +285,12 @@ Stage64 当前方法：显式控制 qa_operation + answer_type，生成更多类
    - `Number`
    - `Event`
    - `LocationOrScope`
-   - `PersonOrEntity`
+   - `Person`
+   - `GroupOrOrg`
+   - `ProperNounOrNamedEntity`
    - `YesNo`
 
-   本地代码会检查 API 返回的 `qa_operation`、`answer_type`、options 和 gold 是否一致。
+   本地代码会检查 API 返回的 `qa_operation`、`answer_type`、options 和 gold 是否一致，并验证选项表面确实符合声明的 answer type。
 
 3. **最终 QA 来源改变**
 
@@ -258,7 +316,8 @@ Stage64 当前方法：显式控制 qa_operation + answer_type，生成更多类
 
    - `gold` 不是选项 id；
    - gold option 不唯一；
-   - option 的 `answer_type` 不一致；
+   - 规范化后出现完全重复选项，或 gold 文本同时对应多个 label；
+   - option 的 `answer_type` 不一致，或表面答案不是对应类型，例如 Number 选项仍是一整句问题；
    - `count` 没有返回 Number；
    - `qa_operation` 不在允许列表；
    - 问题语义和 `qa_operation` 明显错配；
@@ -366,19 +425,28 @@ python scripts/current_method/cross_stage_eval_panel.py \
 
 默认只汇总已有评测 JSON 并写 `cross_stage_eval_report.md`，不会重新跑 GPU。需要重跑时再加 `--run-original` 或 `--run-chat`。
 
-当前面板结论是：Stage1 和 Stage2 的逐阶段收益已经成立；Stage64 虽然在 option shuffle 后做过标签重平衡和基于旧 frontier 标记的重新切分，但没有重新用固定 Stage2 solver 评估并重选 frontier，所以当前 heldout 不能作为严格能力增长证据。详细解释见 `docs/CROSS_STAGE_EVAL_PANEL.md`。
+当前配对面板结论是：Stage1 在小规模 validation heldout 上有正向证据；Stage2 只是 `16/30 -> 17/30`，双侧 exact McNemar `p=1.0`，不能判定阶段收益成立；旧 Stage64 heldout 是 legacy，不能作为能力增长证据。详细解释见 `docs/CROSS_STAGE_EVAL_PANEL.md`。
 
 Stage64 shuffle 后重校准入口：
 
 ```bash
 python scripts/current_method/recalibrate_stage64_shuffled_frontier.py \
-  --input base_restart_current_method_validation/69_stage64_api_selfplay500_ctx32768/option_shuffled_seed20260710/clean_samples.jsonl \
-  --output-dir base_restart_current_method_validation/71_stage64_shuffled_recalibrated_stage2 \
-  --solver-model base_restart_current_method_validation/accepted_models/solver_base_restart_stage2_merged \
+  --input /path/to/new_stage64/shuffled/clean_samples.jsonl \
+  --output-dir /path/to/new_stage64/recalibrated \
+  --solver-model /path/to/accepted_models/solver_base_restart_stage2_merged \
+  --accepted-stage2-solver-model /path/to/accepted_models/solver_base_restart_stage2_merged \
+  --temperature 1.0 \
+  --top-p 0.9 \
+  --permutation-mode cyclic \
+  --group-level lineage_group \
   --max-model-len 32768
 ```
 
-这一步不会重新调用 API，只会重新跑固定 solver 评估并重建 frontier split。
+这一步不会重新调用 API。它会先拒绝 exact duplicate / 多标签同答案，并执行 answer type、operation/subtype、semantic slot 和 hard-negative 语义门禁；随后确认 resolved checkpoint 是 accepted base-restart Stage2，对每道题的全部 cyclic option positions 分别评估，并只保留每个排列都处于 `1/5-4/5` 的 robust frontier。完整流程见 `docs/STAGE64_RELIABLE_FRONTIER_MINING.md`。
+
+截至 2026-07-11 的最终审计结论：旧 492 条中，结构门禁可留下 429 条，但完整语义门禁留下 0 条；此前对这 429 条做的全排列诊断也得到 0 条 robust frontier、368 条 robust easy5、5 条 robust hard0 和 56 条 position-sensitive。旧 408、shuffle 后 325、单排列重校准 15 条以及 12 条 train 都不能用于训练或论文结论。权威审计目录是 `base_restart_current_method_validation/76_stage64_final_semantic_quality_audit`，全排列诊断目录是 `base_restart_current_method_validation/73_stage64_permutation_robust_recalibration`。
+
+新 Stage3 run 默认自动执行 search shuffle 和 cyclic K5，关键路径是 `<run-root>/stage64_mining/shuffled` 与 `recalibrated`。完整 QA feedback closure 是显式 opt-in：传 `--stage3-batch-closure execute` 后，正式累计输入改为 `<run-root>/stage64_mining/batch_closure/final_reliable_batch`。`--skip-eval` 与 closure 不兼容，也不会产生 frontier。
 
 ## 质量门
 
@@ -387,8 +455,12 @@ python scripts/current_method/recalibrate_stage64_shuffled_frontier.py \
 - 出现 solver 可见的内部词，例如 `raw_qa`、`anchor`、`event_instance`、`latest confirmed detail`、`settled as true`。
 - API 返回的 QA schema 不合法。
 - `qa_operation` 和 `answer_type` 不匹配。
+- `qa_operation` 与实际问题或 `qa_subtype` 不匹配。
 - `count` 没有返回 Number 类型。
+- Number/DateOrTime/YesNo 等选项表面不符合声明类型，或 option 只是复制了一遍问题。
 - gold option id 无效或不唯一。
+- 规范化后选项文本完全重复，或 gold 文本映射到多个 label。
+- option 引用 `raw_qa_*` 泛化槽、使用无关事实作 distractor，或 bridge/comparison/count/cause 缺少多锚点推理。
 - graph reference 缺失或无法对齐。
 - graph/dialogue alignment 失败。
 - 长度增长低于配置目标。

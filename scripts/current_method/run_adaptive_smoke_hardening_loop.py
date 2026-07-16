@@ -1846,6 +1846,7 @@ def build_training_command(
         str(run_root / "models" / "qwen3_4b_lora_current_method_r4_probe197_adaptive_hardening_merged"),
         "--max-length",
         "9216",
+        "--no-valid",
         "--smoke-eval-limit",
         "16",
         "--overwrite",
