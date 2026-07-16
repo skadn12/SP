@@ -1,0 +1,18 @@
+{
+  "completed_canary_count": 5,
+  "continuation_calls": 0,
+  "final_status": "FAIL",
+  "frozen_bundle_sha256": "66deb063cbcb12bad570f3a8a1be4c8bcf98695a23a150ea49a8c4a48c2f2e5d",
+  "graph_api_calls": 0,
+  "inflight_call_id": null,
+  "journal_chain_head": "079a3e96b691a513d3a9b099f7c08584a2a4df2148f3337669e860bfd707b8b9",
+  "qa_api_calls": 0,
+  "repair_calls": 0,
+  "report_sha256": "0a9ec4ae516e550fac067423fe647d7d54858a2838b3df84a6cfd67d7e9e54ea",
+  "run_id": "234_safe_pool_scene_canary_n5",
+  "scene_api_call_intents": 5,
+  "scene_api_call_results": 5,
+  "schema_version": "stage3_safe_pool_scene_canary_v1",
+  "status": "FAIL",
+  "training_files_written": 0
+}

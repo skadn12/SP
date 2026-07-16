@@ -1,0 +1,77 @@
+{
+  "canaries": [
+    {
+      "failure_reasons": [
+        "natural_dialogue:record_recital_and_formulaic_low_information_close"
+      ],
+      "manual_text_edits": 0,
+      "natural_dialogue": false,
+      "protected_fact_violation": false,
+      "qa_shortcut": false,
+      "raw_response_sha256": "b3f8a2d566abdd606c67a7c6f15caa99f9bb90c6e6d684d2520796a2c6e93172",
+      "reviewer": "codex_plus_independent_read_only_audit",
+      "semantic_clean": true,
+      "truth_plan_id": "TP234-01"
+    },
+    {
+      "failure_reasons": [
+        "semantic:active_target_strengthened_to_finalized_by_adjacent_confirmation",
+        "protected:new_finalized_or_confirmed_state_added",
+        "natural_dialogue:interview_style_status_and_record_recital"
+      ],
+      "manual_text_edits": 0,
+      "natural_dialogue": false,
+      "protected_fact_violation": true,
+      "qa_shortcut": false,
+      "raw_response_sha256": "55ab44605a268c18bac84a19cd3247b57f8a015e9d99b2fa2de5034a2bbc70de",
+      "reviewer": "codex_plus_independent_read_only_audit",
+      "semantic_clean": false,
+      "truth_plan_id": "TP234-02"
+    },
+    {
+      "failure_reasons": [
+        "natural_dialogue:old_current_record_recital_and_generic_close"
+      ],
+      "manual_text_edits": 0,
+      "natural_dialogue": false,
+      "protected_fact_violation": false,
+      "qa_shortcut": false,
+      "raw_response_sha256": "f4af1ae75efa99bb86d89c3067afc7763399eb89e128f893e9671178373b7458",
+      "reviewer": "codex_plus_independent_read_only_audit",
+      "semantic_clean": true,
+      "truth_plan_id": "TP234-03"
+    },
+    {
+      "failure_reasons": [
+        "semantic:protected_time_and_type_added_to_source_entry",
+        "protected:last_week_time_added",
+        "protected:destination_entry_retyped_as_event",
+        "natural_dialogue:category_mismatch_and_formulaic_close"
+      ],
+      "manual_text_edits": 0,
+      "natural_dialogue": false,
+      "protected_fact_violation": true,
+      "qa_shortcut": false,
+      "raw_response_sha256": "f30b7414ac434b1d212d9cf9aad7f8779a4e3cc52ddc53dbc77c2b4e58c39bf7",
+      "reviewer": "codex_plus_independent_read_only_audit",
+      "semantic_clean": false,
+      "truth_plan_id": "TP234-04"
+    },
+    {
+      "failure_reasons": [
+        "semantic:core_gold_repeated_in_adjacent_confirmation",
+        "protected:shortcut_replaces_frozen_reasoning_path",
+        "qa_shortcut:adjacent_T4_T5_direct_gold_confirmation",
+        "natural_dialogue:repeated_status_confirmation_and_record_recital"
+      ],
+      "manual_text_edits": 0,
+      "natural_dialogue": false,
+      "protected_fact_violation": true,
+      "qa_shortcut": true,
+      "raw_response_sha256": "f2989c2bd49011c9b75126307f1c9d57ee45001ecbd83673fea71615d0ac63ad",
+      "reviewer": "codex_plus_independent_read_only_audit",
+      "semantic_clean": false,
+      "truth_plan_id": "TP234-05"
+    }
+  ]
+}

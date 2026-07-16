@@ -1,0 +1,96 @@
+{
+  "calls_per_canary": 1,
+  "canary_count": 5,
+  "continuation_calls": 0,
+  "created_unix": 1784143363,
+  "graph_extraction_api_calls": 0,
+  "max_external_retries": 0,
+  "max_internal_retries": 0,
+  "model": "Qwen/Qwen3-32B",
+  "output_dir": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/234_safe_pool_scene_canary_n5",
+  "preflight": {
+    "checks": {
+      "api_config_present": true,
+      "curl_available": true,
+      "five_truth_plans": true,
+      "five_unique_truth_signatures": true,
+      "one_relation_each": true,
+      "output_dir_fresh": true,
+      "parent_absent_from_all_prompts": true,
+      "safe_pool_8_to_12_each": true,
+      "safe_units_non_graph_non_inheritable": true,
+      "source_parent_file_hash_exact": true,
+      "tokenizer_path_exists": true,
+      "two_nodes_each": true
+    },
+    "parent_prompt_leak_audits": [
+      {
+        "exact_parent_matches": [],
+        "parent_key_or_phrase_matches": [],
+        "pass": true,
+        "prompt_sha256": "a80cb83a2dc797474537139c4c8f6d57e10134fc542a28868abe03e1e46366dd",
+        "truth_plan_id": "TP234-01"
+      },
+      {
+        "exact_parent_matches": [],
+        "parent_key_or_phrase_matches": [],
+        "pass": true,
+        "prompt_sha256": "345c10a10ed48d24ee6e27a9412d18948cccdd06e8d296943a4a070619fd58ee",
+        "truth_plan_id": "TP234-02"
+      },
+      {
+        "exact_parent_matches": [],
+        "parent_key_or_phrase_matches": [],
+        "pass": true,
+        "prompt_sha256": "2566eb8fe204afa18c0a453e2a21f4cfaa07ed266e072094f5fdc6738e53b8f7",
+        "truth_plan_id": "TP234-03"
+      },
+      {
+        "exact_parent_matches": [],
+        "parent_key_or_phrase_matches": [],
+        "pass": true,
+        "prompt_sha256": "ec034480afd2b7ede1c1cc078cba04fa3021a01d384f351273f2f776f6fbdd07",
+        "truth_plan_id": "TP234-04"
+      },
+      {
+        "exact_parent_matches": [],
+        "parent_key_or_phrase_matches": [],
+        "pass": true,
+        "prompt_sha256": "1177187255b93342c7b568d0ef44e4d9d067822a1e488d24435fd98265f99d39",
+        "truth_plan_id": "TP234-05"
+      }
+    ],
+    "pass": true,
+    "planned_continuations": 0,
+    "planned_external_retries": 0,
+    "planned_graph_api_calls": 0,
+    "planned_internal_retries": 0,
+    "planned_qa_api_calls": 0,
+    "planned_repairs": 0,
+    "planned_scene_api_calls": 5,
+    "planned_training_writes": 0,
+    "schema_version": "stage3_safe_pool_scene_canary_v1",
+    "truth_plan_ids": [
+      "TP234-01",
+      "TP234-02",
+      "TP234-03",
+      "TP234-04",
+      "TP234-05"
+    ],
+    "truth_signatures": [
+      "10dd7a02b835b359cf08d3ae58769d404cbc54dfc25e1a6debca2c286ca58491",
+      "21df9409e863f0073f1217c41ab758c0c05b404811fec984c46bcb532e1b5468",
+      "d1ac3609189bb77cdb53e087c7e4d7aaa4aa4f6307731a2c2419cc24ee6c28de",
+      "093eda95ebd789fa061704de0bdafaf21634c32182e664b7d9a2e5521804b40b",
+      "cef3ac9ced3fc04a1a6d74cd819efeabffdc2336f45593bb9fac0056eee9d731"
+    ]
+  },
+  "qa_api_calls": 0,
+  "repair_calls": 0,
+  "run_id": "234_safe_pool_scene_canary_n5",
+  "schema_version": "stage3_safe_pool_scene_canary_v1",
+  "source_parent_file": "/root/autodl-tmp/gxy-selfplay/stage3-data-fix/stage3_parent_v4_memory_backfilled.jsonl",
+  "source_parent_file_sha256": "425efe31adfd9b1a53e30a9c1ab8382db90826ba372181050fac82a4a2394ec9",
+  "temperature": 0.25,
+  "training_writes": 0
+}
