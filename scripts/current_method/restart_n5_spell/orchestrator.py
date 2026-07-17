@@ -8,12 +8,15 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .backends import QuestionerBackend, QuestionerRequest, RealizerBackend, RealizerRequest, SolverBackend, SolverRequest
-from .core import (atomic_json, canonical_json, classify_reward_group, grounding_decision,
+from .core import (atomic_json, canonical_json, classify_frontier_pre_audit,
+                   classify_no_context_permutation_bias, classify_reward_group, grounding_decision,
                    context_preflight, local_reward, normalize_option, option_audit, parse_boxed_mcq_answer,
                    sha256_bytes, sha256_file)
 from .ledger import RequestLedger
-from .prompts import (RESPONDER_PROMPT, SOLVER_NOTHINK_RESPONDER_PROMPT,
-                      build_questioner_prompt, build_realizer_prompt, prompt_template_hashes)
+from .prompts import (QUESTIONER_FORMAT_RETRY_SUFFIX, QUESTIONER_FORMAT_RETRY_VERSION,
+                      RESPONDER_PROMPT, SOLVER_NOTHINK_RESPONDER_PROMPT,
+                      build_questioner_prompt, build_realizer_prompt,
+                      prompt_template_hashes, questioner_format_retry_suffix_hash)
 from .validation import (assess_candidate_shortfall, evidence_audit, parse_questioner_batches, validate_dialogue,
                          materialize_questioner_item, validate_memory, validate_qa, validate_realizer_identity_contract,
                          validate_realizer_output_schema, derive_local_character_ledger,
@@ -26,6 +29,10 @@ from .questioner_contract import (
     build_span_catalog, default_reasoning_contracts, reasoning_contract_sha256,
     span_catalog_sha256,
 )
+from .minimal_admission import (LEGACY_OPTIONAL_SCHEMA_PROFILE,
+                                SPAN_IDS_ONLY_SCHEMA_PROFILE,
+                                SPELL_STYLE_MINIMAL_MODE,
+                                build_answer_evidence_contexts)
 
 
 class SimulatedCrash(RuntimeError):
@@ -519,83 +526,175 @@ class CanaryOrchestrator:
                        valid_turn_ids: tuple[str, ...], valid_session_ids: tuple[str, ...],
                        assigned_letters: tuple[str, str, str], *,
                        span_catalog: dict[str, Any] | None = None,
-                       reasoning_contracts: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-        """Execute exactly one live Questioner batch; never schedules filtering or another batch."""
+                       reasoning_contracts: list[dict[str, Any]] | None = None,
+                       rendered_prompt: str | None = None,
+                       prompt_protocol: str = "strict_contract_v7",
+                       max_format_retries: int = 0,
+                       solver_feedback_sha256: str | None = None,
+                       raw_schema_mode: str = LEGACY_OPTIONAL_SCHEMA_PROFILE,
+                       questioner_schema_version: str = QUESTIONER_SCHEMA_VERSION) -> dict[str, Any]:
+        """Execute one batch, optionally regenerating it once after whole-response JSON failure."""
+        if max_format_retries not in (0, 1):
+            raise ValueError("max_format_retries must be 0 or 1")
         catalog = span_catalog or build_span_catalog(frozen_dialogue)
         contracts = reasoning_contracts or default_reasoning_contracts(assigned_letters)
         catalog_hash = span_catalog_sha256(catalog)
         contract_hash = reasoning_contract_sha256(contracts)
-        prompt = build_questioner_prompt(frozen_dialogue=frozen_dialogue,
+        semantic_prompt = rendered_prompt or build_questioner_prompt(frozen_dialogue=frozen_dialogue,
             valid_turn_ids=valid_turn_ids, valid_session_ids=valid_session_ids,
             assigned_gold_letters=assigned_letters, recent_frontier_history=[], batch_index=0,
             span_catalog=catalog, reasoning_contracts=contracts)
-        request_id = "questioner-b00"
-        request = QuestionerRequest(request_id, 0, assigned_letters, prompt, _hash_text(prompt),
-                                    valid_turn_ids, valid_session_ids, catalog, tuple(contracts))
-        prompt_path = self.run_root / "raw/prompts/questioner-b00.json"
-        if prompt_path.exists():
-            if _read_json(prompt_path).get("prompt_sha256") != request.prompt_sha256:
-                raise RuntimeError("questioner smoke prompt drift")
-        else:
-            atomic_json(prompt_path, {"request_id":request_id, "batch_id":0,
-                "prompt_sha256":request.prompt_sha256, "assigned_gold_letters":list(assigned_letters),
-                "prompt":prompt})
-        response = self.ledger.invoke(request_id=request_id, intent="questioner_batch", attempt=1,
-            prompt_sha256=request.prompt_sha256, call=lambda: self.questioner.generate_batch(request),
-            budget_class="questioner", budget_limit=self.config["max_questioner_generations"],
-            request_metadata={"batch_id":0, "assigned_gold_letters":list(assigned_letters),
+        semantic_prompt_sha = _hash_text(semantic_prompt)
+        frozen_dialogue_sha = _hash_text(canonical_json(frozen_dialogue))
+        suffix_sha = questioner_format_retry_suffix_hash()
+        attempts: list[dict[str, Any]] = []
+        response = None
+        result: dict[str, Any] = {}
+        request_id = ""
+        for attempt_index in range(max_format_retries + 1):
+            is_retry = attempt_index == 1
+            prompt = (semantic_prompt if not is_retry else
+                      semantic_prompt + "\n\n" + QUESTIONER_FORMAT_RETRY_SUFFIX)
+            request_id = ("questioner-b00" if max_format_retries == 0 else
+                          f"questioner-b00-a{attempt_index:02d}")
+            request = QuestionerRequest(request_id, 0, assigned_letters, prompt,
+                                        _hash_text(prompt), valid_turn_ids,
+                                        valid_session_ids, catalog, tuple(contracts))
+            prompt_path = self.run_root / f"raw/prompts/{request_id}.json"
+            if prompt_path.exists():
+                if _read_json(prompt_path).get("prompt_sha256") != request.prompt_sha256:
+                    raise RuntimeError("questioner smoke prompt drift")
+            else:
+                atomic_json(prompt_path, {"request_id":request_id, "batch_id":0,
+                    "attempt_index":attempt_index, "prompt_sha256":request.prompt_sha256,
+                    "semantic_prompt_sha256":semantic_prompt_sha,
+                    "format_retry_suffix_sha256":suffix_sha if is_retry else None,
+                    "assigned_gold_letters":list(assigned_letters), "prompt":prompt})
+            first_request_id = "questioner-b00-a00" if max_format_retries else None
+            metadata = {"batch_id":0, "attempt_index":attempt_index,
+                "assigned_gold_letters":list(assigned_letters),
                 "valid_turn_ids_sha256":_hash_text(canonical_json(list(valid_turn_ids))),
                 "valid_session_ids_sha256":_hash_text(canonical_json(list(valid_session_ids))),
                 "span_catalog_sha256":catalog_hash,
                 "reasoning_contract_sha256":contract_hash,
-                "questioner_schema_version":QUESTIONER_SCHEMA_VERSION},
-            backend_identity=self._backend_identity(self.questioner),
-            total_budget_limit=self.config.get("max_total_paid_api_generations") if self.ledger.backend_mode == "live" else None)
+                "questioner_schema_version":questioner_schema_version,
+                "prompt_protocol":prompt_protocol,
+                "semantic_prompt_sha256":semantic_prompt_sha,
+                "format_retry_suffix_sha256":suffix_sha if is_retry else None,
+                "format_retry_suffix_version":QUESTIONER_FORMAT_RETRY_VERSION if is_retry else None,
+                "retry_of_request_id":first_request_id if is_retry else None,
+                "retry_reason":"json_invalid" if is_retry else None,
+                "retry_mode":"full_batch_regeneration" if is_retry else None,
+                "frozen_dialogue_sha256":frozen_dialogue_sha,
+                "solver_feedback_sha256":solver_feedback_sha256,
+                "physical_request_ordinal":attempt_index + 1,
+                "maximum_physical_request_count":max_format_retries + 1}
+            response = self.ledger.invoke(request_id=request_id, intent="questioner_batch",
+                attempt=attempt_index + 1, prompt_sha256=request.prompt_sha256,
+                call=lambda request=request: self.questioner.generate_batch(request),
+                budget_class="questioner", budget_limit=self.config["max_questioner_generations"],
+                request_metadata=metadata, backend_identity=self._backend_identity(self.questioner),
+                total_budget_limit=self.config.get("max_total_paid_api_generations")
+                    if self.ledger.backend_mode == "live" else None)
+            atomic_json(self.run_root / f"raw/questioner_batch_00_attempt_{attempt_index:02d}.json",
+                {"request_id":request_id, "raw_response":response.raw_text})
+            try:
+                parsed = json.loads(response.raw_text)
+                parse_status = "json_parsed"
+                if raw_schema_mode == SPAN_IDS_ONLY_SCHEMA_PROFILE:
+                    count = len(parsed) if isinstance(parsed, list) else 0
+                    valid_count = isinstance(parsed, list) and count == 3
+                    result = {"json_top_level_array":isinstance(parsed, list),
+                        "raw_object_count":count,
+                        "batch_decision":"questioner_batch_count_valid" if valid_count else
+                            "questioner_batch_count_invalid",
+                        "questioner_candidate_shortfall":not valid_count,
+                        "content_admission_evaluated":False, "items":[]}
+                else:
+                    result = validate_questioner_smoke_batch(parsed, list(assigned_letters),
+                        set(valid_turn_ids), set(valid_session_ids),
+                        {x["turn_id"]: x["text"] for x in frozen_dialogue},
+                        {x["turn_id"]:str(x.get("session_id") or x["turn_id"].split(":", 1)[0])
+                         for x in frozen_dialogue}, span_catalog=catalog,
+                        reasoning_contracts=contracts,
+                        allow_local_difficulty_downgrade=self.config[
+                            "allow_local_difficulty_downgrade"])
+            except json.JSONDecodeError:
+                parse_status = "json_invalid"
+                result = {"json_top_level_array":False, "raw_object_count":0,
+                    "batch_decision":"questioner_json_invalid",
+                    "questioner_candidate_shortfall":True, "items":[]}
+            retry = (parse_status == "json_invalid" and result["raw_object_count"] == 0 and
+                     attempt_index < max_format_retries)
+            decision = ("retry_format_only" if retry else
+                        "questioner_json_invalid_exhausted" if parse_status == "json_invalid" and
+                        attempt_index == max_format_retries and max_format_retries else
+                        result["batch_decision"])
+            if decision == "questioner_json_invalid_exhausted":
+                result["batch_decision"] = decision
+            self.ledger.record_decision(request_id, decision)
+            state = self.ledger.read(request_id) or {}
+            attempts.append({"attempt_index":attempt_index, "request_id":request_id,
+                "parse_status":parse_status, "raw_object_count":result["raw_object_count"],
+                "decision":decision, "prompt_sha256":request.prompt_sha256,
+                "raw_response_path":state.get("raw_response_path"),
+                "raw_response_sha256":state.get("raw_response_sha256")})
+            if not retry:
+                break
+        assert response is not None
         atomic_json(self.run_root / "raw/questioner_batch_00.json",
                     {"request_id":request_id, "raw_response":response.raw_text})
-        try:
-            parsed = json.loads(response.raw_text)
-            parse_status = "json_parsed"
-            result = validate_questioner_smoke_batch(parsed, list(assigned_letters),
-                set(valid_turn_ids), set(valid_session_ids),
-                {x["turn_id"]: x["text"] for x in frozen_dialogue},
-                {x["turn_id"]:str(x.get("session_id") or x["turn_id"].split(":", 1)[0])
-                 for x in frozen_dialogue}, span_catalog=catalog,
-                reasoning_contracts=contracts,
-                allow_local_difficulty_downgrade=self.config["allow_local_difficulty_downgrade"])
-        except json.JSONDecodeError:
-            parse_status = "json_invalid"
-            result = {"json_top_level_array":False, "raw_object_count":0,
-                "batch_decision":"questioner_json_invalid", "questioner_candidate_shortfall":True,
-                "items":[]}
-        result.update({"parse_status":parse_status, "request_id":request_id,
-            "physical_questioner_calls":1, "questioner_smoke_only":True,
+        result.update({"parse_status":attempts[-1]["parse_status"], "request_id":request_id,
+            "final_request_id":request_id, "attempts":attempts,
+            "physical_questioner_calls":len(attempts),
+            "semantic_prompt_sha256":semantic_prompt_sha,
+            "format_retry_suffix_version":QUESTIONER_FORMAT_RETRY_VERSION,
+            "format_retry_suffix_sha256":suffix_sha,
+            "raw_schema_mode":raw_schema_mode,
+            "questioner_smoke_only":True,
             "not_full_canary_context":True,
             "span_catalog_version":SPAN_CATALOG_VERSION,
             "span_catalog_sha256":catalog_hash,
             "reasoning_contract_version":REASONING_CONTRACT_VERSION,
             "reasoning_contract_sha256":contract_hash,
-            "questioner_schema_version":QUESTIONER_SCHEMA_VERSION})
+            "questioner_schema_version":questioner_schema_version})
         atomic_json(self.run_root / "reports/questioner_materialized_items.json",
             [x.get("materialized_qa") for x in result.get("items", [])])
-        self.ledger.record_decision(request_id, result["batch_decision"])
         atomic_json(self.run_root / "reports/live_questioner_smoke.json", result)
         return result
 
     def _rollouts(self, qa: dict[str, Any], mode: str, order_id: str, requested: int,
                   options: dict[str, str], slot_start: int = 0) -> dict[str, Any]:
-        parent = self.data["parent"]["dialogue"]["turns"]
-        child_path = self.run_root / "frozen_child_dialogue.json"
-        child = _read_json(child_path)["turns"] if child_path.exists() else []
-        evidence_ids = set(qa.get("evidence_turn_ids") or [])
-        if mode == "no_context":
-            context_turns = []
-        elif mode == "evidence_only":
-            context_turns = [x for x in parent + child if x.get("turn_id") in evidence_ids]
-        elif mode == "evidence_masked":
-            context_turns = [x for x in parent + child if x.get("turn_id") not in evidence_ids]
+        if qa.get("admission_mode") == SPELL_STYLE_MINIMAL_MODE:
+            context_path = self.run_root / "frozen/questioner_smoke_context.json"
+            catalog_path = self.run_root / "frozen/questioner_span_catalog.json"
+            if not context_path.exists() or not catalog_path.exists():
+                raise RuntimeError("minimal_solver_frozen_context_missing")
+            frozen_dialogue = _read_json(context_path)["combined_dialogue"]
+            contexts = build_answer_evidence_contexts(qa,
+                span_catalog=_read_json(catalog_path), frozen_dialogue=frozen_dialogue)
+            if mode == "no_context":
+                context_turns = []
+            elif mode == "evidence_only":
+                context_turns = contexts["evidence_only"]
+            elif mode == "evidence_masked":
+                context_turns = contexts["evidence_masked"]
+            else:
+                context_turns = frozen_dialogue
         else:
-            context_turns = parent + child
+            parent = self.data["parent"]["dialogue"]["turns"]
+            child_path = self.run_root / "frozen_child_dialogue.json"
+            child = _read_json(child_path)["turns"] if child_path.exists() else []
+            evidence_ids = set(qa.get("evidence_turn_ids") or [])
+            if mode == "no_context":
+                context_turns = []
+            elif mode == "evidence_only":
+                context_turns = [x for x in parent + child if x.get("turn_id") in evidence_ids]
+            elif mode == "evidence_masked":
+                context_turns = [x for x in parent + child if x.get("turn_id") not in evidence_ids]
+            else:
+                context_turns = parent + child
+        context_sha256 = sha256_bytes(canonical_json(context_turns).encode("utf-8"))
         qa_text = qa["question"] + "\n" + "\n".join(f"{k}. {v}" for k,v in options.items())
         context_text = "\n".join(f"[{x.get('turn_id','')}] {x['speaker']}: {x['text']}" for x in context_turns)
         user_text = (f"Context:\n{context_text}\n\n" if context_text else "") + qa_text
@@ -650,7 +749,8 @@ class CanaryOrchestrator:
                 reward = local_reward(parsed, qa["canonical_answer_text"])
                 row = {"request_id": request_id, "raw_response": response.raw_text, **parsed,
                        "local_reward": reward, "sampling_seed": seed, "target_valid_slot": slot,
-                       "parse_retry_index": retry, "evaluation_mode": mode, "order_id": order_id}
+                       "parse_retry_index": retry, "evaluation_mode": mode, "order_id": order_id,
+                       "backend_metadata":dict(response.metadata)}
                 self.ledger.record_decision(request_id,
                     "parse_invalid" if reward is None else f"valid_reward_{reward}")
                 records.append(row)
@@ -664,7 +764,9 @@ class CanaryOrchestrator:
         return {"requested_valid_rollouts": requested, "obtained_valid_rollouts": len(rewards),
             "raw_generations": len(records), "parse_invalid_generations": invalid,
             "retry_generations": retries, "exhausted_target_slots": exhausted,
-            "verified_rewards": rewards, "rollouts": records, "context_preflight": preflight}
+            "verified_rewards": rewards, "rollouts": records, "context_preflight": preflight,
+            "context_sha256":context_sha256,
+            "context_turn_ids":[turn.get("turn_id") for turn in context_turns]}
 
     @staticmethod
     def _combine(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
@@ -733,6 +835,121 @@ class CanaryOrchestrator:
             atomic_json(self.run_root / f"filter/{qa['qa_id']}.json", result)
         atomic_json(self.run_root / "filter_results.json", results)
         return results
+
+    def audit_minimal_candidate(self, qa: dict[str, Any]) -> dict[str, Any]:
+        """Run grounding, full-context, evidence, permutations, and the frozen final merge."""
+        if qa.get("admission_mode") != SPELL_STYLE_MINIMAL_MODE:
+            raise RuntimeError("minimal_solver_qa_admission_mode_invalid")
+        result: dict[str, Any] = {"qa_id":qa["qa_id"],
+            "admission_mode":SPELL_STYLE_MINIMAL_MODE,
+            "difficulty_level":qa.get("difficulty_level", "unclassified")}
+        initial = self._rollouts(qa, "no_context", "original", 3, qa["options"])
+        extension = None
+        if initial["obtained_valid_rollouts"] != 3:
+            grounding = {"decision":"bad_no_context_eval", "needs_extension":False}
+        else:
+            grounding = grounding_decision(initial["verified_rewards"])
+            if grounding["needs_extension"]:
+                extension = self._rollouts(qa, "no_context", "original", 2,
+                                           qa["options"], slot_start=3)
+                grounding = grounding_decision(initial["verified_rewards"],
+                                                extension["verified_rewards"])
+        no_context = self._combine(initial, extension) if extension is not None else initial
+        result.update({"initial_no_context":initial, "adaptive_extension":extension,
+            "no_context":no_context, "grounding_decision":grounding["decision"]})
+        if grounding["decision"] != "pass_grounding":
+            result["final_decision"] = grounding["decision"]
+            atomic_json(self.run_root / f"filter/{qa['qa_id']}.json", result)
+            return result
+
+        full = self._rollouts(qa, "full_context", "original", 5, qa["options"])
+        frontier = classify_frontier_pre_audit(full["verified_rewards"])
+        result.update({"full_context":full, "verified_rewards":full["verified_rewards"],
+            "verified_reward_mean":frontier["mean"], "verified_reward_std":frontier["std"],
+            "frontier_decision":frontier["decision"]})
+        if frontier["decision"] != "retain_frontier_pre_audit":
+            result["final_decision"] = frontier["decision"]
+            atomic_json(self.run_root / f"filter/{qa['qa_id']}.json", result)
+            return result
+
+        evidence_only = self._rollouts(qa, "evidence_only", "original", 3, qa["options"])
+        evidence_masked = self._rollouts(qa, "evidence_masked", "original", 3, qa["options"])
+        evidence = evidence_audit(qa, evidence_only, evidence_masked)
+        context_hash = full["context_sha256"]
+        orders = [{"order_id":"original", "valid_rewards":full["verified_rewards"],
+                   "gold_letter":qa["reference_answer_letter"], "context_hash":context_hash}]
+        permutation_records = []
+        for shift, order_id in ((1, "perm1"), (2, "perm2")):
+            options = self._permuted(qa["options"], shift)
+            rollout = self._rollouts(qa, "option_permutation", order_id, 5, options)
+            gold = next(letter for letter, value in options.items()
+                        if normalize_option(value) == normalize_option(qa["canonical_answer_text"]))
+            orders.append({"order_id":order_id, "valid_rewards":rollout["verified_rewards"],
+                           "gold_letter":gold, "context_hash":rollout["context_sha256"]})
+            permutation_records.append({"order_id":order_id, "options":options,
+                                        "rollout":rollout})
+        option = option_audit(orders)
+        evidence_bad = evidence["decision"] == "bad_evidence_relevance"
+        evidence_inconclusive = evidence["decision"] == "evidence_audit_inconclusive"
+        option_bad = option["decision"] == "bad_option_bias"
+        option_inconclusive = option["decision"] == "option_audit_inconclusive"
+        if evidence_bad:
+            final = "bad_evidence_relevance"
+        elif option_bad:
+            final = "bad_option_bias"
+        elif evidence_inconclusive or option_inconclusive:
+            final = "frontier_audit_inconclusive"
+        else:
+            final = "retain_frontier"
+        result.update({"evidence_only":evidence_only, "evidence_masked":evidence_masked,
+            "evidence_audit":evidence, "option_orders":permutation_records,
+            "original_full_context_reused_for_option_audit":True,
+            "option_audit":option, "final_decision":final,
+            "option_order_sensitive":option["decision"] == "option_order_sensitive"})
+        atomic_json(self.run_root / f"filter/{qa['qa_id']}.json", result)
+        return result
+
+    def diagnose_no_context_permutations(self, qa: dict[str, Any],
+                                         original: dict[str, Any]) -> dict[str, Any]:
+        """Reuse an authoritative original K3 and generate only two reordered no-context K3s."""
+        if (qa.get("admission_mode") != SPELL_STYLE_MINIMAL_MODE or
+                original.get("requested_valid_rollouts") != 3 or
+                original.get("obtained_valid_rollouts") != 3 or
+                original.get("verified_rewards") != [1, 1, 1]):
+            raise RuntimeError("bad_ground_permutation_source_result_mismatch")
+
+        original_answers = [row.get("parsed_letter") for row in original.get("rollouts") or []
+                            if row.get("local_reward") is not None]
+        orders = [{"order_id":"original", "options":dict(qa["options"]),
+            "gold_letter":qa["reference_answer_letter"],
+            "valid_answer_letters":original_answers,
+            "valid_rewards":list(original["verified_rewards"]),
+            "source":"reused_authoritative_k3"}]
+        generated_orders = []
+        for shift, order_id in ((1, "perm1"), (2, "perm2")):
+            options = self._permuted(qa["options"], shift)
+            rollout = self._rollouts(qa, "no_context", order_id, 3, options)
+            gold = next(letter for letter, value in options.items()
+                        if normalize_option(value) == normalize_option(qa["canonical_answer_text"]))
+            answers = [row.get("parsed_letter") for row in rollout.get("rollouts") or []
+                       if row.get("local_reward") is not None]
+            order = {"order_id":order_id, "options":options, "gold_letter":gold,
+                "valid_answer_letters":answers,
+                "valid_rewards":list(rollout.get("verified_rewards") or []),
+                "source":"new_local_vllm", "rollout":rollout}
+            orders.append(order)
+            generated_orders.append(order)
+        diagnosis = classify_no_context_permutation_bias(orders)
+        result = {"qa_id":qa["qa_id"], "admission_mode":SPELL_STYLE_MINIMAL_MODE,
+            "authoritative_grounding_decision":"bad_ground",
+            "authoritative_grounding_decision_changed":False,
+            "original_no_context_reused":True,
+            "original_no_context":original, "permutation_orders":generated_orders,
+            "diagnostic":diagnosis, "diagnostic_decision":diagnosis["decision"],
+            "full_context_ran":False, "evidence_audit_ran":False,
+            "frontier_option_audit_ran":False}
+        atomic_json(self.run_root / f"filter/{qa['qa_id']}_no_context_permutation.json", result)
+        return result
 
     def report(self, sessions: list[dict[str, Any]], memory: dict[str, Any], q_summary: dict[str, Any],
                filter_results: list[dict[str, Any]]) -> dict[str, Any]:

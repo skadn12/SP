@@ -10,6 +10,8 @@ from .questioner_contract import (
     STRUCTURAL_SUPPORT_ROLES, contract_is_satisfied, derive_local_difficulty,
     single_reasoning_contract_sha256, span_catalog_index, span_catalog_sha256,
 )
+from .minimal_admission import (LEGACY_OPTIONAL_SCHEMA_PROFILE,
+                                materialize_spell_style_minimal)
 
 
 EVIDENCE_VALUE_STOPWORDS = frozenset({
@@ -802,6 +804,64 @@ def validate_questioner_smoke_batch(batch: Any, assigned_letters: list[str],
             "batch_decision": "questioner_batch_count_valid",
             "questioner_candidate_shortfall": False, "schema_accepted_count": accepted,
             "schema_rejected_count": 3 - accepted, "items": items}
+
+
+def validate_dual_admission_batch(batch: Any, assigned_letters: list[str], *,
+                                  span_catalog: dict[str, Any],
+                                  reasoning_contracts: list[dict[str, Any]],
+                                  frozen_turns: dict[str, str] | None = None,
+                                  turn_session_ids: dict[str, str] | None = None,
+                                  minimal_schema_profile: str =
+                                  LEGACY_OPTIONAL_SCHEMA_PROFILE) -> dict[str, Any]:
+    """Recompute strict v7 and independent SPELL-style minimal decisions side by side."""
+    if not isinstance(batch, list) or len(batch) != 3:
+        return {"raw_count":len(batch) if isinstance(batch, list) else 0,
+            "batch_decision":"questioner_batch_count_invalid", "items":[],
+            "strict_v7_accepted_count":0, "strict_v7_rejected_count":0,
+            "minimal_accepted_count":0, "minimal_rejected_count":0}
+    catalog = span_catalog_index(span_catalog)
+    valid_turn_ids = set(frozen_turns or {span["turn_id"] for span in catalog.values()})
+    valid_session_ids = set(turn_session_ids.values() if turn_session_ids else
+                            (span["session_id"] for span in catalog.values()))
+    strict = validate_questioner_smoke_batch(batch, assigned_letters, valid_turn_ids,
+        valid_session_ids, frozen_turns, turn_session_ids, span_catalog=span_catalog,
+        reasoning_contracts=reasoning_contracts, allow_local_difficulty_downgrade=False)
+    strict_items = strict.get("items") or []
+    records: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for index, raw_item in enumerate(batch):
+        strict_item = strict_items[index] if index < len(strict_items) else {}
+        strict_reasons = list(strict_item.get("reject_reasons") or [])
+        qa, minimal_errors, diagnostics = materialize_spell_style_minimal(
+            raw_item, assigned_letters[index], span_catalog=span_catalog,
+            strict_v7_reasons=strict_reasons, reasoning_contract=reasoning_contracts[index],
+            schema_profile=minimal_schema_profile)
+        qa_id = str(raw_item.get("qa_id") or "").strip() if isinstance(raw_item, dict) else ""
+        if not qa_id or qa_id in seen_ids:
+            minimal_errors.append("bad_or_duplicate_qa_id")
+            qa = None
+        if qa_id:
+            seen_ids.add(qa_id)
+        minimal_errors = sorted(set(minimal_errors))
+        records.append({"item_index":index, "qa_id":qa_id or None,
+            "target_letter":assigned_letters[index],
+            "strict_v7":{"decision":strict_item.get("schema_decision", "reject"),
+                "reasons":strict_reasons,
+                "diagnostics":{"reasoning_type":strict_item.get("reasoning_type"),
+                    "difficulty":strict_item.get("difficulty")}},
+            "spell_style_minimal_v1":{"decision":"accept" if not minimal_errors else "reject",
+                "reasons":minimal_errors, "diagnostics":diagnostics,
+                "materialized_qa":qa},
+            "solver_eligible":not minimal_errors and qa is not None})
+    strict_accepted = sum(item["strict_v7"]["decision"] == "accept" for item in records)
+    minimal_accepted = sum(item["spell_style_minimal_v1"]["decision"] == "accept"
+                           for item in records)
+    return {"raw_count":3, "batch_decision":"dual_admission_complete", "items":records,
+        "minimal_schema_profile":minimal_schema_profile,
+        "strict_v7_accepted_count":strict_accepted,
+        "strict_v7_rejected_count":3-strict_accepted,
+        "minimal_accepted_count":minimal_accepted,
+        "minimal_rejected_count":3-minimal_accepted}
 
 
 def json_like(value: Any) -> str:

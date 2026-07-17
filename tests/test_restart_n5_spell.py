@@ -8,11 +8,12 @@ from pathlib import Path
 from scripts.current_method.restart_n5_spell.core import (
     classify_reward_group, collect_valid_rollouts, context_preflight, grounding_decision,
     local_reward, option_audit, parse_mcq_response, parse_boxed_mcq_answer,
-    classify_frontier_pre_audit, full_context_gate,
+    classify_frontier_pre_audit, classify_no_context_permutation_bias, full_context_gate,
 )
 from scripts.current_method.restart_n5_spell.core import sha256_file
 from scripts.current_method.restart_n5_spell.run_canary import (
-    DEFAULTS, create_source_snapshot, initialize_run, render_solver_prompt, select_solver_qa,
+    DEFAULTS, create_source_snapshot, initialize_run, render_solver_prompt,
+    select_minimal_solver_qa, select_solver_qa,
 )
 from scripts.current_method.restart_n5_spell.backends import BackendResponse
 from scripts.current_method.restart_n5_spell.core import atomic_json
@@ -27,7 +28,10 @@ from scripts.current_method.restart_n5_spell import input_adapter as input_adapt
 from scripts.current_method.restart_n5_spell import validation as validation_module
 from scripts.current_method.restart_n5_spell import run_canary as run_canary_module
 from scripts.current_method.restart_n5_spell.prompts import (
-    REALIZER_OUTPUT_SCHEMA, build_questioner_prompt, build_realizer_prompt, prompt_template_hashes,
+    REALIZER_OUTPUT_SCHEMA, build_questioner_feedback_prompt, build_questioner_prompt,
+    build_questioner_span_ids_only_feedback_prompt, build_realizer_prompt,
+    feedback_questioner_template_hash, prompt_template_hashes,
+    span_ids_only_questioner_template_hash,
 )
 from scripts.current_method.restart_n5_spell.validation import (
     can_stop, evidence_audit, parse_questioner_batches, validate_config,
@@ -122,6 +126,36 @@ class OptionTests(unittest.TestCase):
     def test_semantic_identity(self):
         shuffled = {"A": "gold", "B": "red", "C": "blue", "D": "green"}
         self.assertEqual(parse_boxed_mcq_answer("<box>C</box>", shuffled)["parsed_option_text"], "blue")
+
+    def test_no_context_permutation_bias_diagnosis(self):
+        semantic = classify_no_context_permutation_bias([
+            {"order_id":"original", "gold_letter":"A",
+             "valid_answer_letters":["A"] * 3, "valid_rewards":[1] * 3},
+            {"order_id":"perm1", "gold_letter":"B",
+             "valid_answer_letters":["B"] * 3, "valid_rewards":[1] * 3},
+            {"order_id":"perm2", "gold_letter":"C",
+             "valid_answer_letters":["C"] * 3, "valid_rewards":[1] * 3}])
+        self.assertEqual(semantic["decision"], "bad_ground_semantic_leakage")
+        position = classify_no_context_permutation_bias([
+            {"order_id":"original", "gold_letter":"A",
+             "valid_answer_letters":["A"] * 3, "valid_rewards":[1] * 3},
+            {"order_id":"perm1", "gold_letter":"B",
+             "valid_answer_letters":["A"] * 3, "valid_rewards":[0] * 3},
+            {"order_id":"perm2", "gold_letter":"C",
+             "valid_answer_letters":["A"] * 3, "valid_rewards":[0] * 3}])
+        self.assertEqual(position["decision"], "bad_ground_position_bias")
+        mixed = classify_no_context_permutation_bias([
+            {"order_id":"original", "gold_letter":"A",
+             "valid_answer_letters":["A"] * 3, "valid_rewards":[1] * 3},
+            {"order_id":"perm1", "gold_letter":"B",
+             "valid_answer_letters":["B", "A", "B"], "valid_rewards":[1,0,1]},
+            {"order_id":"perm2", "gold_letter":"C",
+             "valid_answer_letters":["A", "C", "D"], "valid_rewards":[0,1,0]}])
+        self.assertEqual(mixed["decision"], "bad_ground_mixed_bias")
+        incomplete = [dict(row) for row in mixed["orders"]]
+        incomplete[1]["valid_rewards"] = [1, 0]
+        self.assertEqual(classify_no_context_permutation_bias(incomplete)["decision"],
+                         "bad_ground_permutation_inconclusive")
 
 
 class SchemaTests(unittest.TestCase):
@@ -1002,6 +1036,43 @@ class PromptTests(unittest.TestCase):
         self.assertEqual(len(set(first.values())), 3)
         self.assertTrue(all(len(value) == 64 for value in first.values()))
 
+    def test_solver_feedback_layer_preserves_v7_and_uses_failures_only_as_quality_signals(self):
+        dialogue = [{"session_id":"S1","turn_id":"T1","speaker":"A","text":"fact one"},
+                    {"session_id":"S2","turn_id":"T2","speaker":"B","text":"fact two"}]
+        feedback = [{"qa_id":"batch0_item1", "final_decision":"bad_ground",
+                     "no_context_rewards":[1,0,1,1,1],
+                     "diagnosis":"answer was guessable without dialogue"},
+                    {"qa_id":"batch0_item2", "final_decision":"reject_easy",
+                     "no_context_rewards":[0,0,0], "full_context_rewards":[1,1,1,1,1],
+                     "diagnosis":"answer was a direct lookup with full dialogue"}]
+        prompt = build_questioner_feedback_prompt(frozen_dialogue=dialogue,
+            valid_turn_ids=["T1","T2"], valid_session_ids=["S1","S2"],
+            assigned_gold_letters=["A","B","C"], recent_frontier_history=[],
+            solver_feedback=feedback)
+        self.assertIn("spell_dialogue_mcq_3x_v7_span_ids_solver_feedback_v1", prompt)
+        self.assertIn("bad_ground", prompt); self.assertIn("reject_easy", prompt)
+        self.assertIn("not a factual source", prompt)
+        self.assertIn("Do not optimize for evidence-count quotas", prompt)
+        self.assertIn("state changes, temporal order, causal dependencies", prompt)
+        self.assertNotIn("question was", prompt)
+        self.assertEqual(len(feedback_questioner_template_hash()), 64)
+
+    def test_v8_span_ids_only_feedback_schema_has_no_evidence_value_contract(self):
+        dialogue = [{"session_id":"S1","turn_id":"T1","speaker":"A","text":"fact one"},
+                    {"session_id":"S2","turn_id":"T2","speaker":"B","text":"fact two"}]
+        prompt = build_questioner_span_ids_only_feedback_prompt(frozen_dialogue=dialogue,
+            valid_turn_ids=["T1","T2"], valid_session_ids=["S1","S2"],
+            assigned_gold_letters=["A","B","C"], solver_feedback=[{
+                "qa_id":"old", "final_decision":"bad_ground",
+                "diagnosis":"answer was guessable without dialogue"}])
+        self.assertIn("spell_dialogue_mcq_3x_v8_span_ids_only_solver_feedback_v1", prompt)
+        self.assertIn('"additionalProperties": false', prompt)
+        self.assertIn('"answer_support_span_ids"', prompt)
+        self.assertIn("Do not output answer_evidence_values", prompt)
+        self.assertIn("Do not output distractor_support", prompt)
+        self.assertNotIn('"reasoning_contracts_by_array_position"', prompt)
+        self.assertEqual(len(span_ids_only_questioner_template_hash()), 64)
+
 
 class QuestionerV7RedTests(unittest.TestCase):
     """Added first: these cases intentionally fail against the frozen v6 checkpoint."""
@@ -1238,6 +1309,394 @@ class QuestionerV7ContractTests(unittest.TestCase):
         self.assertIn('"span_id": "T1#S0001"',prompt)
         self.assertNotIn('"turn_id":',prompt); self.assertNotIn('"session_id":',prompt)
         self.assertNotIn('"target_letter":',prompt)
+
+
+class SpellStyleMinimalRedTests(unittest.TestCase):
+    """These tests are added before the minimal admission implementation."""
+
+    @staticmethod
+    def dialogue():
+        return [
+            {"turn_id":"T1", "session_id":"S1", "speaker":"Maria",
+             "text":"My aunt inspired me to volunteer."},
+            {"turn_id":"T2", "session_id":"S1", "speaker":"Maria",
+             "text":"Her aunt believed in volunteering."},
+            {"turn_id":"T3", "session_id":"S2", "speaker":"John",
+             "text":"Grandma discussed the film camera and charity event."},
+        ]
+
+    @staticmethod
+    def raw():
+        return {"qa_id":"minimal_q1", "question":"Who inspired Maria?",
+            "correct_answer_text":"aunt",
+            "distractors":["grandma", "film camera", "charity event"],
+            "answer_support_span_ids":["T1#S0001", "T2#S0001"],
+            "answer_evidence_values":[
+                {"span_id":"T1#S0001", "value":"aunt"},
+                {"span_id":"T2#S0001", "value":"aunt"}],
+            "distractor_support":[
+                {"distractor_index":0,"span_ids":["T3#S0001"],"evidence_values":["Grandma"]},
+                {"distractor_index":1,"span_ids":["T3#S0001"],"evidence_values":["film camera"]},
+                {"distractor_index":2,"span_ids":["T3#S0001"],"evidence_values":["charity event"]}],
+            "correct_answer_explanation":"The selected spans name the aunt.",
+            "distractor_explanations":["different person", "different object", "different event"],
+            "reasoning_steps":["Read the selected spans."]}
+
+    def api(self):
+        from scripts.current_method.restart_n5_spell.minimal_admission import (
+            build_answer_evidence_contexts, materialize_spell_style_minimal,
+            normalize_minimal_text_v1,
+        )
+        return build_answer_evidence_contexts, materialize_spell_style_minimal, normalize_minimal_text_v1
+
+    def test_strict_rejects_duplicate_value_but_minimal_accepts(self):
+        from scripts.current_method.restart_n5_spell.questioner_contract import (
+            build_span_catalog, default_reasoning_contracts)
+        from scripts.current_method.restart_n5_spell.validation import materialize_questioner_item
+        _, minimal, _ = self.api()
+        catalog = build_span_catalog(self.dialogue())
+        contract = default_reasoning_contracts(("A","B","C"))[0]
+        self.assertIn("bad_duplicate_information_point",
+            materialize_questioner_item(self.raw(), "A", span_catalog=catalog,
+                                        reasoning_contract=contract)[1])
+        qa, errors, diagnostics = minimal(self.raw(), "A", span_catalog=catalog,
+            strict_v7_reasons=["bad_duplicate_information_point", "bad_reasoning_contract"])
+        self.assertEqual(errors, [])
+        self.assertEqual(qa["reference_answer_text"], qa["options"]["A"])
+        self.assertEqual(diagnostics["distinct_answer_value_count"], 1)
+
+    def test_same_session_short_or_missing_reasoning_is_soft(self):
+        from scripts.current_method.restart_n5_spell.questioner_contract import build_span_catalog
+        _, minimal, _ = self.api(); catalog = build_span_catalog(self.dialogue())
+        for mutation in (lambda item: item,
+                         lambda item: item.pop("reasoning_steps")):
+            raw = self.raw(); mutation(raw)
+            qa, errors, diagnostics = minimal(raw, "B", span_catalog=catalog)
+            self.assertEqual(errors, [])
+            self.assertEqual(qa["evidence_session_ids"], ["S1"])
+            self.assertIn(diagnostics["reasoning_step_count"], (0, 1))
+
+    def test_literal_span_claims_are_hard_but_answer_semantics_are_soft(self):
+        from scripts.current_method.restart_n5_spell.questioner_contract import build_span_catalog
+        _, minimal, _ = self.api(); catalog = build_span_catalog(self.dialogue())
+        not_in_answer = self.raw(); not_in_answer["correct_answer_text"] = "relative"
+        qa, errors, _ = minimal(not_in_answer, "A", span_catalog=catalog)
+        self.assertEqual(errors, [])
+        not_in_span = self.raw(); not_in_span["answer_evidence_values"][0]["value"] = "friends"
+        self.assertIn("bad_answer_evidence_binding",
+                      minimal(not_in_span, "A", span_catalog=catalog)[1])
+        unknown = self.raw(); unknown["answer_support_span_ids"] = ["UNKNOWN#S0001"]
+        self.assertIn("bad_span_id", minimal(unknown, "A", span_catalog=catalog)[1])
+
+    def test_optional_support_is_optional_but_malformed_is_rejected(self):
+        from scripts.current_method.restart_n5_spell.questioner_contract import build_span_catalog
+        _, minimal, _ = self.api(); catalog = build_span_catalog(self.dialogue())
+        absent = self.raw()
+        for key in ("answer_evidence_values", "distractor_support", "correct_answer_explanation",
+                    "distractor_explanations", "reasoning_steps"):
+            absent.pop(key)
+        qa, errors, diagnostics = minimal(absent, "C", span_catalog=catalog)
+        self.assertEqual(errors, [])
+        self.assertEqual(qa["reasoning_steps"], [])
+        self.assertTrue(all(value == "missing" for value in diagnostics["optional_field_status"].values()))
+        malformed = self.raw(); malformed["distractor_support"][0]["distractor_index"] = [0]
+        self.assertIn("bad_distractor_support", minimal(malformed, "A", span_catalog=catalog)[1])
+
+    def test_reserved_fields_and_normalized_option_duplicates_are_rejected(self):
+        from scripts.current_method.restart_n5_spell.questioner_contract import build_span_catalog
+        _, minimal, normalize = self.api(); catalog = build_span_catalog(self.dialogue())
+        self.assertEqual(normalize("  A\u3000  B  "), "a b")
+        reserved = self.raw(); reserved["options"] = {"A":"aunt"}
+        self.assertIn("model_supplied_local_binding_fields",
+                      minimal(reserved, "A", span_catalog=catalog)[1])
+        duplicate = self.raw(); duplicate["distractors"][0] = "  AUNT "
+        self.assertIn("bad_unlabeled_options", minimal(duplicate, "A", span_catalog=catalog)[1])
+
+    def test_no_fuzzy_or_synonym_matching(self):
+        from scripts.current_method.restart_n5_spell.questioner_contract import build_span_catalog
+        _, minimal, _ = self.api(); catalog = build_span_catalog(self.dialogue())
+        raw = self.raw(); raw["answer_evidence_values"][0]["value"] = "aunts"
+        self.assertIn("bad_answer_evidence_binding", minimal(raw, "A", span_catalog=catalog)[1])
+
+    def test_evidence_context_uses_only_answer_support_turns(self):
+        from scripts.current_method.restart_n5_spell.questioner_contract import build_span_catalog
+        contexts, minimal, _ = self.api(); dialogue = self.dialogue(); catalog = build_span_catalog(dialogue)
+        qa, errors, _ = minimal(self.raw(), "A", span_catalog=catalog)
+        self.assertEqual(errors, [])
+        result = contexts(qa, span_catalog=catalog, frozen_dialogue=dialogue)
+        self.assertEqual([x["turn_id"] for x in result["evidence_only"]], ["T1", "T2"])
+        self.assertEqual([x["turn_id"] for x in result["evidence_masked"]], ["T3"])
+
+    def test_dual_batch_keeps_strict_and_minimal_decisions_independent(self):
+        from scripts.current_method.restart_n5_spell.questioner_contract import (
+            build_span_catalog, default_reasoning_contracts)
+        from scripts.current_method.restart_n5_spell.validation import validate_dual_admission_batch
+        catalog = build_span_catalog(self.dialogue())
+        raw = [self.raw(), {**self.raw(), "qa_id":"minimal_q2"},
+               {**self.raw(), "qa_id":"minimal_q3", "answer_support_span_ids":["BAD#S0001"]}]
+        result = validate_dual_admission_batch(raw, ["A","B","C"], span_catalog=catalog,
+            reasoning_contracts=default_reasoning_contracts(("A","B","C")))
+        self.assertEqual(result["strict_v7_accepted_count"], 0)
+        self.assertEqual(result["minimal_accepted_count"], 2)
+        self.assertEqual([x["spell_style_minimal_v1"]["decision"] for x in result["items"]],
+                         ["accept", "accept", "reject"])
+
+    def test_distractor_literal_claim_does_not_require_distractor_semantics(self):
+        from scripts.current_method.restart_n5_spell.questioner_contract import build_span_catalog
+        _, minimal, _ = self.api(); catalog = build_span_catalog(self.dialogue())
+        raw = self.raw()
+        raw["distractors"][0] = "an unrelated but unique answer"
+        qa, errors, diagnostics = minimal(raw, "A", span_catalog=catalog)
+        self.assertEqual(errors, [])
+        self.assertFalse(diagnostics["distractor_value_literal_checks"][0][
+            "literal_in_distractor"])
+        self.assertEqual(qa["options"]["B"], "an unrelated but unique answer")
+
+    def test_placeholders_and_duplicate_distractors_are_rejected(self):
+        from scripts.current_method.restart_n5_spell.questioner_contract import build_span_catalog
+        _, minimal, _ = self.api(); catalog = build_span_catalog(self.dialogue())
+        placeholder = self.raw(); placeholder["question"] = "TODO insert answer"
+        self.assertIn("minimal_placeholder_or_raw_artifact",
+                      minimal(placeholder, "A", span_catalog=catalog)[1])
+        duplicate = self.raw(); duplicate["distractors"][2] = " FILM   CAMERA "
+        self.assertIn("bad_unlabeled_options", minimal(duplicate, "A", span_catalog=catalog)[1])
+
+    def test_minimal_solver_selector_is_materialized_only(self):
+        from scripts.current_method.restart_n5_spell.questioner_contract import (
+            build_span_catalog, default_reasoning_contracts)
+        _, minimal, _ = self.api(); catalog = build_span_catalog(self.dialogue())
+        contracts = default_reasoning_contracts(("A", "B", "C"))
+        raw = self.raw()
+        materialized, errors, diagnostics = minimal(raw, "A", span_catalog=catalog,
+            strict_v7_reasons=["bad_reasoning_contract"], reasoning_contract=contracts[0])
+        self.assertEqual(errors, [])
+        admission = {"qa_id":raw["qa_id"], "item_index":0, "target_letter":"A",
+            "strict_v7":{"decision":"reject", "reasons":["bad_reasoning_contract"]},
+            "spell_style_minimal_v1":{"decision":"accept", "reasons":[],
+                "diagnostics":diagnostics}, "solver_eligible":True}
+        selected_raw, selected, _ = select_minimal_solver_qa([raw], admission, raw["qa_id"],
+            materialized_qa=materialized, span_catalog=catalog, reasoning_contracts=contracts)
+        self.assertIs(selected_raw, raw)
+        self.assertEqual(selected, materialized)
+        with self.assertRaisesRegex(RuntimeError, "solver_qa_not_materialized"):
+            select_minimal_solver_qa([raw], admission, raw["qa_id"], materialized_qa=None,
+                span_catalog=catalog, reasoning_contracts=contracts)
+        tampered = copy.deepcopy(materialized); tampered["options"]["A"] = "tampered"
+        with self.assertRaisesRegex(RuntimeError, "solver_qa_integrity_mismatch"):
+            select_minimal_solver_qa([raw], admission, raw["qa_id"],
+                materialized_qa=tampered, span_catalog=catalog, reasoning_contracts=contracts)
+
+    def test_span_ids_only_profile_accepts_core_fields_and_rejects_removed_fields(self):
+        from scripts.current_method.restart_n5_spell.questioner_contract import build_span_catalog
+        from scripts.current_method.restart_n5_spell.minimal_admission import (
+            SPAN_IDS_ONLY_SCHEMA_PROFILE, materialize_spell_style_minimal)
+        catalog = build_span_catalog(self.dialogue())
+        raw = self.raw()
+        for key in ("answer_evidence_values", "distractor_support",
+                    "correct_answer_explanation", "distractor_explanations"):
+            raw.pop(key)
+        qa, errors, _ = materialize_spell_style_minimal(raw, "A", span_catalog=catalog,
+            schema_profile=SPAN_IDS_ONLY_SCHEMA_PROFILE)
+        self.assertEqual(errors, []); self.assertEqual(qa["reasoning_steps"], raw["reasoning_steps"])
+        stale = copy.deepcopy(raw); stale["answer_evidence_values"] = []
+        self.assertIn("span_ids_only_additional_properties",
+            materialize_spell_style_minimal(stale, "A", span_catalog=catalog,
+                schema_profile=SPAN_IDS_ONLY_SCHEMA_PROFILE)[1])
+
+
+class MinimalSolverFinalMergeTests(unittest.TestCase):
+    @staticmethod
+    def qa():
+        return {"qa_id":"minimal_solver_q1", "question":"q",
+            "options":{"A":"correct", "B":"b", "C":"c", "D":"d"},
+            "reference_answer_letter":"A", "reference_answer_text":"correct",
+            "canonical_answer_text":"correct", "admission_mode":"spell_style_minimal_v1",
+            "difficulty_level":"unclassified", "evidence_span_ids":["T1#S0001"],
+            "evidence_turn_ids":["T1"], "evidence_session_ids":["S1"],
+            "reasoning_steps":[]}
+
+    @staticmethod
+    def rollout(rewards, context="context"):
+        return {"requested_valid_rollouts":len(rewards), "obtained_valid_rollouts":len(rewards),
+            "verified_rewards":list(rewards), "raw_generations":len(rewards),
+            "parse_invalid_generations":0, "retry_generations":0,
+            "exhausted_target_slots":0, "rollouts":[], "context_sha256":context,
+            "context_turn_ids":[]}
+
+    def run_audit(self, responses):
+        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
+        orchestrator = object.__new__(CanaryOrchestrator)
+        orchestrator.run_root = Path(temporary.name)
+        calls = []
+        def fake_rollouts(qa, mode, order_id, valid_k, options, slot_start=0):
+            calls.append((mode, order_id, valid_k, slot_start))
+            value = responses[(mode, order_id, slot_start)]
+            return self.rollout(value, "full" if mode in ("full_context", "option_permutation") else mode)
+        orchestrator._rollouts = fake_rollouts
+        return orchestrator.audit_minimal_candidate(self.qa()), calls
+
+    def test_complete_audits_retain_and_reuse_original_k5(self):
+        result, calls = self.run_audit({
+            ("no_context", "original", 0):[0,0,1],
+            ("full_context", "original", 0):[1,0,1,0,1],
+            ("evidence_only", "original", 0):[1,1,0],
+            ("evidence_masked", "original", 0):[0,0,1],
+            ("option_permutation", "perm1", 0):[1,0,1,0,1],
+            ("option_permutation", "perm2", 0):[0,1,0,1,1],
+        })
+        self.assertEqual(result["final_decision"], "retain_frontier")
+        self.assertTrue(result["original_full_context_reused_for_option_audit"])
+        self.assertEqual(calls.count(("full_context", "original", 5, 0)), 1)
+
+    def test_bad_ground_never_runs_full_context(self):
+        result, calls = self.run_audit({("no_context", "original", 0):[1,1,1]})
+        self.assertEqual(result["final_decision"], "bad_ground")
+        self.assertFalse(any(mode == "full_context" for mode, *_ in calls))
+
+    def test_final_merge_priorities_and_inconclusive(self):
+        base = {
+            ("no_context", "original", 0):[0,0,1],
+            ("full_context", "original", 0):[1,0,1,0,1],
+            ("evidence_only", "original", 0):[0,0,0],
+            ("evidence_masked", "original", 0):[1,1,1],
+            ("option_permutation", "perm1", 0):[1,1,1,1,0],
+            ("option_permutation", "perm2", 0):[0,0,0,0,1],
+        }
+        result, _ = self.run_audit(base)
+        self.assertEqual(result["evidence_audit"]["decision"], "bad_evidence_relevance")
+        self.assertEqual(result["option_audit"]["decision"], "bad_option_bias")
+        self.assertEqual(result["final_decision"], "bad_evidence_relevance")
+        incomplete = dict(base)
+        incomplete[("evidence_only", "original", 0)] = [1, 0]
+        incomplete[("option_permutation", "perm1", 0)] = [1,0,1,0,1]
+        incomplete[("option_permutation", "perm2", 0)] = [0,1,0,1,1]
+        result, _ = self.run_audit(incomplete)
+        self.assertEqual(result["final_decision"], "frontier_audit_inconclusive")
+
+
+class NoContextPermutationDiagnosticTests(unittest.TestCase):
+    @staticmethod
+    def qa():
+        return {"qa_id":"diagnostic_q1", "question":"q",
+            "options":{"A":"correct", "B":"b", "C":"c", "D":"d"},
+            "reference_answer_letter":"A", "reference_answer_text":"correct",
+            "canonical_answer_text":"correct", "admission_mode":"spell_style_minimal_v1",
+            "evidence_span_ids":["T1#S0001"]}
+
+    @staticmethod
+    def original():
+        return {"requested_valid_rollouts":3, "obtained_valid_rollouts":3,
+            "verified_rewards":[1,1,1], "raw_generations":3,
+            "parse_invalid_generations":0, "retry_generations":0,
+            "exhausted_target_slots":0,
+            "rollouts":[{"parsed_letter":"A", "local_reward":1} for _ in range(3)]}
+
+    def test_original_k3_is_reused_and_only_two_no_context_orders_run(self):
+        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
+        orchestrator = object.__new__(CanaryOrchestrator)
+        orchestrator.run_root = Path(temporary.name)
+        calls = []
+        qa = self.qa()
+        def fake_rollouts(candidate, mode, order_id, requested, options, slot_start=0):
+            calls.append((mode, order_id, requested, slot_start, dict(options)))
+            gold = next(letter for letter, value in options.items() if value == "correct")
+            return {"requested_valid_rollouts":3, "obtained_valid_rollouts":3,
+                "verified_rewards":[1,1,1], "raw_generations":3,
+                "parse_invalid_generations":0, "retry_generations":0,
+                "exhausted_target_slots":0,
+                "rollouts":[{"parsed_letter":gold, "local_reward":1} for _ in range(3)]}
+        orchestrator._rollouts = fake_rollouts
+        result = orchestrator.diagnose_no_context_permutations(qa, self.original())
+        self.assertEqual([(mode, order, requested, slot) for mode, order, requested, slot, _ in calls],
+                         [("no_context","perm1",3,0), ("no_context","perm2",3,0)])
+        self.assertTrue(result["original_no_context_reused"])
+        self.assertEqual(result["diagnostic_decision"], "bad_ground_semantic_leakage")
+        self.assertFalse(result["authoritative_grounding_decision_changed"])
+        self.assertFalse(result["full_context_ran"])
+
+    def test_fixed_letter_is_position_bias(self):
+        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
+        orchestrator = object.__new__(CanaryOrchestrator)
+        orchestrator.run_root = Path(temporary.name)
+        def fake_rollouts(candidate, mode, order_id, requested, options, slot_start=0):
+            gold = next(letter for letter, value in options.items() if value == "correct")
+            reward = 1 if gold == "A" else 0
+            return {"requested_valid_rollouts":3, "obtained_valid_rollouts":3,
+                "verified_rewards":[reward] * 3, "raw_generations":3,
+                "parse_invalid_generations":0, "retry_generations":0,
+                "exhausted_target_slots":0,
+                "rollouts":[{"parsed_letter":"A", "local_reward":reward} for _ in range(3)]}
+        orchestrator._rollouts = fake_rollouts
+        result = orchestrator.diagnose_no_context_permutations(self.qa(), self.original())
+        self.assertEqual(result["diagnostic_decision"], "bad_ground_position_bias")
+
+    def test_incomplete_permutation_is_inconclusive(self):
+        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
+        orchestrator = object.__new__(CanaryOrchestrator)
+        orchestrator.run_root = Path(temporary.name)
+        def fake_rollouts(candidate, mode, order_id, requested, options, slot_start=0):
+            return {"requested_valid_rollouts":3, "obtained_valid_rollouts":2,
+                "verified_rewards":[1,1], "raw_generations":4,
+                "parse_invalid_generations":2, "retry_generations":1,
+                "exhausted_target_slots":1,
+                "rollouts":[{"parsed_letter":"B", "local_reward":1} for _ in range(2)]}
+        orchestrator._rollouts = fake_rollouts
+        result = orchestrator.diagnose_no_context_permutations(self.qa(), self.original())
+        self.assertEqual(result["diagnostic_decision"],
+                         "bad_ground_permutation_inconclusive")
+
+
+class QuestionerFormatRetryTests(unittest.TestCase):
+    class Backend:
+        model_identifier = "format-retry-fixture"
+        def __init__(self, responses):
+            self.responses = iter(responses); self.requests = []
+        def generate_batch(self, request):
+            self.requests.append(request)
+            return BackendResponse(next(self.responses), self.model_identifier,
+                                   {"finish_reason":"stop"})
+
+    def run_smoke(self, responses):
+        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        atomic_json(root / "config/run_manifest.json", {"run_id":"retry-test"})
+        backend = self.Backend(responses)
+        orchestrator = CanaryOrchestrator(run_root=root, manifest={"run_id":"retry-test"},
+            config={"max_questioner_generations":2, "max_total_paid_api_generations":2,
+                    "allow_local_difficulty_downgrade":False}, data={}, tokenizer=None,
+            realizer=None, questioner=backend, solver=None, backend_mode="mock")
+        dialogue = [{"turn_id":"T1","session_id":"S1","speaker":"A","text":"fact"}]
+        result = orchestrator.question_smoke(dialogue, ("T1",), ("S1",), ("A","B","C"),
+            rendered_prompt="semantic prompt", prompt_protocol="feedback-v1",
+            max_format_retries=1, solver_feedback_sha256="feedback-sha")
+        return result, backend, orchestrator
+
+    def test_json_invalid_gets_one_full_batch_format_retry(self):
+        result, backend, orchestrator = self.run_smoke(["MALFORMED_SECRET", "[]"])
+        self.assertEqual(len(backend.requests), 2)
+        self.assertEqual(result["physical_questioner_calls"], 2)
+        self.assertEqual(result["attempts"][0]["decision"], "retry_format_only")
+        self.assertEqual(result["attempts"][1]["parse_status"], "json_parsed")
+        self.assertNotIn("MALFORMED_SECRET", backend.requests[1].prompt)
+        first = orchestrator.ledger.read("questioner-b00-a00")
+        second = orchestrator.ledger.read("questioner-b00-a01")
+        self.assertEqual(first["final_decision"], "retry_format_only")
+        self.assertEqual(second["request_metadata"]["retry_of_request_id"],
+                         "questioner-b00-a00")
+        self.assertEqual(second["request_metadata"]["retry_reason"], "json_invalid")
+
+    def test_second_json_invalid_is_exhausted_without_third_call(self):
+        result, backend, _ = self.run_smoke(["{", "["])
+        self.assertEqual(len(backend.requests), 2)
+        self.assertEqual(result["batch_decision"], "questioner_json_invalid_exhausted")
+        self.assertEqual(result["attempts"][-1]["decision"],
+                         "questioner_json_invalid_exhausted")
+
+    def test_parseable_wrong_batch_count_does_not_retry(self):
+        result, backend, _ = self.run_smoke(["[]"])
+        self.assertEqual(len(backend.requests), 1)
+        self.assertEqual(result["parse_status"], "json_parsed")
+        self.assertEqual(result["batch_decision"], "questioner_batch_count_invalid")
 
 
 if __name__ == "__main__": unittest.main()

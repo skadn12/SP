@@ -14,6 +14,7 @@ BOXED_ANSWER_PATTERN = re.compile(r"^\s*<box>\s*([ABCD])\s*</box>\s*$")
 BOXED_PARSER_VERSION = "boxed_letter_v1"
 LEGACY_PARSER_MODE = "legacy_audit_only"
 BOXED_PARSER_MODE = BOXED_PARSER_VERSION
+NO_CONTEXT_PERMUTATION_DIAGNOSTIC_VERSION = "no_context_permutation_diagnostic_v1"
 
 
 def canonical_json(value: Any) -> str:
@@ -182,6 +183,44 @@ def option_audit(orders: list[dict[str, Any]]) -> dict[str, Any]:
     return {"decision": "bad_option_bias" if severe else
             "option_order_sensitive" if threshold(spread, .4) else "pass",
             "correct_rates": rates, "accuracy_range": spread}
+
+
+def classify_no_context_permutation_bias(orders: list[dict[str, Any]]) -> dict[str, Any]:
+    """Diagnose why a no-context bad-ground item remains answerable after reordering."""
+    if len(orders) != 3 or {row.get("order_id") for row in orders} != {
+            "original", "perm1", "perm2"}:
+        return {"decision":"bad_ground_permutation_inconclusive",
+                "diagnostic_version":NO_CONTEXT_PERMUTATION_DIAGNOSTIC_VERSION}
+    summaries = []
+    all_letters: list[str] = []
+    all_rewards: list[int] = []
+    for row in orders:
+        letters = row.get("valid_answer_letters")
+        rewards = row.get("valid_rewards")
+        gold = row.get("gold_letter")
+        if (not isinstance(letters, list) or not isinstance(rewards, list) or
+                len(letters) != 3 or len(rewards) != 3 or
+                any(letter not in "ABCD" for letter in letters) or
+                any(value not in (0, 1) for value in rewards) or gold not in "ABCD"):
+            return {"decision":"bad_ground_permutation_inconclusive",
+                    "diagnostic_version":NO_CONTEXT_PERMUTATION_DIAGNOSTIC_VERSION}
+        all_letters.extend(letters)
+        all_rewards.extend(rewards)
+        summaries.append({"order_id":row["order_id"], "gold_letter":gold,
+            "valid_answer_letters":letters, "valid_rewards":rewards,
+            "semantic_correct_rate":sum(rewards) / 3})
+    gold_letters = {row["gold_letter"] for row in summaries}
+    semantic_leakage = all(value == 1 for value in all_rewards) and len(gold_letters) == 3
+    position_bias = len(set(all_letters)) == 1 and len(gold_letters) == 3
+    decision = ("bad_ground_semantic_leakage" if semantic_leakage else
+                "bad_ground_position_bias" if position_bias else
+                "bad_ground_mixed_bias")
+    return {"decision":decision,
+        "diagnostic_version":NO_CONTEXT_PERMUTATION_DIAGNOSTIC_VERSION,
+        "orders":summaries, "overall_semantic_correct_rate":sum(all_rewards) / 9,
+        "answer_letter_counts":{letter:all_letters.count(letter) for letter in "ABCD"},
+        "correct_semantic_followed_across_all_orders":semantic_leakage,
+        "single_letter_selected_across_all_orders":position_bias}
 
 
 def context_preflight(prompt_tokens: int, context_tokens: int, qa_tokens: int,

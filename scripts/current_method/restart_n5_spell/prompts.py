@@ -20,7 +20,20 @@ from .questioner_contract import (
 
 REALIZER_PROMPT_VERSION = "rolling_dialogue_realizer_v4_local_entity_ledger"
 QUESTIONER_PROMPT_VERSION = "spell_dialogue_mcq_3x_v7_span_contract_local_derivation"
+QUESTIONER_FEEDBACK_PROMPT_VERSION = "spell_dialogue_mcq_3x_v7_span_ids_solver_feedback_v1"
+QUESTIONER_SPAN_IDS_ONLY_PROMPT_VERSION = "spell_dialogue_mcq_3x_v8_span_ids_only_solver_feedback_v1"
+QUESTIONER_SPAN_IDS_ONLY_SCHEMA_VERSION = "questioner_span_ids_only_v1"
+QUESTIONER_FORMAT_RETRY_VERSION = "questioner_format_only_retry_v1"
 RESPONDER_PROMPT_VERSION = "mcq_boxed_letter_v1"
+
+QUESTIONER_FORMAT_RETRY_SUFFIX = """Your previous response was not valid JSON.
+
+Regenerate the complete batch from scratch as exactly one valid JSON array containing exactly
+three objects that follow the required schema.
+
+Do not repair or continue the previous response. Do not include Markdown, explanations,
+comments, or text outside the JSON array. Ensure all arrays and objects are fully closed before
+returning."""
 
 REALIZER_SYSTEM_INSTRUCTION = """You are the Realizer in a rolling dialogue-expansion pipeline.
 Realize exactly one continuous session from the supplied plan and continuity state. Treat the
@@ -76,6 +89,22 @@ QUESTIONER_GENERATED_ITEM_SCHEMA: dict[str, Any] = {
 
 # Backward-compatible exported name: this is now the model-facing, unlabeled schema.
 QUESTIONER_ITEM_SCHEMA = QUESTIONER_GENERATED_ITEM_SCHEMA
+
+QUESTIONER_SPAN_IDS_ONLY_ITEM_JSON_SCHEMA: dict[str, Any] = {
+    "type":"object", "additionalProperties":False,
+    "required":["qa_id", "question", "correct_answer_text", "distractors",
+                "answer_support_span_ids"],
+    "properties":{
+        "qa_id":{"type":"string", "minLength":1},
+        "question":{"type":"string", "minLength":1},
+        "correct_answer_text":{"type":"string", "minLength":1},
+        "distractors":{"type":"array", "minItems":3, "maxItems":3,
+                       "items":{"type":"string", "minLength":1}},
+        "answer_support_span_ids":{"type":"array", "minItems":1,
+                                   "items":{"type":"string", "minLength":1}},
+        "reasoning_steps":{"type":"array", "items":{"type":"string"}},
+    },
+}
 
 
 def _json(value: Any) -> str:
@@ -247,6 +276,118 @@ def build_questioner_prompt(
         "REQUIRED ITEM SCHEMA\n" + _json(QUESTIONER_ITEM_SCHEMA),
         "MINIMAL THREE-ITEM SHAPE (illustrative values only; do not copy facts)\n" + _json(minimal),
     ])
+
+
+def build_questioner_feedback_prompt(
+    *, frozen_dialogue: Sequence[Mapping[str, Any]], valid_turn_ids: Sequence[str],
+    valid_session_ids: Sequence[str], assigned_gold_letters: Sequence[str],
+    recent_frontier_history: Sequence[Mapping[str, Any]],
+    solver_feedback: Sequence[Mapping[str, Any]], batch_index: int = 0,
+    span_catalog: Mapping[str, Any] | None = None,
+    reasoning_contracts: Sequence[Mapping[str, Any]] | None = None,
+) -> str:
+    """Layer deterministic Solver feedback over the frozen v7 span-ID protocol."""
+    allowed_feedback_fields = (
+        "qa_id", "final_decision", "no_context_rewards", "full_context_rewards",
+        "diagnosis",
+    )
+    feedback = [{key:item.get(key) for key in allowed_feedback_fields if key in item}
+                for item in solver_feedback]
+    if not feedback:
+        raise ValueError("solver_feedback must contain at least one completed QA result")
+    base = build_questioner_prompt(frozen_dialogue=frozen_dialogue,
+        valid_turn_ids=valid_turn_ids, valid_session_ids=valid_session_ids,
+        assigned_gold_letters=assigned_gold_letters,
+        recent_frontier_history=recent_frontier_history, batch_index=batch_index,
+        span_catalog=span_catalog, reasoning_contracts=reasoning_contracts)
+    guidance = [
+        "This feedback is a quality signal only, not a factual source. Facts and candidate values must still come exclusively from the supplied span catalog.",
+        "For this feedback round, choose the evidence bundle and reasoning path autonomously. The earlier per-position numerical reasoning contracts are advisory profiles, not local admission gates.",
+        "Do not optimize for evidence-count quotas, distinct-session quotas, or difficulty labels. Optimize for a question whose answer requires actual dialogue comprehension.",
+        "Avoid questions whose correct option is guessable without dialogue because of common knowledge, wording asymmetry, answer length, or implausible distractors.",
+        "Avoid direct one-sentence lookup questions that become deterministic as soon as one matching phrase is visible.",
+        "Prefer questions that combine state changes, temporal order, causal dependencies, commitments, or differences between what people know, while remaining answerable from selected real spans.",
+        "The desired Solver profile is mostly wrong without context and mixed correct/incorrect with the full dialogue; do not mention this evaluation protocol in any question.",
+        "Do not copy, repair, or paraphrase prior rejected questions. Produce three new questions with independent subjects and reasoning paths.",
+    ]
+    return "\n\n".join([base,
+        f"FEEDBACK_LAYER_VERSION: {QUESTIONER_FEEDBACK_PROMPT_VERSION}",
+        "SOLVER-DERIVED QUALITY FEEDBACK\n" + _json(feedback),
+        "FEEDBACK-ROUND GUIDANCE\n- " + "\n- ".join(guidance)])
+
+
+def feedback_questioner_template_hash() -> str:
+    material = (QUESTIONER_FEEDBACK_PROMPT_VERSION +
+                inspect.getsource(build_questioner_prompt) +
+                inspect.getsource(build_questioner_feedback_prompt) +
+                _json(QUESTIONER_ITEM_SCHEMA))
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def build_questioner_span_ids_only_feedback_prompt(
+    *, frozen_dialogue: Sequence[Mapping[str, Any]], valid_turn_ids: Sequence[str],
+    valid_session_ids: Sequence[str], assigned_gold_letters: Sequence[str],
+    solver_feedback: Sequence[Mapping[str, Any]], batch_index: int = 0,
+    span_catalog: Mapping[str, Any] | None = None,
+) -> str:
+    """Build the narrowed v8 protocol: Challenger selects spans but never extracts values."""
+    letters = [str(value).upper() for value in assigned_gold_letters]
+    if len(letters) != 3 or any(value not in "ABCD" for value in letters):
+        raise ValueError("assigned_gold_letters must contain exactly three A/B/C/D letters")
+    if len(valid_turn_ids) != len(set(valid_turn_ids)) or not frozen_dialogue:
+        raise ValueError("frozen dialogue and unique turn IDs are required")
+    catalog = dict(span_catalog or build_span_catalog(list(frozen_dialogue)))
+    catalog_index = span_catalog_index(catalog)
+    if set(valid_turn_ids) != {span["turn_id"] for span in catalog_index.values()} or not {
+            span["session_id"] for span in catalog_index.values()} <= set(valid_session_ids):
+        raise ValueError("span catalog does not match the frozen dialogue whitelist")
+    feedback_fields = ("qa_id", "final_decision", "no_context_rewards",
+                       "full_context_rewards", "diagnosis")
+    feedback = [{key:item.get(key) for key in feedback_fields if key in item}
+                for item in solver_feedback]
+    if not feedback:
+        raise ValueError("solver_feedback must not be empty")
+    batch_schema = {"type":"array", "minItems":3, "maxItems":3,
+                    "items":QUESTIONER_SPAN_IDS_ONLY_ITEM_JSON_SCHEMA}
+    payload = {"batch_index":batch_index,
+        "schema_version":QUESTIONER_SPAN_IDS_ONLY_SCHEMA_VERSION,
+        "span_catalog":model_span_catalog_view(catalog),
+        "solver_feedback_for_quality_only":feedback}
+    rules = [
+        "Return exactly one valid JSON array containing exactly three new question objects.",
+        "The span catalog is the sole factual source. Solver feedback is a quality signal only and is not a factual source.",
+        "Choose answer_support_span_ids directly from the provided span catalog. Every selected ID must exist exactly as written.",
+        "Do not quote, paraphrase, summarize, or extract evidence values.",
+        "Do not output answer_evidence_values. Do not output distractor_support. Do not output supporting quotes.",
+        "Do not output correct_answer_explanation or distractor_explanations.",
+        "The selected span IDs identify the evidence; the local system will retrieve the exact frozen text.",
+        "Generate one correct_answer_text and exactly three distinct, plausible, same-type unlabeled distractors.",
+        "Do not output options, answer letters, references, difficulty, reasoning type, turn IDs, session IDs, or any field not listed in the JSON schema.",
+        "reasoning_steps is optional. If included, it must describe the reasoning without quoting evidence or exposing span IDs.",
+        "There is no required count of spans, sessions, reasoning steps, or reasoning types beyond the non-empty answer_support_span_ids list.",
+        "Avoid questions guessable without dialogue through common knowledge, wording asymmetry, or implausible distractors.",
+        "Avoid direct one-sentence lookup. Prefer state changes, temporal order, causal dependencies, commitments, or differences between what people know.",
+        "Do not copy or repair earlier rejected questions. Produce three independent questions.",
+        "Return JSON only: no Markdown, comments, code fences, or surrounding text.",
+    ]
+    return "\n\n".join([QUESTIONER_SYSTEM_INSTRUCTION,
+        f"PROMPT_VERSION: {QUESTIONER_SPAN_IDS_ONLY_PROMPT_VERSION}",
+        "SPAN-IDS-ONLY RULES\n- " + "\n- ".join(rules),
+        "DYNAMIC INPUT\n" + _json(payload),
+        "BATCH JSON SCHEMA\n" + _json(batch_schema)])
+
+
+def span_ids_only_questioner_template_hash() -> str:
+    material = (QUESTIONER_SPAN_IDS_ONLY_PROMPT_VERSION +
+                QUESTIONER_SPAN_IDS_ONLY_SCHEMA_VERSION +
+                inspect.getsource(build_questioner_span_ids_only_feedback_prompt) +
+                _json(QUESTIONER_SPAN_IDS_ONLY_ITEM_JSON_SCHEMA))
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def questioner_format_retry_suffix_hash() -> str:
+    return hashlib.sha256((QUESTIONER_FORMAT_RETRY_VERSION +
+                           QUESTIONER_FORMAT_RETRY_SUFFIX).encode("utf-8")).hexdigest()
 
 
 def prompt_template_hashes() -> dict[str, str]:

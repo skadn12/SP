@@ -9,18 +9,38 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import PARSER_VERSION
-from .core import (atomic_json, atomic_text, canonical_json, classify_frontier_pre_audit, full_context_gate,
+from .core import (NO_CONTEXT_PERMUTATION_DIAGNOSTIC_VERSION, atomic_json, atomic_text,
+                   canonical_json, classify_frontier_pre_audit, full_context_gate,
                    context_preflight, grounding_decision,
                    sha256_file, sha256_bytes)
 from .input_adapter import load_lineage, read_json, verify_source_run_sessions
-from .prompts import (QUESTIONER_PROMPT_VERSION, SOLVER_NOTHINK_RESPONDER_PROMPT, build_questioner_prompt,
-                      prompt_template_hashes)
+from .prompts import (QUESTIONER_FEEDBACK_PROMPT_VERSION,
+                      QUESTIONER_FORMAT_RETRY_VERSION, QUESTIONER_PROMPT_VERSION,
+                      QUESTIONER_SPAN_IDS_ONLY_PROMPT_VERSION,
+                      QUESTIONER_SPAN_IDS_ONLY_SCHEMA_VERSION,
+                      SOLVER_NOTHINK_RESPONDER_PROMPT, build_questioner_feedback_prompt,
+                      build_questioner_prompt,
+                      build_questioner_span_ids_only_feedback_prompt,
+                      feedback_questioner_template_hash, prompt_template_hashes,
+                      questioner_format_retry_suffix_hash,
+                      span_ids_only_questioner_template_hash)
 from .validation import (audit_continuity_hooks, materialize_questioner_item,
-                         validate_config, validate_qa)
+                         validate_config, validate_dual_admission_batch, validate_qa)
 from .questioner_contract import (
     QUESTIONER_SCHEMA_VERSION, REASONING_CONTRACT_VERSION, SPAN_CATALOG_VERSION,
     build_span_catalog, default_reasoning_contracts, reasoning_contract_sha256,
     span_catalog_sha256,
+)
+from .minimal_admission import (
+    LEGACY_OPTIONAL_SCHEMA_PROFILE, MINIMAL_MATERIALIZER_VERSION,
+    MINIMAL_NORMALIZATION_VERSION, SPAN_IDS_ONLY_SCHEMA_PROFILE,
+    SPELL_STYLE_MINIMAL_MODE, STRICT_ADMISSION_MODE, build_answer_evidence_contexts,
+    materialize_spell_style_minimal,
+)
+from .minimal_replay import (
+    MINIMAL_REPLAY_VERSION, render_minimal_replay_markdown,
+    verify_bad_ground_permutation_source, verify_minimal_replay_source, verify_questioner_replay_source,
+    verify_solver_feedback_source,
 )
 
 DEFAULTS = {
@@ -155,6 +175,17 @@ def write_post_run_provenance(run_root: Path, project: Path, manifest: dict[str,
             manifest.get("questioner_contract_source_sha256"),
         "source_snapshot_manifest_sha_match":sha256_file(Path(str(manifest["source_snapshot_manifest_path"]))) ==
             manifest.get("source_snapshot_manifest_sha256")}
+    if manifest.get("admission_mode") == SPELL_STYLE_MINIMAL_MODE:
+        checks.update({
+            "minimal_validator_sha_match":sha256_file(Path(__file__).with_name(
+                "minimal_admission.py")) == manifest.get("minimal_validator_source_sha256"),
+            "normalization_source_sha_match":sha256_file(Path(__file__).with_name(
+                "minimal_admission.py")) == manifest.get("normalization_function_source_sha256"),
+            "minimal_replay_source_sha_match":sha256_file(Path(__file__).with_name(
+                "minimal_replay.py")) == manifest.get("minimal_replay_source_sha256")})
+    if manifest.get("vllm_backend_source_sha256"):
+        checks["vllm_backend_sha_match"] = (sha256_file(Path(__file__).with_name(
+            "vllm_backends.py")) == manifest.get("vllm_backend_source_sha256"))
     report = {"run_id":manifest.get("run_id"),
               "run_manifest_sha256":sha256_file(run_root / "config/run_manifest.json"),
               **checks, "authoritative_release_provenance":all(checks.values()),
@@ -215,6 +246,40 @@ def select_solver_qa(raw_batch: list[dict], smoke_report: dict, qa_id: str, *,
     return generated[0], dict(materialized), admission
 
 
+def select_minimal_solver_qa(raw_batch: list[dict], admission_item: dict, qa_id: str, *,
+                             materialized_qa: dict, span_catalog: dict,
+                             reasoning_contracts: list[dict]) -> tuple[dict, dict, dict]:
+    """Materialized-only selector for SPELL-style minimal admission."""
+    minimal = admission_item.get(SPELL_STYLE_MINIMAL_MODE) or {}
+    if (admission_item.get("qa_id") != qa_id or minimal.get("decision") != "accept" or
+            admission_item.get("solver_eligible") is not True):
+        raise RuntimeError("solver_qa_not_admitted")
+    if not isinstance(materialized_qa, dict):
+        raise RuntimeError("solver_qa_not_materialized")
+    generated = [item for item in raw_batch if isinstance(item, dict) and item.get("qa_id") == qa_id]
+    item_index = admission_item.get("item_index")
+    if (len(generated) != 1 or not isinstance(item_index, int) or item_index not in (0, 1, 2) or
+            item_index >= len(reasoning_contracts) or materialized_qa.get("qa_id") != qa_id):
+        raise RuntimeError("solver_qa_integrity_mismatch")
+    strict_reasons = list((admission_item.get("strict_v7") or {}).get("reasons") or [])
+    rematerialized, errors, _ = materialize_spell_style_minimal(generated[0],
+        admission_item.get("target_letter"), span_catalog=span_catalog,
+        strict_v7_reasons=strict_reasons, reasoning_contract=reasoning_contracts[item_index],
+        schema_profile=str(materialized_qa.get("minimal_schema_profile") or
+                           LEGACY_OPTIONAL_SCHEMA_PROFILE))
+    if errors or rematerialized is None or canonical_json(rematerialized) != canonical_json(materialized_qa):
+        raise RuntimeError(f"solver_qa_integrity_mismatch: {errors}")
+    options = materialized_qa.get("options") or {}
+    letter = materialized_qa.get("reference_answer_letter")
+    if (materialized_qa.get("admission_mode") != SPELL_STYLE_MINIMAL_MODE or
+            not materialized_qa.get("local_option_binding") or
+            not isinstance(letter, str) or letter not in "ABCD" or
+            options.get(letter) != materialized_qa.get("reference_answer_text") or
+            materialized_qa.get("canonical_answer_text") != materialized_qa.get("reference_answer_text")):
+        raise RuntimeError("solver_qa_integrity_mismatch")
+    return generated[0], dict(materialized_qa), admission_item
+
+
 def build_input_dry_run_audit(*, parent_turns: int, parent_tokens: int, lineage: str,
                               reserved_generation_tokens: int,
                               checkpoint_max_model_len: int, effective_max_model_len: int,
@@ -248,8 +313,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--backend-mode", choices=("audit", "mock", "live", "local"), default="audit")
     parser.add_argument("--smoke-stage", choices=("realizer", "realizer_continuity", "questioner",
+                                                   "questioner_feedback",
+                                                   "questioner_span_ids_feedback",
                                                    "solver_no_context", "solver_grounding_extension",
-                                                   "solver_adaptive_item", "solver_boxed_output"))
+                                                   "solver_adaptive_item", "solver_boxed_output",
+                                                   "questioner_minimal_replay",
+                                                   "solver_minimal_full_audit",
+                                                   "solver_no_context_permutation_diagnostic"))
+    parser.add_argument("--admission-mode", choices=(STRICT_ADMISSION_MODE,
+                                                       SPELL_STYLE_MINIMAL_MODE),
+                        default=STRICT_ADMISSION_MODE)
     parser.add_argument("--api-config", type=Path,
                         default=Path("/root/autodl-tmp/gxy-selfplay/config.json"))
     parser.add_argument("--mock-crash-before-session", type=int)
@@ -262,11 +335,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--solver-prior-root", type=Path, default=Path(
         "/root/autodl-tmp/gxy-selfplay/restart-n5-runs/conv-41_spell_solver_smoke_s1_v2_nothink"))
     parser.add_argument("--solver-qa-id", default="batch0_item1")
+    parser.add_argument("--bad-ground-feedback-root", type=Path, default=Path(
+        "/root/autodl-tmp/gxy-selfplay/restart-n5-runs/conv-41_spell_v7_minimal_solver_batch0_item1_v1"))
+    parser.add_argument("--reject-easy-feedback-root", type=Path, default=Path(
+        "/root/autodl-tmp/gxy-selfplay/restart-n5-runs/conv-41_spell_v7_minimal_solver_batch0_item2_v1"))
     args = parser.parse_args(argv)
-    if args.backend_mode == "live" and args.smoke_stage not in ("realizer", "realizer_continuity", "questioner"):
+    if args.backend_mode == "live" and args.smoke_stage not in (
+            "realizer", "realizer_continuity", "questioner", "questioner_feedback",
+            "questioner_span_ids_feedback"):
         raise RuntimeError("live execution requires an explicit supported smoke stage")
-    if args.backend_mode == "local" and args.smoke_stage not in ("solver_no_context", "solver_grounding_extension", "solver_adaptive_item", "solver_boxed_output"):
+    if args.backend_mode == "local" and args.smoke_stage not in ("solver_no_context", "solver_grounding_extension", "solver_adaptive_item", "solver_boxed_output", "solver_minimal_full_audit", "solver_no_context_permutation_diagnostic"):
         raise RuntimeError("local execution requires an explicit supported solver smoke")
+    if args.smoke_stage in ("questioner_minimal_replay", "solver_minimal_full_audit",
+                            "solver_no_context_permutation_diagnostic") and \
+            args.admission_mode != SPELL_STYLE_MINIMAL_MODE:
+        raise RuntimeError("minimal replay/Solver requires spell_style_minimal_v1")
+    if args.smoke_stage == "questioner_minimal_replay" and args.backend_mode != "audit":
+        raise RuntimeError("minimal replay is offline audit-only")
     validate_config(DEFAULTS)
     initialize_run(args.run_root, args.resume)
     project = Path(__file__).resolve().parents[3]
@@ -292,47 +377,68 @@ def main(argv: list[str] | None = None) -> int:
         for turn in data["parent"]["dialogue"]["turns"]
     )
     parent_tokens = len(length_tokenizer.encode(parent_text, add_special_tokens=False))
-    mode = ("live_questioner_smoke" if args.backend_mode == "live" and args.smoke_stage == "questioner"
+    mode = ("live_questioner_span_ids_feedback_smoke" if args.backend_mode == "live" and args.smoke_stage == "questioner_span_ids_feedback"
+            else "live_questioner_feedback_smoke" if args.backend_mode == "live" and args.smoke_stage == "questioner_feedback"
+            else "live_questioner_smoke" if args.backend_mode == "live" and args.smoke_stage == "questioner"
             else "live_smoke_realizer_continuity" if args.backend_mode == "live" and args.smoke_stage == "realizer_continuity"
             else "live_smoke_realizer" if args.backend_mode == "live"
             else "local_solver_adaptive_item_smoke" if args.backend_mode == "local" and args.smoke_stage == "solver_adaptive_item"
+            else "local_solver_minimal_full_audit" if args.backend_mode == "local" and args.smoke_stage == "solver_minimal_full_audit"
+            else "local_solver_no_context_permutation_diagnostic" if args.backend_mode == "local" and args.smoke_stage == "solver_no_context_permutation_diagnostic"
             else "local_solver_boxed_output_smoke" if args.backend_mode == "local" and args.smoke_stage == "solver_boxed_output"
             else "local_solver_grounding_extension_smoke" if args.backend_mode == "local" and args.smoke_stage == "solver_grounding_extension"
             else "local_solver_no_context_smoke" if args.backend_mode == "local"
-            else "mock_e2e" if args.backend_mode == "mock" else "dry_run")
+            else "mock_e2e" if args.backend_mode == "mock"
+            else "spell_style_minimal_replay" if args.smoke_stage == "questioner_minimal_replay"
+            else "dry_run")
     resolved = {**DEFAULTS, "mode": mode,
                 "backend_mode": args.backend_mode, "lineage": args.lineage,
-                "input_root": str(args.input_root.resolve()), "run_root": str(args.run_root.resolve())}
+                "input_root": str(args.input_root.resolve()), "run_root": str(args.run_root.resolve()),
+                "admission_mode":args.admission_mode}
     if args.backend_mode == "mock":
         resolved["mock_questioner_shortfall_batch"] = args.mock_questioner_shortfall_batch
         resolved["mock_questioner_all_invalid"] = args.mock_questioner_all_invalid
     if args.backend_mode == "live":
         continuity = args.smoke_stage == "realizer_continuity"
-        questioner_smoke = args.smoke_stage == "questioner"
-        paid_limit = 2 if continuity else 1
+        feedback_smoke = args.smoke_stage in ("questioner_feedback",
+                                              "questioner_span_ids_feedback")
+        questioner_smoke = args.smoke_stage == "questioner" or feedback_smoke
+        paid_limit = 2 if continuity or feedback_smoke else 1
         resolved.update({"smoke_stage":args.smoke_stage, "smoke_max_paid_generations":paid_limit,
             "smoke_max_realizer_generations":0 if questioner_smoke else paid_limit,
             "max_session_attempts_per_session":1, "max_total_paid_api_generations":paid_limit,
             "max_realizer_generations":0 if questioner_smoke else paid_limit,
-            "max_questioner_generations":1 if questioner_smoke else 0,
-            "questioner_generations":1 if questioner_smoke else 0,
+            "max_questioner_generations":paid_limit if questioner_smoke else 0,
+            "questioner_generations":paid_limit if questioner_smoke else 0,
             "questioner_mcqs_per_generation":3, "questioner_total_candidates":3 if questioner_smoke else 0,
             "max_post_freeze_memory_generations":0,
             "challenger_temperature":live_config.temperature,
             "challenger_realizer_max_tokens":live_config.realizer_max_tokens,
             "challenger_questioner_max_tokens":live_config.questioner_max_tokens})
+        if feedback_smoke:
+            resolved.update({"max_questioner_format_retries":1,
+                "questioner_physical_request_limit":2,
+                "questioner_retry_trigger":"json_invalid_and_raw_object_count_zero"})
     if args.backend_mode == "local":
         extension = args.smoke_stage == "solver_grounding_extension"
         adaptive = args.smoke_stage == "solver_adaptive_item"
+        minimal_audit = args.smoke_stage == "solver_minimal_full_audit"
+        permutation_diagnostic = args.smoke_stage == "solver_no_context_permutation_diagnostic"
         resolved.update({"smoke_stage":args.smoke_stage, "max_total_paid_api_generations":0,
             "max_realizer_generations":0, "max_questioner_generations":0,
             "max_post_freeze_memory_generations":0, "max_verifier_generations":0,
-            "max_session_attempts_per_session":1, "max_local_solver_generations":20 if adaptive else 4 if extension else 6,
+            "max_session_attempts_per_session":1,
+            "max_local_solver_generations":12 if permutation_diagnostic else 52 if minimal_audit else 20 if adaptive else 4 if extension else 6,
             "solver_requested_valid_k":2 if extension else 3, "solver_slot_start":3 if extension else 0,
             "solver_temperature":0.7, "solver_top_p":0.9,
             "solver_max_new_tokens":32, "solver_enable_thinking":False,
             "solver_add_generation_prompt":True, "solver_effective_max_model_len":16384,
             "solver_tokenizer_path":str(tokenizer), "solver_gpu_memory_utilization":0.80})
+    if args.smoke_stage == "questioner_minimal_replay":
+        resolved.update({"max_total_paid_api_generations":0, "max_realizer_generations":0,
+            "max_questioner_generations":0, "max_post_freeze_memory_generations":0,
+            "max_verifier_generations":0, "maximum_source_qa_items":3,
+            "maximum_solver_qa_items":3})
     validate_config(resolved)
     config_dir = args.run_root / "config"
     config_path = config_dir / "resolved_canary_config.json"
@@ -348,7 +454,85 @@ def main(argv: list[str] | None = None) -> int:
     prompt_hashes = prompt_template_hashes()
     questioner_artifacts: dict[str, object] = {}
     solver_artifacts: dict[str, object] = {}
-    if args.backend_mode == "live" and args.smoke_stage == "questioner":
+    minimal_replay_artifacts: dict[str, object] = {}
+    if args.smoke_stage == "questioner_minimal_replay":
+        source = args.questioner_source_root.resolve()
+        attestation = verify_questioner_replay_source(source)
+        source_paths = {key:Path(value) for key,value in attestation["paths"].items()}
+        copied_paths = {
+            "raw":args.run_root / "frozen/source_questioner_raw.txt",
+            "context":args.run_root / "frozen/questioner_smoke_context.json",
+            "span_catalog":args.run_root / "frozen/questioner_span_catalog.json",
+            "reasoning_contracts":args.run_root / "frozen/questioner_reasoning_contracts.json",
+        }
+        for key, destination in copied_paths.items():
+            freeze_bytes(destination, source_paths[key].read_bytes(), args.resume)
+        raw_batch = attestation["raw_batch"]
+        context = attestation["context"]
+        catalog = attestation["span_catalog"]
+        contracts = attestation["reasoning_contracts"]
+        letters = list(attestation["target_gold_letters"])
+        dialogue = context["combined_dialogue"]
+        frozen_turns = {turn["turn_id"]:turn["text"] for turn in dialogue}
+        turn_sessions = {turn["turn_id"]:str(turn.get("session_id") or
+            turn["turn_id"].split(":", 1)[0]) for turn in dialogue}
+        minimal_schema_profile = str(attestation.get("source_questioner_output_profile") or
+                                     LEGACY_OPTIONAL_SCHEMA_PROFILE)
+        dual = validate_dual_admission_batch(raw_batch, letters, span_catalog=catalog,
+            reasoning_contracts=contracts, frozen_turns=frozen_turns,
+            turn_session_ids=turn_sessions,
+            minimal_schema_profile=minimal_schema_profile)
+        report = json.loads(canonical_json(dual))
+        for item in report["items"]:
+            minimal = item[SPELL_STYLE_MINIMAL_MODE]
+            materialized = minimal.pop("materialized_qa", None)
+            if minimal["decision"] == "accept" and isinstance(materialized, dict):
+                relative = Path("materialized") / f"item_{item['item_index']:02d}.json"
+                materialized_path = args.run_root / relative
+                freeze_json(materialized_path, materialized, args.resume)
+                item["materialized_qa_path"] = relative.as_posix()
+                item["materialized_qa_sha256"] = sha256_file(materialized_path)
+                item["materialized_qa_canonical_sha256"] = sha256_bytes(
+                    canonical_json(materialized).encode("utf-8"))
+            else:
+                item["materialized_qa_path"] = None
+                item["materialized_qa_sha256"] = None
+                item["materialized_qa_canonical_sha256"] = None
+            item["answer_span_ids"] = list((raw_batch[item["item_index"]] or {}).get(
+                "answer_support_span_ids") or [])
+            item["derived_turn_ids"] = list((materialized or {}).get("evidence_turn_ids") or [])
+            item["derived_session_ids"] = list((materialized or {}).get("evidence_session_ids") or [])
+            item["optional_evidence_value_validity"] = minimal["diagnostics"].get(
+                "answer_value_literal_checks", [])
+            item["optional_field_presence"] = minimal["diagnostics"].get(
+                "optional_field_status", {})
+        attestation_report = {key:value for key,value in attestation.items()
+            if key not in {"raw_batch", "context", "span_catalog", "reasoning_contracts", "paths"}}
+        report.update({"replay_version":MINIMAL_REPLAY_VERSION,
+            "admission_mode":SPELL_STYLE_MINIMAL_MODE,
+            "strict_admission_mode":STRICT_ADMISSION_MODE,
+            "source_attestation":attestation_report,
+            "source_raw_sha256":sha256_file(copied_paths["raw"]),
+            "frozen_dialogue_sha256":sha256_file(copied_paths["context"]),
+            "span_catalog_sha256":span_catalog_sha256(catalog),
+            "reasoning_contract_sha256":reasoning_contract_sha256(contracts),
+            "normalization_version":MINIMAL_NORMALIZATION_VERSION,
+            "minimal_materializer_version":MINIMAL_MATERIALIZER_VERSION,
+            "minimal_schema_profile":minimal_schema_profile,
+            "generation_performed":False, "paid_api_generations":0,
+            "live_questioner_generations":0, "live_realizer_generations":0,
+            "real_vllm_generations":0, "verifier_generations":0, "training_runs":0})
+        replay_report_path = args.run_root / "reports/spell_style_minimal_replay.json"
+        replay_markdown_path = args.run_root / "reports/spell_style_minimal_replay.md"
+        freeze_json(replay_report_path, report, args.resume)
+        freeze_text(replay_markdown_path, render_minimal_replay_markdown(report), args.resume)
+        freeze_json(args.run_root / "frozen/source_attestation.json", attestation_report, args.resume)
+        minimal_replay_artifacts = {"source":source, "attestation":attestation,
+            "report":report, "report_path":replay_report_path,
+            "markdown_path":replay_markdown_path, "copied_paths":copied_paths,
+            "catalog":catalog, "contracts":contracts, "context":context}
+    if args.backend_mode == "live" and args.smoke_stage in (
+            "questioner", "questioner_feedback", "questioner_span_ids_feedback"):
         source = args.questioner_source_root.resolve()
         source_integrity = verify_source_run_sessions(source, ["session_01.json", "session_02.json"])
         session_paths = [source / "accepted/session_01.json", source / "accepted/session_02.json"]
@@ -372,10 +556,41 @@ def main(argv: list[str] | None = None) -> int:
         reasoning_contracts_path = args.run_root / "frozen/questioner_reasoning_contracts.json"
         freeze_json(span_catalog_path, span_catalog, args.resume)
         freeze_json(reasoning_contracts_path, reasoning_contracts, args.resume)
-        rendered = build_questioner_prompt(frozen_dialogue=frozen["combined_dialogue"],
-            valid_turn_ids=valid_turn_ids, valid_session_ids=valid_session_ids,
-            assigned_gold_letters=letters, recent_frontier_history=[], batch_index=0,
-            span_catalog=span_catalog, reasoning_contracts=reasoning_contracts)
+        feedback_attestations: list[dict[str, object]] = []
+        feedback_path = None
+        if args.smoke_stage in ("questioner_feedback", "questioner_span_ids_feedback"):
+            feedback_attestations = [
+                verify_solver_feedback_source(args.bad_ground_feedback_root,
+                    expected_qa_id="batch0_item1", expected_decision="bad_ground"),
+                verify_solver_feedback_source(args.reject_easy_feedback_root,
+                    expected_qa_id="batch0_item2", expected_decision="reject_easy"),
+            ]
+            feedback_payload = {
+                "feedback_version":"solver_failure_feedback_v1",
+                "source_attestations":feedback_attestations,
+                "feedback":[item["feedback"] for item in feedback_attestations],
+                "factual_source":False,
+            }
+            feedback_path = args.run_root / "frozen/challenger_solver_feedback.json"
+            freeze_json(feedback_path, feedback_payload, args.resume)
+            if args.smoke_stage == "questioner_span_ids_feedback":
+                rendered = build_questioner_span_ids_only_feedback_prompt(
+                    frozen_dialogue=frozen["combined_dialogue"],
+                    valid_turn_ids=valid_turn_ids, valid_session_ids=valid_session_ids,
+                    assigned_gold_letters=letters, batch_index=0,
+                    span_catalog=span_catalog, solver_feedback=feedback_payload["feedback"])
+            else:
+                rendered = build_questioner_feedback_prompt(
+                    frozen_dialogue=frozen["combined_dialogue"],
+                    valid_turn_ids=valid_turn_ids, valid_session_ids=valid_session_ids,
+                    assigned_gold_letters=letters, recent_frontier_history=[], batch_index=0,
+                    span_catalog=span_catalog, reasoning_contracts=reasoning_contracts,
+                    solver_feedback=feedback_payload["feedback"])
+        else:
+            rendered = build_questioner_prompt(frozen_dialogue=frozen["combined_dialogue"],
+                valid_turn_ids=valid_turn_ids, valid_session_ids=valid_session_ids,
+                assigned_gold_letters=letters, recent_frontier_history=[], batch_index=0,
+                span_catalog=span_catalog, reasoning_contracts=reasoning_contracts)
         rendered_tokens = len(length_tokenizer.encode(rendered, add_special_tokens=False))
         prompt_preflight = {"rendered_prompt_tokens":rendered_tokens,
             "max_generation_tokens":resolved["challenger_questioner_max_tokens"],
@@ -393,13 +608,44 @@ def main(argv: list[str] | None = None) -> int:
             "source_integrity":source_integrity, "span_catalog":span_catalog,
             "span_catalog_path":span_catalog_path, "reasoning_contracts":reasoning_contracts,
             "reasoning_contracts_path":reasoning_contracts_path,
-            "prompt_preflight":prompt_preflight, "prompt_preflight_path":prompt_preflight_path}
+            "prompt_preflight":prompt_preflight, "prompt_preflight_path":prompt_preflight_path,
+            "feedback_attestations":feedback_attestations, "feedback_path":feedback_path}
     if args.backend_mode == "local":
         boxed_smoke = args.smoke_stage == "solver_boxed_output"
+        minimal_audit = args.smoke_stage == "solver_minimal_full_audit"
+        permutation_diagnostic = args.smoke_stage == "solver_no_context_permutation_diagnostic"
         source = args.solver_qa_source_root.resolve()
         raw_path = source / "raw/backend_responses/questioner-b00.txt"
         report_path = source / "reports/live_questioner_smoke.json"
-        if boxed_smoke:
+        minimal_source_integrity = None
+        permutation_source_integrity = None
+        if permutation_diagnostic:
+            permutation_source_integrity = verify_bad_ground_permutation_source(
+                source, args.solver_qa_id)
+            qa = dict(permutation_source_integrity["qa"])
+            original_qa = qa
+            frozen_source_qa = permutation_source_integrity["frozen_qa"]
+            generated_qa = frozen_source_qa.get("source_generated_qa")
+            accepted_item = frozen_source_qa.get("schema_acceptance")
+            if not isinstance(generated_qa, dict) or not isinstance(accepted_item, dict):
+                raise RuntimeError("bad_ground_permutation_source_integrity_failed")
+            local_span_catalog = permutation_source_integrity["span_catalog"]
+            local_reasoning_contracts = permutation_source_integrity["reasoning_contracts"]
+            raw_path = Path(permutation_source_integrity["source_qa_path"])
+            report_path = source / "reports/minimal_solver_full_audit.json"
+        elif minimal_audit:
+            minimal_source_integrity = verify_minimal_replay_source(source, args.solver_qa_id)
+            raw_batch = minimal_source_integrity["raw_batch"]
+            local_span_catalog = minimal_source_integrity["span_catalog"]
+            local_reasoning_contracts = minimal_source_integrity["reasoning_contracts"]
+            accepted_item = minimal_source_integrity["admission_item"]
+            generated_qa, qa, accepted_item = select_minimal_solver_qa(raw_batch, accepted_item,
+                args.solver_qa_id, materialized_qa=minimal_source_integrity["materialized_qa"],
+                span_catalog=local_span_catalog, reasoning_contracts=local_reasoning_contracts)
+            original_qa = qa
+            raw_path = source / "frozen/source_questioner_raw.txt"
+            report_path = source / "reports/spell_style_minimal_replay.json"
+        elif boxed_smoke:
             generated_qa = {"qa_id":"synthetic_boxed_protocol_01",
                 "question":"Which option exactly matches the target token 'blue' stated in this question?",
                 "correct_answer_text":"blue target token", "distractors":["red","green","gold"],
@@ -460,14 +706,123 @@ def main(argv: list[str] | None = None) -> int:
                               "original_qa_sha256":sha256_bytes(canonical_json(original_qa).encode()), "qa":qa,
                               "schema_acceptance":({"schema_decision":"synthetic_protocol_only",
                                   "materialized_qa":qa, "target_letter":"B"} if boxed_smoke else
+                                  accepted_item if minimal_audit or permutation_diagnostic else
                                   next(x for x in smoke_report["items"] if x["qa_id"] == args.solver_qa_id)),
                               "source_raw_sha256":sha256_file(raw_path),
                               "source_report_sha256":sha256_file(report_path)}
+        if minimal_audit:
+            frozen_qa_payload["minimal_source_attestation"] = {key:value for key,value in
+                minimal_source_integrity.items() if key not in {"raw_batch", "context",
+                    "span_catalog", "reasoning_contracts", "materialized_qa", "admission_item"}}
         freeze_json(qa_path, frozen_qa_payload, args.resume)
         solver_artifacts = {"source":source, "raw_path":raw_path, "report_path":report_path,
                             "qa":qa, "original_qa":original_qa, "qa_path":qa_path,
                             "span_catalog":local_span_catalog,
                             "reasoning_contracts":local_reasoning_contracts}
+        if minimal_audit:
+            frozen_context = minimal_source_integrity["context"]
+            context_source_path = source / "frozen/questioner_smoke_context.json"
+            catalog_source_path = source / "frozen/questioner_span_catalog.json"
+            contracts_source_path = source / "frozen/questioner_reasoning_contracts.json"
+            context_path = args.run_root / "frozen/questioner_smoke_context.json"
+            catalog_path = args.run_root / "frozen/questioner_span_catalog.json"
+            contracts_path = args.run_root / "frozen/questioner_reasoning_contracts.json"
+            freeze_bytes(context_path, context_source_path.read_bytes(), args.resume)
+            freeze_bytes(catalog_path, catalog_source_path.read_bytes(), args.resume)
+            freeze_bytes(contracts_path, contracts_source_path.read_bytes(), args.resume)
+            child_turns = [turn for session in frozen_context["accepted_child_sessions"]
+                           for turn in session["dialogue_turns"]]
+            expected_combined = data["parent"]["dialogue"]["turns"] + child_turns
+            if canonical_json(expected_combined) != canonical_json(frozen_context["combined_dialogue"]):
+                raise RuntimeError("minimal Solver context differs from frozen Questioner context")
+            freeze_json(args.run_root / "frozen_child_dialogue.json", {"turns":child_turns,
+                "source_context_sha256":sha256_file(context_source_path)}, args.resume)
+            evidence_contexts = build_answer_evidence_contexts(qa,
+                span_catalog=local_span_catalog, frozen_dialogue=expected_combined)
+            evidence_plan_path = args.run_root / "frozen/evidence_context_plan.json"
+            freeze_json(evidence_plan_path, {"answer_span_ids":qa["evidence_span_ids"],
+                "answer_turn_ids":evidence_contexts["answer_turn_ids"],
+                "evidence_only_turn_ids":[turn["turn_id"] for turn in evidence_contexts["evidence_only"]],
+                "evidence_masked_turn_ids":[turn["turn_id"] for turn in evidence_contexts["evidence_masked"]],
+                "context_builder_sha256":evidence_contexts["context_builder_sha256"],
+                "distractor_support_used":False}, args.resume)
+            context_modes = {"no_context":[], "full_context":expected_combined,
+                "evidence_only":evidence_contexts["evidence_only"],
+                "evidence_masked":evidence_contexts["evidence_masked"]}
+            prompt_meta = {}
+            for evaluation_mode, turns in context_modes.items():
+                rendered = render_solver_prompt(length_tokenizer, qa, turns)
+                tokens = len(length_tokenizer.encode(rendered, add_special_tokens=False))
+                prompt_meta[evaluation_mode] = {"rendered_prompt_sha256":sha256_bytes(rendered.encode()),
+                    "rendered_prompt_tokens":tokens,
+                    "reserved_generation_tokens":resolved["reserved_generation_tokens"],
+                    "solver_max_model_len":resolved["solver_effective_max_model_len"],
+                    "preflight_decision":"pass" if tokens + resolved["reserved_generation_tokens"] <=
+                        resolved["solver_effective_max_model_len"] else "reject_context_overflow"}
+            if any(value["preflight_decision"] != "pass" for value in prompt_meta.values()):
+                raise RuntimeError("minimal Solver context preflight failed")
+            prompt_meta_path = args.run_root / "frozen/rendered_prompt_preflight.json"
+            freeze_json(prompt_meta_path, prompt_meta, args.resume)
+            seed_schedule = {}
+            for evaluation_mode, order_ids, slots in (
+                    ("no_context", ("original",), range(5)),
+                    ("full_context", ("original",), range(5)),
+                    ("evidence_only", ("original",), range(3)),
+                    ("evidence_masked", ("original",), range(3)),
+                    ("option_permutation", ("perm1", "perm2"), range(5))):
+                for order_id in order_ids:
+                    key = f"{evaluation_mode}:{order_id}"
+                    seed_schedule[key] = {str(slot):[
+                        int(hashlib.sha256(
+                            f"{qa['qa_id']}:{evaluation_mode}:{order_id}:{slot}:{retry}".encode()
+                        ).hexdigest()[:8], 16) for retry in (0, 1)] for slot in slots}
+            seed_path = args.run_root / "frozen/seed_schedule.json"
+            freeze_json(seed_path, seed_schedule, args.resume)
+            solver_artifacts.update({"minimal_source_integrity":minimal_source_integrity,
+                "context_source_path":context_source_path, "context_path":context_path,
+                "catalog_path":catalog_path, "contracts_path":contracts_path,
+                "evidence_plan_path":evidence_plan_path, "prompt_meta":prompt_meta,
+                "prompt_meta_path":prompt_meta_path, "seed_path":seed_path})
+        if permutation_diagnostic:
+            from .orchestrator import CanaryOrchestrator
+            context_source_path = Path(permutation_source_integrity["source_context_path"])
+            catalog_source_path = Path(permutation_source_integrity["source_catalog_path"])
+            contracts_source_path = Path(permutation_source_integrity["source_contracts_path"])
+            context_path = args.run_root / "frozen/questioner_smoke_context.json"
+            catalog_path = args.run_root / "frozen/questioner_span_catalog.json"
+            contracts_path = args.run_root / "frozen/questioner_reasoning_contracts.json"
+            freeze_bytes(context_path, context_source_path.read_bytes(), args.resume)
+            freeze_bytes(catalog_path, catalog_source_path.read_bytes(), args.resume)
+            freeze_bytes(contracts_path, contracts_source_path.read_bytes(), args.resume)
+            original_path = args.run_root / "frozen/original_no_context_k3.json"
+            freeze_json(original_path, permutation_source_integrity["original_no_context"], args.resume)
+            prompt_meta = {}
+            for shift, order_id in ((1, "perm1"), (2, "perm2")):
+                options = CanaryOrchestrator._permuted(qa["options"], shift)
+                rendered = render_solver_prompt(length_tokenizer, {**qa, "options":options}, [])
+                tokens = len(length_tokenizer.encode(rendered, add_special_tokens=False))
+                prompt_meta[order_id] = {"rendered_prompt_sha256":sha256_bytes(rendered.encode()),
+                    "rendered_prompt_tokens":tokens,
+                    "reserved_generation_tokens":resolved["reserved_generation_tokens"],
+                    "solver_max_model_len":resolved["solver_effective_max_model_len"],
+                    "preflight_decision":"pass" if tokens + resolved["reserved_generation_tokens"] <=
+                        resolved["solver_effective_max_model_len"] else "reject_context_overflow"}
+            if any(value["preflight_decision"] != "pass" for value in prompt_meta.values()):
+                raise RuntimeError("no-context permutation preflight failed")
+            prompt_meta_path = args.run_root / "frozen/rendered_prompt_preflight.json"
+            freeze_json(prompt_meta_path, prompt_meta, args.resume)
+            seed_schedule = {f"no_context:{order_id}":{str(slot):[
+                int(hashlib.sha256(
+                    f"{qa['qa_id']}:no_context:{order_id}:{slot}:{retry}".encode()
+                ).hexdigest()[:8], 16) for retry in (0, 1)] for slot in range(3)}
+                for order_id in ("perm1", "perm2")}
+            seed_path = args.run_root / "frozen/seed_schedule.json"
+            freeze_json(seed_path, seed_schedule, args.resume)
+            solver_artifacts.update({"permutation_source_integrity":permutation_source_integrity,
+                "context_path":context_path, "catalog_path":catalog_path,
+                "contracts_path":contracts_path, "original_path":original_path,
+                "prompt_meta":prompt_meta, "prompt_meta_path":prompt_meta_path,
+                "seed_path":seed_path})
         if boxed_smoke:
             rendered = render_solver_prompt(length_tokenizer, qa, [])
             prompt_meta_path = args.run_root / "frozen/rendered_prompt_preflight.json"
@@ -529,6 +884,7 @@ def main(argv: list[str] | None = None) -> int:
                                      "prior":prior, "prior_path":prior_path})
     manifest = {
         "run_id": args.run_root.name, "mode": resolved["mode"],
+        "admission_mode":args.admission_mode,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "project_git_commit": git_value(project, "rev-parse", "HEAD"),
         "project_git_dirty": bool(git_value(project, "status", "--porcelain")),
@@ -555,7 +911,9 @@ def main(argv: list[str] | None = None) -> int:
         "challenger_model_identifier": live_config.model if live_config else "mock-scripted-v1" if args.backend_mode == "mock" else "NONE_LOCAL_ONLY" if args.backend_mode == "local" else "UNSET_DRY_RUN",
         "backend_mode": args.backend_mode,
         "sampling_parameters": ({"temperature":live_config.temperature,
-            "max_tokens":live_config.questioner_max_tokens if args.smoke_stage == "questioner" else live_config.realizer_max_tokens}
+            "max_tokens":live_config.questioner_max_tokens if args.smoke_stage in
+                ("questioner", "questioner_feedback", "questioner_span_ids_feedback")
+                else live_config.realizer_max_tokens}
             if live_config else {"temperature":resolved["solver_temperature"], "top_p":resolved["solver_top_p"],
                 "max_tokens":resolved["solver_max_new_tokens"]} if args.backend_mode == "local" else {}),
         "mcq_valid_rollout_policy": {"max_parse_retries_per_target": 1,
@@ -566,7 +924,8 @@ def main(argv: list[str] | None = None) -> int:
             "option_binding":"local_option_binding_v1",
             "evidence_binding":"local_span_catalog_v1",
             "reasoning_and_difficulty":"local_contract_derivation_v1"}
-            if args.backend_mode == "live" and args.smoke_stage == "questioner" else
+            if args.backend_mode == "live" and args.smoke_stage in
+                ("questioner", "questioner_feedback", "questioner_span_ids_feedback") else
             {"generations": 4, "mcqs_per_generation": 3, "total_candidates": 12,
              "option_binding":"local_option_binding_v1",
              "evidence_binding":"local_span_catalog_v1",
@@ -593,8 +952,28 @@ def main(argv: list[str] | None = None) -> int:
         "api_config_path": str(args.api_config.resolve()) if args.backend_mode == "live" else "",
         "api_config_sha256": sha256_file(args.api_config) if args.backend_mode == "live" else "",
     }
+    if args.admission_mode == SPELL_STYLE_MINIMAL_MODE:
+        manifest.update({"minimal_admission_mode":SPELL_STYLE_MINIMAL_MODE,
+            "strict_admission_mode_preserved":STRICT_ADMISSION_MODE,
+            "minimal_normalization_version":MINIMAL_NORMALIZATION_VERSION,
+            "minimal_materializer_version":MINIMAL_MATERIALIZER_VERSION,
+            "minimal_replay_version":MINIMAL_REPLAY_VERSION,
+            "minimal_validator_source_sha256":sha256_file(
+                Path(__file__).with_name("minimal_admission.py")),
+            "normalization_function_source_sha256":sha256_file(
+                Path(__file__).with_name("minimal_admission.py")),
+            "minimal_replay_source_sha256":sha256_file(
+                Path(__file__).with_name("minimal_replay.py"))})
     if questioner_artifacts:
-        manifest.update({"questioner_prompt_version":QUESTIONER_PROMPT_VERSION,
+        span_ids_only_smoke = args.smoke_stage == "questioner_span_ids_feedback"
+        feedback_smoke = args.smoke_stage in ("questioner_feedback",
+                                              "questioner_span_ids_feedback")
+        manifest.update({"questioner_prompt_version":QUESTIONER_SPAN_IDS_ONLY_PROMPT_VERSION
+            if span_ids_only_smoke else QUESTIONER_FEEDBACK_PROMPT_VERSION
+            if feedback_smoke else QUESTIONER_PROMPT_VERSION,
+            "questioner_prompt_sha256":span_ids_only_questioner_template_hash()
+            if span_ids_only_smoke else feedback_questioner_template_hash()
+            if feedback_smoke else prompt_hashes["questioner"],
             "questioner_prompt_builder_source_sha256":sha256_file(Path(__file__).with_name("prompts.py")),
             "rendered_questioner_prompt_sha256":sha256_bytes(questioner_artifacts["rendered"].encode("utf-8")),
             "frozen_dialogue_sha256":sha256_file(questioner_artifacts["frozen_path"]),
@@ -617,15 +996,59 @@ def main(argv: list[str] | None = None) -> int:
                 questioner_artifacts["reasoning_contracts"]),
             "reasoning_contract_file_sha256":sha256_file(
                 questioner_artifacts["reasoning_contracts_path"]),
-            "questioner_schema_version":QUESTIONER_SCHEMA_VERSION,
+            "questioner_schema_version":QUESTIONER_SPAN_IDS_ONLY_SCHEMA_VERSION
+                if span_ids_only_smoke else QUESTIONER_SCHEMA_VERSION,
             "questioner_prompt_preflight":questioner_artifacts["prompt_preflight"],
             "questioner_prompt_preflight_sha256":sha256_file(
                 questioner_artifacts["prompt_preflight_path"])})
+        if feedback_smoke:
+            manifest.update({"solver_feedback_version":"solver_failure_feedback_v1",
+                "solver_feedback_sha256":sha256_file(questioner_artifacts["feedback_path"]),
+                "solver_feedback_sources":[{key:value for key,value in item.items()
+                    if key != "feedback"} for item in
+                    questioner_artifacts["feedback_attestations"]],
+                "minimal_admission_policy":"spell_style_minimal_v1_unchanged",
+                "questioner_output_profile":SPAN_IDS_ONLY_SCHEMA_PROFILE
+                    if span_ids_only_smoke else LEGACY_OPTIONAL_SCHEMA_PROFILE,
+                "strict_v7_admission_preserved":True,
+                "questioner_format_retry_policy":{
+                    "maximum_format_retries":1,
+                    "trigger":"json_invalid_and_raw_object_count_zero",
+                    "retry_mode":"full_batch_regeneration",
+                    "format_retry_suffix_version":QUESTIONER_FORMAT_RETRY_VERSION,
+                    "format_retry_suffix_sha256":questioner_format_retry_suffix_hash(),
+                    "malformed_response_in_retry_context":False}})
+    if minimal_replay_artifacts:
+        source_attestation = minimal_replay_artifacts["attestation"]
+        manifest.update({"source_questioner_run":str(minimal_replay_artifacts["source"]),
+            "source_questioner_manifest_sha256":source_attestation["source_manifest_sha256"],
+            "source_questioner_provenance_sha256":source_attestation["source_provenance_sha256"],
+            "source_questioner_ledger_sha256":source_attestation["source_ledger_sha256"],
+            "source_questioner_raw_sha256":source_attestation["source_raw_sha256"],
+            "frozen_dialogue_sha256":sha256_file(
+                minimal_replay_artifacts["copied_paths"]["context"]),
+            "span_catalog_sha256":span_catalog_sha256(minimal_replay_artifacts["catalog"]),
+            "span_catalog_file_sha256":sha256_file(
+                minimal_replay_artifacts["copied_paths"]["span_catalog"]),
+            "reasoning_contract_sha256":reasoning_contract_sha256(
+                minimal_replay_artifacts["contracts"]),
+            "reasoning_contract_file_sha256":sha256_file(
+                minimal_replay_artifacts["copied_paths"]["reasoning_contracts"]),
+            "dual_admission_replay_report_sha256":sha256_file(
+                minimal_replay_artifacts["report_path"]),
+            "dual_admission_replay_markdown_sha256":sha256_file(
+                minimal_replay_artifacts["markdown_path"]),
+            "strict_v7_accepted_count":minimal_replay_artifacts["report"][
+                "strict_v7_accepted_count"],
+            "minimal_accepted_count":minimal_replay_artifacts["report"][
+                "minimal_accepted_count"]})
     if solver_artifacts:
         extension = args.smoke_stage == "solver_grounding_extension"
         adaptive = args.smoke_stage == "solver_adaptive_item"
         boxed_smoke = args.smoke_stage == "solver_boxed_output"
-        manifest.update({"solver_smoke_stage":"boxed_output_no_context_valid_k3" if boxed_smoke else "adaptive_item_grounding_then_conditional_full_context" if adaptive else "S1_grounding_extension_valid_k2" if extension else "S1_no_context_valid_k3",
+        minimal_audit = args.smoke_stage == "solver_minimal_full_audit"
+        permutation_diagnostic = args.smoke_stage == "solver_no_context_permutation_diagnostic"
+        manifest.update({"solver_smoke_stage":"bad_ground_no_context_permutation_diagnostic" if permutation_diagnostic else "minimal_grounding_full_evidence_permutation" if minimal_audit else "boxed_output_no_context_valid_k3" if boxed_smoke else "adaptive_item_grounding_then_conditional_full_context" if adaptive else "S1_grounding_extension_valid_k2" if extension else "S1_no_context_valid_k3",
             "frozen_solver_qa_sha256":sha256_file(solver_artifacts["qa_path"]),
             "source_questioner_raw_sha256":sha256_file(solver_artifacts["raw_path"]),
             "source_questioner_report_sha256":sha256_file(solver_artifacts["report_path"]),
@@ -656,6 +1079,46 @@ def main(argv: list[str] | None = None) -> int:
                 **solver_artifacts["prompt_meta"], "seed_schedule_sha256":sha256_file(solver_artifacts["seed_path"]),
                 "adaptive_policy":{"initial_valid_k":3, "boundary_extension_valid_k":2,
                     "full_context_valid_k":5, "max_parse_retries_per_target":1}})
+        if minimal_audit:
+            source_integrity = solver_artifacts["minimal_source_integrity"]
+            manifest.update({"source_minimal_replay_root":str(solver_artifacts["source"]),
+                "source_minimal_replay_manifest_sha256":source_integrity["source_manifest_sha256"],
+                "source_minimal_replay_provenance_sha256":source_integrity["source_provenance_sha256"],
+                "source_minimal_replay_report_sha256":source_integrity["source_replay_report_sha256"],
+                "source_questioner_raw_sha256":source_integrity["source_raw_sha256"],
+                "materialized_qa_sha256":source_integrity["materialized_qa_sha256"],
+                "frozen_dialogue_sha256":sha256_file(solver_artifacts["context_path"]),
+                "span_catalog_sha256":span_catalog_sha256(solver_artifacts["span_catalog"]),
+                "reasoning_contract_sha256":reasoning_contract_sha256(
+                    solver_artifacts["reasoning_contracts"]),
+                "evidence_context_plan_sha256":sha256_file(solver_artifacts["evidence_plan_path"]),
+                "rendered_prompt_preflight_sha256":sha256_file(solver_artifacts["prompt_meta_path"]),
+                "seed_schedule_sha256":sha256_file(solver_artifacts["seed_path"]),
+                "final_decision_policy":"minimal_frontier_merge_v1",
+                "original_full_context_k5_reuse_required":True})
+        if permutation_diagnostic:
+            source_integrity = solver_artifacts["permutation_source_integrity"]
+            manifest.update({"diagnostic_version":NO_CONTEXT_PERMUTATION_DIAGNOSTIC_VERSION,
+                "source_bad_ground_solver_root":str(solver_artifacts["source"]),
+                "source_bad_ground_manifest_sha256":source_integrity["source_manifest_sha256"],
+                "source_bad_ground_provenance_sha256":source_integrity["source_provenance_sha256"],
+                "source_bad_ground_report_sha256":source_integrity["source_report_sha256"],
+                "source_bad_ground_qa_wrapper_sha256":source_integrity[
+                    "source_qa_wrapper_sha256"],
+                "source_original_no_context_k3_sha256":sha256_file(
+                    solver_artifacts["original_path"]),
+                "materialized_qa_sha256":source_integrity["source_materialized_qa_sha256"],
+                "frozen_dialogue_sha256":sha256_file(solver_artifacts["context_path"]),
+                "span_catalog_sha256":span_catalog_sha256(solver_artifacts["span_catalog"]),
+                "reasoning_contract_sha256":reasoning_contract_sha256(
+                    solver_artifacts["reasoning_contracts"]),
+                "rendered_prompt_preflight_sha256":sha256_file(
+                    solver_artifacts["prompt_meta_path"]),
+                "seed_schedule_sha256":sha256_file(solver_artifacts["seed_path"]),
+                "original_no_context_k3_reuse_required":True,
+                "new_permutation_orders":["perm1", "perm2"],
+                "valid_k_per_new_order":3,
+                "authoritative_bad_ground_decision_mutable":False})
     if args.resume and manifest_path.exists():
         frozen_manifest = read_json(manifest_path)
         old = {key:value for key,value in frozen_manifest.items() if key != "created_at"}
@@ -673,6 +1136,11 @@ def main(argv: list[str] | None = None) -> int:
         effective_max_model_len=resolved["solver_effective_max_model_len"],
         spell_commit=spell_commit, spell_dirty=spell_dirty)
     freeze_json(args.run_root / "reports/input_dry_run_audit.json", audit, args.resume)
+    if args.smoke_stage == "questioner_minimal_replay":
+        write_post_run_provenance(args.run_root, project, manifest)
+        print(json.dumps({"manifest":str(manifest_path),
+            "spell_style_minimal_replay":minimal_replay_artifacts["report"]}, indent=2))
+        return 0
     if args.backend_mode == "mock":
         from .mock_backends import ScriptedMockQuestioner, ScriptedMockRealizer, ScriptedMockSolver
         from .orchestrator import CanaryOrchestrator
@@ -690,19 +1158,42 @@ def main(argv: list[str] | None = None) -> int:
         client = OpenAICompatibleChallengerClient(live_config)
         orchestrator = CanaryOrchestrator(run_root=args.run_root, manifest=manifest, config=resolved,
             data=data, tokenizer=length_tokenizer,
-            realizer=None if args.smoke_stage == "questioner" else LiveRealizerBackend(client),
-            questioner=LiveQuestionerBackend(client) if args.smoke_stage == "questioner" else None,
+            realizer=None if args.smoke_stage in (
+                "questioner", "questioner_feedback", "questioner_span_ids_feedback")
+                else LiveRealizerBackend(client),
+            questioner=LiveQuestionerBackend(client) if args.smoke_stage in
+                ("questioner", "questioner_feedback", "questioner_span_ids_feedback") else None,
             solver=None, backend_mode="live")
-        if args.smoke_stage == "questioner":
+        if args.smoke_stage in ("questioner", "questioner_feedback",
+                                "questioner_span_ids_feedback"):
             result = orchestrator.question_smoke(questioner_artifacts["frozen"]["combined_dialogue"],
                 questioner_artifacts["valid_turn_ids"], questioner_artifacts["valid_session_ids"],
                 questioner_artifacts["letters"], span_catalog=questioner_artifacts["span_catalog"],
-                reasoning_contracts=questioner_artifacts["reasoning_contracts"])
-            state = orchestrator.ledger.read("questioner-b00") or {}
+                reasoning_contracts=questioner_artifacts["reasoning_contracts"],
+                rendered_prompt=questioner_artifacts["rendered"],
+                prompt_protocol=QUESTIONER_SPAN_IDS_ONLY_PROMPT_VERSION if
+                    args.smoke_stage == "questioner_span_ids_feedback" else
+                    QUESTIONER_FEEDBACK_PROMPT_VERSION if
+                    args.smoke_stage == "questioner_feedback" else QUESTIONER_PROMPT_VERSION,
+                max_format_retries=1 if args.smoke_stage in
+                    ("questioner_feedback", "questioner_span_ids_feedback") else 0,
+                solver_feedback_sha256=sha256_file(questioner_artifacts["feedback_path"])
+                    if questioner_artifacts.get("feedback_path") else None,
+                raw_schema_mode=SPAN_IDS_ONLY_SCHEMA_PROFILE if
+                    args.smoke_stage == "questioner_span_ids_feedback" else
+                    LEGACY_OPTIONAL_SCHEMA_PROFILE,
+                questioner_schema_version=QUESTIONER_SPAN_IDS_ONLY_SCHEMA_VERSION if
+                    args.smoke_stage == "questioner_span_ids_feedback" else
+                    QUESTIONER_SCHEMA_VERSION)
+            state = orchestrator.ledger.read(result["final_request_id"]) or {}
             result.update({"physical_paid_generations":orchestrator.ledger.summary()["paid_api_generation_count"],
                 "request_status":state.get("status"), "usage":(state.get("response_metadata") or {}).get("usage"),
                 "model_identifier":state.get("model_identifier"), "realizer_generations":0,
-                "solver_generations":0, "vllm_generations":0, "verifier_generations":0, "training_runs":0})
+                "solver_generations":0, "vllm_generations":0, "verifier_generations":0, "training_runs":0,
+                "feedback_guided":args.smoke_stage in
+                    ("questioner_feedback", "questioner_span_ids_feedback"),
+                "solver_feedback_sha256":sha256_file(questioner_artifacts["feedback_path"])
+                    if questioner_artifacts.get("feedback_path") else None})
             atomic_json(args.run_root / "reports/live_questioner_smoke.json", result)
             write_post_run_provenance(args.run_root, project, manifest)
             print(json.dumps({"manifest":str(manifest_path), "live_questioner_smoke":result}, indent=2))
@@ -767,6 +1258,62 @@ def main(argv: list[str] | None = None) -> int:
         qa = solver_artifacts["qa"]
         extension = args.smoke_stage == "solver_grounding_extension"
         adaptive = args.smoke_stage == "solver_adaptive_item"
+        minimal_audit = args.smoke_stage == "solver_minimal_full_audit"
+        permutation_diagnostic = args.smoke_stage == "solver_no_context_permutation_diagnostic"
+        if permutation_diagnostic:
+            result = orchestrator.diagnose_no_context_permutations(
+                qa, solver_artifacts["permutation_source_integrity"]["original_no_context"])
+            stages = [order["rollout"] for order in result["permutation_orders"]]
+            raw_rollouts = [row for stage in stages for row in stage.get("rollouts") or []]
+            ledger_summary = orchestrator.ledger.summary()
+            report = {"mode":mode,
+                "smoke_stage":"bad_ground_no_context_permutation_diagnostic",
+                "diagnostic_version":NO_CONTEXT_PERMUTATION_DIAGNOSTIC_VERSION,
+                "qa_id":qa["qa_id"], "admission_mode":SPELL_STYLE_MINIMAL_MODE,
+                "result":result, **ledger_summary,
+                "vllm_generation_count":sum(stage.get("raw_generations", 0) for stage in stages),
+                "model_identifier":backend.model_identifier,
+                "solver_max_model_len":backend.max_model_len,
+                "model_load_latency_seconds":backend.load_latency_seconds,
+                "generation_latency_seconds":sum(float((row.get("backend_metadata") or {}).get(
+                    "latency_seconds", 0.0)) for row in raw_rollouts),
+                "paid_api_generations":0, "realizer_generations":0,
+                "questioner_generations":0, "verifier_generations":0,
+                "training_runs":0, "full_context_generations":0,
+                "evidence_generations":0, "frontier_permutation_generations":0}
+            report_path = args.run_root / "reports/no_context_permutation_diagnostic.json"
+            atomic_json(report_path, report)
+            write_post_run_provenance(args.run_root, project, manifest)
+            print(json.dumps({"manifest":str(manifest_path),
+                "no_context_permutation_diagnostic":report}, indent=2))
+            return 0
+        if minimal_audit:
+            result = orchestrator.audit_minimal_candidate(qa)
+            stages = [result.get("initial_no_context"), result.get("adaptive_extension"),
+                      result.get("full_context"), result.get("evidence_only"),
+                      result.get("evidence_masked")]
+            stages.extend(order.get("rollout") for order in result.get("option_orders") or [])
+            stages = [stage for stage in stages if isinstance(stage, dict)]
+            raw_rollouts = [row for stage in stages for row in stage.get("rollouts") or []]
+            ledger_summary = orchestrator.ledger.summary()
+            report = {"mode":mode, "smoke_stage":"minimal_full_solver_audit",
+                "qa_id":qa["qa_id"], "admission_mode":SPELL_STYLE_MINIMAL_MODE,
+                "result":result, **ledger_summary,
+                "vllm_generation_count":sum(stage.get("raw_generations", 0) for stage in stages),
+                "model_identifier":backend.model_identifier,
+                "solver_max_model_len":backend.max_model_len,
+                "model_load_latency_seconds":backend.load_latency_seconds,
+                "generation_latency_seconds":sum(float((row.get("backend_metadata") or {}).get(
+                    "latency_seconds", 0.0)) for row in raw_rollouts),
+                "paid_api_generations":0, "realizer_generations":0,
+                "questioner_generations":0, "verifier_generations":0, "training_runs":0,
+                "stopped_after_final_retain_frontier":result.get("final_decision") == "retain_frontier"}
+            report_path = args.run_root / "reports/minimal_solver_full_audit.json"
+            atomic_json(report_path, report)
+            write_post_run_provenance(args.run_root, project, manifest)
+            print(json.dumps({"manifest":str(manifest_path),
+                "minimal_solver_full_audit":report}, indent=2))
+            return 0
         if adaptive:
             initial = orchestrator._rollouts(qa, "no_context", "original", 3, qa["options"], 0)
             extension_result = None
