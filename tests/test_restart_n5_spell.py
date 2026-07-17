@@ -2,6 +2,7 @@ import tempfile
 import unittest
 import json
 import shutil
+import copy
 from pathlib import Path
 
 from scripts.current_method.restart_n5_spell.core import (
@@ -35,6 +36,11 @@ from scripts.current_method.restart_n5_spell.validation import (
     derive_local_character_ledger, audit_continuity_hooks,
     materialize_questioner_item, validate_new_hook_descriptions, validate_questioner_smoke_batch,
     validate_durable_candidate_indices,
+)
+from scripts.current_method.restart_n5_spell.questioner_contract import (
+    SPAN_CATALOG_VERSION, REASONING_CONTRACT_VERSION, QUESTIONER_SCHEMA_VERSION,
+    build_span_catalog, default_reasoning_contracts, derive_local_difficulty,
+    reasoning_contract_sha256, span_catalog_sha256,
 )
 
 
@@ -191,14 +197,16 @@ class SchemaTests(unittest.TestCase):
                       validate_qa(qa, {"T1","T2"}, {"T1":"blue","T2":"x"}, {"T1":"S1","T2":"S1"}))
 
     def test_materialized_questioner_output_is_solver_source(self):
-        generated = self.smoke_item("q1")
-        materialized, self_errors = materialize_questioner_item(generated, "B")
+        generated = self.smoke_item("q1", "B")
+        catalog, contracts = self.catalog(), self.contracts()
+        materialized, self_errors = materialize_questioner_item(generated, "B",
+            span_catalog=catalog, reasoning_contract=contracts[1])
         self.assertEqual(self_errors, [])
         raw, qa, admission = select_solver_qa([generated], {"items":[{
-            "qa_id":"q1", "schema_decision":"accept", "target_letter":"B",
+            "item_index":1, "qa_id":"q1", "schema_decision":"accept", "target_letter":"B",
             "materialized_qa":materialized}]}, "q1",
-            frozen_turns={"T1":"clue red green", "T2":"clue gold"},
-            turn_session_ids={"T1":"S1", "T2":"S1"})
+            frozen_turns=self.turn_text(), turn_session_ids=self.turn_sessions(),
+            span_catalog=catalog, reasoning_contracts=contracts)
         self.assertIs(raw, generated)
         self.assertEqual(qa["options"]["B"], generated["correct_answer_text"])
         self.assertEqual(qa["canonical_answer_text"], generated["correct_answer_text"])
@@ -213,45 +221,78 @@ class SchemaTests(unittest.TestCase):
             self.assertTrue(result["questioner_candidate_shortfall"])
             self.assertIn(1, result["batch_count_invalid"])
 
+    @staticmethod
+    def dialogue():
+        return [
+            {"turn_id":"T1","session_id":"S1","speaker":"A","text":"education red priorities"},
+            {"turn_id":"T2","session_id":"S1","speaker":"B","text":"infrastructure green priorities"},
+            {"turn_id":"T3","session_id":"S1","speaker":"A","text":"parks gold priorities"},
+            {"turn_id":"T4","session_id":"S2","speaker":"B","text":"health roads priorities"},
+            {"turn_id":"T5","session_id":"S2","speaker":"A","text":"housing music priorities"},
+            {"turn_id":"T6","session_id":"S2","speaker":"B","text":"art libraries priorities"},
+        ]
+
+    @classmethod
+    def catalog(cls): return build_span_catalog(cls.dialogue())
+
+    @classmethod
+    def turn_text(cls): return {x["turn_id"]:x["text"] for x in cls.dialogue()}
+
+    @classmethod
+    def turn_sessions(cls): return {x["turn_id"]:x["session_id"] for x in cls.dialogue()}
+
+    @staticmethod
+    def contracts(): return default_reasoning_contracts(("A", "B", "C"))
+
     def smoke_item(self, qa_id, letter="A", question=None):
-        correct = f"{qa_id} clue correct folder"
+        choices = {
+            "A":(["T1#S0001","T2#S0001"],["education","infrastructure"]),
+            "B":(["T1#S0001","T4#S0001"],["education","health"]),
+            "C":(["T2#S0001","T5#S0001"],["infrastructure","housing"]),
+            "D":(["T3#S0001","T6#S0001"],["parks","art"]),
+        }
+        answer_spans, values = choices[letter]
+        correct = f"{values[0]} and {values[1]} for {qa_id}"
         return {"qa_id":qa_id, "question":question or f"What conclusion follows in {qa_id}?",
             "correct_answer_text":correct,
-            "distractors":[f"{qa_id} red folder",f"{qa_id} green folder",f"{qa_id} gold folder"],
-            "correct_answer_explanation":"The cited facts support it.",
-            "distractor_explanations":["path one", "path two", "path three"],
-            "distractor_values_from_evidence":["red", "green", "gold"],
-            "distractor_supporting_quotes":[
-                [{"turn_id":"T1","exact_quote":"red"}],
-                [{"turn_id":"T1","exact_quote":"green"}],
-                [{"turn_id":"T2","exact_quote":"gold"}]],
-            "evidence_turn_ids":["T1","T2"], "evidence_session_ids":["S1"],
-            "answer_support_type":"multi_hop",
+            "distractors":[f"red for {qa_id}",f"green for {qa_id}",f"gold for {qa_id}"],
+            "answer_support_span_ids":answer_spans,
             "answer_evidence_values":[
-                {"turn_id":"T1","value":"clue","exact_quote":"clue","role":"answer_value"},
-                {"turn_id":"T2","value":"gold","exact_quote":"gold","role":"supporting_fact"}],
-            "final_reasoning_conclusion":correct,
-            "reasoning_steps":["Combine fact one.","Apply fact two."],
-            "reasoning_type":f"path_{qa_id}", "difficulty_level":"L1"}
+                {"span_id":answer_spans[0],"value":values[0]},
+                {"span_id":answer_spans[1],"value":values[1]}],
+            "distractor_support":[
+                {"distractor_index":0,"span_ids":["T1#S0001"],"evidence_values":["red"]},
+                {"distractor_index":1,"span_ids":["T2#S0001"],"evidence_values":["green"]},
+                {"distractor_index":2,"span_ids":["T3#S0001"],"evidence_values":["gold"]}],
+            "correct_answer_explanation":"The selected spans jointly support it.",
+            "distractor_explanations":["path one", "path two", "path three"],
+            "reasoning_steps":["Combine fact one.","Apply fact two."]}
 
     def test_questioner_smoke_strict_batch_and_independent_items(self):
         batch = [self.smoke_item("q1","A"), self.smoke_item("q2","B"), self.smoke_item("q3","C")]
-        result = validate_questioner_smoke_batch(batch, ["A","B","C"], {"T1","T2"}, {"S1"})
+        result = validate_questioner_smoke_batch(batch, ["A","B","C"], set(self.turn_text()),
+            {"S1","S2"}, self.turn_text(), self.turn_sessions(),
+            span_catalog=self.catalog(), reasoning_contracts=self.contracts())
         self.assertEqual(result["schema_accepted_count"], 3)
         for size in (2, 4):
             bad = validate_questioner_smoke_batch(batch[:size] if size == 2 else batch + [self.smoke_item("q4")],
-                ["A","B","C"], {"T1","T2"}, {"S1"})
+                ["A","B","C"], set(self.turn_text()), {"S1","S2"}, self.turn_text(),
+                self.turn_sessions(), span_catalog=self.catalog(), reasoning_contracts=self.contracts())
             self.assertEqual(bad["batch_decision"], "questioner_batch_count_invalid")
         broken = [dict(x) for x in batch]
         broken[1] = {**broken[1], "reference_answer_letter":"A"}
-        independent = validate_questioner_smoke_batch(broken, ["A","B","C"], {"T1","T2"}, {"S1"})
+        independent = validate_questioner_smoke_batch(broken, ["A","B","C"], set(self.turn_text()),
+            {"S1","S2"}, self.turn_text(), self.turn_sessions(), span_catalog=self.catalog(),
+            reasoning_contracts=self.contracts())
         self.assertEqual([x["schema_decision"] for x in independent["items"]], ["accept","reject","accept"])
         self.assertIn("model_supplied_local_binding_fields", independent["items"][1]["reject_reasons"])
 
     def test_local_option_binding(self):
-        generated = self.smoke_item("q1")
         for target in "ABCD":
-            qa, errors = materialize_questioner_item(generated, target)
+            generated = self.smoke_item("q1", target)
+            contract = {**self.contracts()[0], "target_letter":target}
+            qa, errors = materialize_questioner_item(generated, target,
+                span_catalog=self.catalog(), reasoning_contract=contract)
             self.assertEqual(errors, [])
             self.assertEqual(qa["options"][target], generated["correct_answer_text"])
             self.assertEqual(qa["reference_answer_letter"], target)
@@ -259,30 +300,35 @@ class SchemaTests(unittest.TestCase):
 
     def test_questioner_smoke_evidence_and_duplicate_gates(self):
         batch = [self.smoke_item("q1","A"), self.smoke_item("q2","B"), self.smoke_item("q3","C")]
-        batch[1]["evidence_turn_ids"] = ["missing"]
-        batch[1]["evidence_session_ids"] = ["missing"]
+        batch[1]["answer_support_span_ids"][0] = "missing#S0001"
+        batch[1]["answer_evidence_values"][0]["span_id"] = "missing#S0001"
         batch[2]["question"] = batch[0]["question"]
-        result = validate_questioner_smoke_batch(batch, ["A","B","C"], {"T1","T2"}, {"S1"})
-        self.assertIn("bad_evidence", result["items"][1]["reject_reasons"])
-        self.assertIn("bad_evidence_session", result["items"][1]["reject_reasons"])
+        result = validate_questioner_smoke_batch(batch, ["A","B","C"], set(self.turn_text()),
+            {"S1","S2"}, self.turn_text(), self.turn_sessions(), span_catalog=self.catalog(),
+            reasoning_contracts=self.contracts())
+        self.assertIn("bad_span_id", result["items"][1]["reject_reasons"])
         self.assertIn("duplicate_or_option_permutation", result["items"][2]["reject_reasons"])
 
     def test_distractor_candidates_require_exact_dialogue_support(self):
         generated = self.smoke_item("q1")
-        qa, errors = materialize_questioner_item(generated, "B")
+        contract = {**self.contracts()[0], "target_letter":"B"}
+        qa, errors = materialize_questioner_item(generated, "B",
+            span_catalog=self.catalog(), reasoning_contract=contract)
         self.assertEqual(errors, [])
-        turns = {"T1":"clue red green", "T2":"gold"}
-        self.assertNotIn("bad_distractor_support", validate_qa(qa, {"T1","T2"}, turns))
-        generated["distractor_supporting_quotes"][1][0]["exact_quote"] = "purple"
-        qa, errors = materialize_questioner_item(generated, "B")
-        self.assertEqual(errors, [])
-        self.assertIn("bad_distractor_support", validate_qa(qa, {"T1","T2"}, turns))
+        self.assertNotIn("bad_distractor_support", validate_qa(qa, set(self.turn_text()),
+            self.turn_text(), self.turn_sessions()))
+        generated["distractor_support"][1]["evidence_values"] = ["purple"]
+        qa, errors = materialize_questioner_item(generated, "B",
+            span_catalog=self.catalog(), reasoning_contract=contract)
+        self.assertIsNone(qa)
+        self.assertIn("bad_distractor_support", errors)
 
     def test_generated_schema_rejects_scalar_lists_and_non_string_ids(self):
         generated = self.smoke_item("q1")
         generated["reasoning_steps"] = "not a list"
         generated["qa_id"] = 7
-        qa, errors = materialize_questioner_item(generated, "A")
+        qa, errors = materialize_questioner_item(generated, "A",
+            span_catalog=self.catalog(), reasoning_contract=self.contracts()[0])
         self.assertIsNone(qa)
         self.assertIn("questioner_generated_schema_invalid", errors)
 
@@ -520,8 +566,13 @@ class RemainingAuditRegressionTests(unittest.TestCase):
     """Regression cases added before their corresponding audit fixes."""
 
     @staticmethod
-    def generated_item(qa_id="q1"):
-        return SchemaTests().smoke_item(qa_id)
+    def generated_item(qa_id="q1", letter="B"):
+        return SchemaTests().smoke_item(qa_id, letter)
+
+    @staticmethod
+    def qa_context():
+        helper=SchemaTests()
+        return helper.catalog(), helper.contracts(), helper.turn_text(), helper.turn_sessions()
 
     def test_solver_source_is_materialized_only(self):
         raw = {**self.generated_item(), "options":dict(OPTIONS),
@@ -534,7 +585,9 @@ class RemainingAuditRegressionTests(unittest.TestCase):
 
     def test_solver_source_rejects_admission_and_integrity_mismatch(self):
         generated = self.generated_item()
-        materialized, errors = materialize_questioner_item(generated, "B")
+        catalog,contracts,turns,sessions=self.qa_context()
+        materialized, errors = materialize_questioner_item(generated, "B",
+            span_catalog=catalog, reasoning_contract=contracts[1])
         self.assertEqual(errors, [])
         with self.assertRaisesRegex(RuntimeError, "solver_qa_not_admitted"):
             select_solver_qa([generated], {"items":[{"qa_id":"q1", "schema_decision":"reject",
@@ -546,14 +599,16 @@ class RemainingAuditRegressionTests(unittest.TestCase):
 
     def test_solver_source_revalidates_tampered_materialized_qa(self):
         generated = self.generated_item()
-        materialized, _ = materialize_questioner_item(generated, "B")
+        catalog,contracts,turns,sessions=self.qa_context()
+        materialized, _ = materialize_questioner_item(generated, "B",
+            span_catalog=catalog, reasoning_contract=contracts[1])
         materialized["evidence_turn_ids"] = ["missing"]
-        report = {"items":[{"qa_id":"q1", "schema_decision":"accept", "target_letter":"B",
+        report = {"items":[{"item_index":1,"qa_id":"q1", "schema_decision":"accept", "target_letter":"B",
                             "materialized_qa":materialized}]}
         with self.assertRaisesRegex(RuntimeError, "solver_qa_integrity_mismatch"):
             select_solver_qa([generated], report, "q1",
-                frozen_turns={"T1":"clue red green", "T2":"clue gold"},
-                turn_session_ids={"T1":"S1", "T2":"S1"})
+                frozen_turns=turns, turn_session_ids=sessions,
+                span_catalog=catalog, reasoning_contracts=contracts)
 
     def test_ledger_metadata_is_part_of_completed_contract(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -819,7 +874,7 @@ class RemainingAuditRegressionTests(unittest.TestCase):
         class Questioner:
             model_identifier="offline-live-like-questioner"
             def generate_batch(self, request):
-                child=[x for x in request.valid_turn_ids if x.startswith("C")]
+                child=[x for x in request.span_catalog["spans"] if x["turn_id"].startswith("C")]
                 rows=[]
                 for index in range(3):
                     qa_id=f"batch{request.batch_index}_item{index+1}"
@@ -828,25 +883,22 @@ class RemainingAuditRegressionTests(unittest.TestCase):
                         "correct_answer_text":correct,
                         "distractors":[f"verification alternative {qa_id}",
                             f"presentation alternative {qa_id}",f"brief alternative {qa_id}"],
+                        "answer_support_span_ids":[child[0]["span_id"],child[1]["span_id"]],
+                        "answer_evidence_values":[
+                            {"span_id":child[0]["span_id"],"value":"application"},
+                            {"span_id":child[1]["span_id"],"value":"resident"}],
+                        "distractor_support":[
+                            {"distractor_index":0,"span_ids":[child[2]["span_id"]],
+                             "evidence_values":["verification"]},
+                            {"distractor_index":1,"span_ids":[child[3]["span_id"]],
+                             "evidence_values":["presentation"]},
+                            {"distractor_index":2,"span_ids":[child[0]["span_id"]],
+                             "evidence_values":["brief"]}],
                         "correct_answer_explanation":"The two answer values are directly supported.",
                         "distractor_explanations":["uses the verification candidate",
                             "uses the presentation candidate","uses the brief candidate"],
-                        "distractor_values_from_evidence":["verification","presentation","brief"],
-                        "distractor_supporting_quotes":[
-                            [{"turn_id":child[2],"exact_quote":"verification"}],
-                            [{"turn_id":child[3],"exact_quote":"presentation"}],
-                            [{"turn_id":child[0],"exact_quote":"brief"}]],
-                        "evidence_turn_ids":[child[0],child[1]],
-                        "evidence_session_ids":["session_01","session_02"],
-                        "answer_support_type":"multi_hop","answer_evidence_values":[
-                            {"turn_id":child[0],"value":"application","exact_quote":"application",
-                             "role":"answer_value"},
-                            {"turn_id":child[1],"value":"resident","exact_quote":"resident",
-                             "role":"answer_value"}],
-                        "final_reasoning_conclusion":correct,
                         "reasoning_steps":["Read the application value.","Combine the resident value."],
-                        "reasoning_type":f"paired_path_{request.batch_index}_{index}",
-                        "difficulty_level":"L1"})
+                    })
                 return BackendResponse(json.dumps(rows),self.model_identifier)
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp)
@@ -883,9 +935,13 @@ class RemainingAuditRegressionTests(unittest.TestCase):
             turn_sessions={x["turn_id"]:str(x.get("session_id") or x["turn_id"].split(":",1)[0])
                            for x in turns}
             admission=validate_questioner_smoke_batch(raw_batch,["A","B","C"],set(turn_text),
-                set(turn_sessions.values()),turn_text,turn_sessions)
+                set(turn_sessions.values()),turn_text,turn_sessions,
+                span_catalog=build_span_catalog(turns),
+                reasoning_contracts=default_reasoning_contracts(("A","B","C")))
             _,qa,_=select_solver_qa(raw_batch,admission,raw_batch[0]["qa_id"],
-                frozen_turns=turn_text,turn_session_ids=turn_sessions)
+                frozen_turns=turn_text,turn_session_ids=turn_sessions,
+                span_catalog=build_span_catalog(turns),
+                reasoning_contracts=default_reasoning_contracts(("A","B","C")))
             self.assertTrue(qa["local_option_binding"])
             prompt=render_solver_prompt(Tokenizer(),qa,[])
             self.assertIn("<box>A</box>",prompt)
@@ -927,8 +983,12 @@ class PromptTests(unittest.TestCase):
             valid_session_ids=["S1","S2"], assigned_gold_letters=["A","B","C"],
             recent_frontier_history=history, batch_index=1)
         for expected in ("exactly three", "correct_answer_text", "three unlabeled distractors",
-                         "valid_turn_id_whitelist", "L1:", "L2:", "L3:", "sole factual source"):
+                         "span_catalog", "reasoning_contracts_by_array_position",
+                         "answer_support_span_ids", "sole factual source"):
             self.assertIn(expected, prompt)
+        for forbidden in ("valid_turn_id_whitelist", "evidence_turn_ids\":",
+                          "difficulty_level\":", "reasoning_type\": \"string"):
+            self.assertNotIn(forbidden, prompt)
         self.assertNotIn('"assigned_gold_letters_by_array_index"', prompt)
         self.assertNotIn("forbidden_extra", prompt)
         with self.assertRaises(ValueError):
@@ -941,6 +1001,243 @@ class PromptTests(unittest.TestCase):
         self.assertEqual(set(first), {"realizer","questioner","responder"})
         self.assertEqual(len(set(first.values())), 3)
         self.assertTrue(all(len(value) == 64 for value in first.values()))
+
+
+class QuestionerV7RedTests(unittest.TestCase):
+    """Added first: these cases intentionally fail against the frozen v6 checkpoint."""
+
+    def test_v7_contract_module_and_versions_exist(self):
+        import importlib
+        module = importlib.import_module(
+            "scripts.current_method.restart_n5_spell.questioner_contract")
+        self.assertEqual(module.SPAN_CATALOG_VERSION, "dialogue_span_catalog_v1")
+        self.assertEqual(module.REASONING_CONTRACT_VERSION, "questioner_reasoning_contract_v1")
+        self.assertEqual(module.QUESTIONER_SCHEMA_VERSION, "questioner_unlabeled_span_ids_v1")
+
+    def test_prompt_version_is_v7(self):
+        from scripts.current_method.restart_n5_spell.prompts import QUESTIONER_PROMPT_VERSION
+        self.assertEqual(
+            QUESTIONER_PROMPT_VERSION,
+            "spell_dialogue_mcq_3x_v7_span_contract_local_derivation")
+
+    def test_v7_raw_schema_has_span_ids_and_no_model_local_fields(self):
+        from scripts.current_method.restart_n5_spell.prompts import QUESTIONER_GENERATED_ITEM_SCHEMA
+        self.assertIn("answer_support_span_ids", QUESTIONER_GENERATED_ITEM_SCHEMA)
+        self.assertIn("distractor_support", QUESTIONER_GENERATED_ITEM_SCHEMA)
+        for forbidden in ("exact_quote", "evidence_turn_ids", "evidence_session_ids",
+                          "reasoning_type", "difficulty_level", "options",
+                          "reference_answer_letter", "reference_answer_text"):
+            self.assertNotIn(forbidden, QUESTIONER_GENERATED_ITEM_SCHEMA)
+
+    def test_v7_materializer_requires_catalog_and_contract(self):
+        raw = {"qa_id":"q1", "question":"Which two values?",
+            "correct_answer_text":"education and infrastructure",
+            "distractors":["parks and roads", "health and housing", "art and music"],
+            "answer_support_span_ids":["T1#S0001", "T2#S0001"],
+            "answer_evidence_values":[
+                {"span_id":"T1#S0001", "value":"education"},
+                {"span_id":"T2#S0001", "value":"infrastructure"}],
+            "distractor_support":[
+                {"distractor_index":0,"span_ids":["T1#S0001"],"evidence_values":["parks"]},
+                {"distractor_index":1,"span_ids":["T4#S0001"],"evidence_values":["health"]},
+                {"distractor_index":2,"span_ids":["T5#S0001"],"evidence_values":["art"]}],
+            "correct_answer_explanation":"Two turns state the two values.",
+            "distractor_explanations":["different pair", "different pair", "different pair"],
+            "reasoning_steps":["Read the first turn.", "Combine the second turn."]}
+        catalog = build_span_catalog([
+            {"turn_id":"T1","session_id":"S1","speaker":"A",
+             "text":"education red parks"},
+            {"turn_id":"T2","session_id":"S1","speaker":"B",
+             "text":"infrastructure green health"},
+            {"turn_id":"T3","session_id":"S1","speaker":"A","text":"gold art music"},
+            {"turn_id":"T4","session_id":"S2","speaker":"B","text":"health roads"},
+            {"turn_id":"T5","session_id":"S2","speaker":"A","text":"art libraries"},
+        ])
+        contract = default_reasoning_contracts(("A","B","C"))[0]
+        qa, errors = materialize_questioner_item(
+            raw, "A", span_catalog=catalog, reasoning_contract=contract)
+        self.assertIsNotNone(qa)
+        self.assertEqual(errors, [])
+
+
+class QuestionerV7ContractTests(unittest.TestCase):
+    def setUp(self):
+        self.helper = SchemaTests()
+        self.catalog = self.helper.catalog()
+        self.contracts = self.helper.contracts()
+        self.turns = self.helper.turn_text()
+        self.sessions = self.helper.turn_sessions()
+
+    def materialize(self, raw, index=0):
+        return materialize_questioner_item(raw, self.contracts[index]["target_letter"],
+            span_catalog=self.catalog, reasoning_contract=self.contracts[index])
+
+    def test_span_catalog_is_deterministic_unique_and_hashed(self):
+        again = build_span_catalog(self.helper.dialogue())
+        self.assertEqual(self.catalog, again)
+        self.assertEqual(len({x["span_id"] for x in self.catalog["spans"]}), 6)
+        self.assertEqual(len(span_catalog_sha256(self.catalog)), 64)
+        duplicate = self.helper.dialogue() + [dict(self.helper.dialogue()[0])]
+        with self.assertRaisesRegex(ValueError, "span_catalog_invalid_turn"):
+            build_span_catalog(duplicate)
+
+    def test_local_exact_quote_restoration_ignores_explanation_paraphrase(self):
+        raw = self.helper.smoke_item("q1", "A")
+        raw["correct_answer_explanation"] = "A lightly paraphrased explanation is model prose."
+        qa, errors = self.materialize(raw)
+        self.assertEqual(errors, [])
+        self.assertEqual(qa["answer_supporting_quotes"][0]["exact_quote"],
+                         self.turns["T1"])
+        self.assertNotEqual(qa["answer_supporting_quotes"][0]["exact_quote"],
+                            raw["correct_answer_explanation"])
+
+    def test_unknown_answer_span_is_rejected(self):
+        raw = self.helper.smoke_item("q1", "A")
+        raw["answer_support_span_ids"][0] = "UNKNOWN#S0001"
+        raw["answer_evidence_values"][0]["span_id"] = "UNKNOWN#S0001"
+        qa, errors = self.materialize(raw)
+        self.assertIsNone(qa); self.assertIn("bad_span_id", errors)
+
+    def test_model_supplied_exact_quote_is_rejected(self):
+        raw = self.helper.smoke_item("q1", "A")
+        raw["answer_evidence_values"][0]["exact_quote"] = "education red priorities"
+        qa, errors = self.materialize(raw)
+        self.assertIsNone(qa)
+        self.assertIn("model_supplied_local_binding_fields", errors)
+
+    def test_model_supplied_reasoning_and_difficulty_are_rejected(self):
+        for field, value in (("reasoning_type", "freeform"), ("difficulty_level", "L1")):
+            raw = self.helper.smoke_item("q1", "A"); raw[field] = value
+            qa, errors = self.materialize(raw)
+            self.assertIsNone(qa); self.assertIn("model_supplied_local_binding_fields", errors)
+
+    def test_contract_requires_two_distinct_turns(self):
+        raw = self.helper.smoke_item("q1", "A")
+        raw["answer_support_span_ids"] = ["T1#S0001"]
+        raw["answer_evidence_values"] = [{"span_id":"T1#S0001","value":"education"}]
+        raw["correct_answer_text"] = "education for q1"
+        qa, errors = self.materialize(raw)
+        self.assertIsNone(qa)
+        self.assertIn("bad_reasoning_contract", errors)
+        self.assertIn("bad_difficulty_evidence_contract", errors)
+
+    def test_cross_session_contract_rejects_one_session(self):
+        raw = self.helper.smoke_item("q2", "B")
+        raw["answer_support_span_ids"] = ["T1#S0001", "T2#S0001"]
+        raw["answer_evidence_values"] = [
+            {"span_id":"T1#S0001","value":"education"},
+            {"span_id":"T2#S0001","value":"infrastructure"}]
+        raw["correct_answer_text"] = "education and infrastructure for q2"
+        qa, errors = self.materialize(raw, 1)
+        self.assertIsNone(qa); self.assertIn("bad_reasoning_contract", errors)
+
+    def test_duplicate_and_generic_evidence_values_are_rejected(self):
+        duplicate = self.helper.smoke_item("q1", "A")
+        duplicate["answer_evidence_values"][1]["value"] = "education"
+        duplicate["correct_answer_text"] = "education for q1"
+        self.assertIn("bad_duplicate_information_point", self.materialize(duplicate)[1])
+        generic = self.helper.smoke_item("q1", "A")
+        generic["answer_evidence_values"][0]["value"] = "the"
+        generic["correct_answer_text"] = "the and infrastructure for q1"
+        self.assertIn("bad_generic_evidence_value", self.materialize(generic)[1])
+
+    def test_every_answer_span_requires_an_evidence_value(self):
+        raw = self.helper.smoke_item("q1", "A")
+        raw["answer_evidence_values"] = raw["answer_evidence_values"][:1]
+        self.assertIn("bad_answer_evidence_binding", self.materialize(raw)[1])
+
+    def test_distractor_unknown_span_and_value_binding_are_rejected(self):
+        unknown = self.helper.smoke_item("q1", "A")
+        unknown["distractor_support"][0]["span_ids"] = ["UNKNOWN#S0001"]
+        errors = self.materialize(unknown)[1]
+        self.assertIn("bad_span_id", errors); self.assertIn("bad_distractor_support", errors)
+        absent_span = self.helper.smoke_item("q1", "A")
+        absent_span["distractor_support"][0]["evidence_values"] = ["purple"]
+        self.assertIn("bad_distractor_support", self.materialize(absent_span)[1])
+        absent_option = self.helper.smoke_item("q1", "A")
+        absent_option["distractor_support"][0]["evidence_values"] = ["education"]
+        self.assertIn("bad_distractor_support", self.materialize(absent_option)[1])
+
+    def test_unhashable_distractor_index_is_rejected_without_crashing(self):
+        raw = self.helper.smoke_item("q1", "A")
+        raw["distractor_support"][0]["distractor_index"] = [0]
+        qa, errors = self.materialize(raw)
+        self.assertIsNone(qa)
+        self.assertIn("bad_distractor_support", errors)
+
+    def test_local_ids_reasoning_difficulty_and_target_are_derived(self):
+        expected = ((0,"A","multi_turn_combination","L1",["T1","T2"],["S1"]),
+                    (1,"B","cross_session_relation","L2",["T1","T4"],["S1","S2"]),
+                    (2,"C","temporal_or_causal","L2",["T2","T5"],["S1","S2"]))
+        for index,target,reasoning,difficulty,turn_ids,session_ids in expected:
+            raw = self.helper.smoke_item(f"q{index+1}", target)
+            qa, errors = self.materialize(raw, index)
+            self.assertEqual(errors, [])
+            self.assertEqual(qa["reference_answer_letter"], target)
+            self.assertEqual(qa["reference_answer_text"], qa["options"][target])
+            self.assertEqual(qa["evidence_turn_ids"], turn_ids)
+            self.assertEqual(qa["evidence_session_ids"], session_ids)
+            self.assertEqual(qa["reasoning_type"], reasoning)
+            self.assertEqual(qa["difficulty_level"], difficulty)
+
+    def test_l3_is_derived_only_from_higher_structure(self):
+        self.assertEqual(derive_local_difficulty(distinct_spans=3, distinct_turns=3,
+            distinct_sessions=2, distinct_values=3, reasoning_steps=3,
+            reasoning_type="temporal_or_causal"), "L3")
+        self.assertEqual(derive_local_difficulty(distinct_spans=3, distinct_turns=3,
+            distinct_sessions=2, distinct_values=3, reasoning_steps=3,
+            reasoning_type="multi_turn_combination"), "L2")
+
+    def test_three_positions_have_unique_local_contracts(self):
+        self.assertEqual([x["item_index"] for x in self.contracts], [0,1,2])
+        self.assertEqual(len({x["reasoning_type"] for x in self.contracts}), 3)
+        self.assertEqual(len(reasoning_contract_sha256(self.contracts)), 64)
+
+    def test_independent_item_failure_and_live_like_selector(self):
+        batch = [self.helper.smoke_item("q1","A"), self.helper.smoke_item("q2","B"),
+                 self.helper.smoke_item("q3","C")]
+        batch[2]["answer_support_span_ids"][0] = "BAD#S0001"
+        batch[2]["answer_evidence_values"][0]["span_id"] = "BAD#S0001"
+        admission = validate_questioner_smoke_batch(batch,["A","B","C"],set(self.turns),
+            {"S1","S2"},self.turns,self.sessions,span_catalog=self.catalog,
+            reasoning_contracts=self.contracts)
+        self.assertEqual(admission["schema_accepted_count"], 2)
+        self.assertEqual([x["schema_decision"] for x in admission["items"]],
+                         ["accept","accept","reject"])
+        self.assertIn("bad_span_id", admission["items"][2]["reject_reasons"])
+        for qa_id in ("q1","q2"):
+            _, qa, _ = select_solver_qa(batch, admission, qa_id, frozen_turns=self.turns,
+                turn_session_ids=self.sessions, span_catalog=self.catalog,
+                reasoning_contracts=self.contracts)
+            self.assertTrue(qa["local_option_binding"])
+            self.assertTrue(all(quote["exact_quote"] in self.turns[quote["turn_id"]]
+                                for quote in qa["answer_supporting_quotes"]))
+
+    def test_three_accepted_materialized_qas_render_boxed_prompt(self):
+        class Tokenizer:
+            def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=True,
+                                    enable_thinking=False):
+                return "\n".join(x["content"] for x in messages)
+        batch=[self.helper.smoke_item("q1","A"),self.helper.smoke_item("q2","B"),
+               self.helper.smoke_item("q3","C")]
+        admission=validate_questioner_smoke_batch(batch,["A","B","C"],set(self.turns),
+            {"S1","S2"},self.turns,self.sessions,span_catalog=self.catalog,
+            reasoning_contracts=self.contracts)
+        self.assertEqual(admission["schema_accepted_count"],3)
+        for raw in batch:
+            _,qa,_=select_solver_qa(batch,admission,raw["qa_id"],frozen_turns=self.turns,
+                turn_session_ids=self.sessions,span_catalog=self.catalog,
+                reasoning_contracts=self.contracts)
+            self.assertIn("<box>A</box>", render_solver_prompt(Tokenizer(),qa,[]))
+
+    def test_prompt_exposes_only_compact_span_view_and_local_contracts(self):
+        prompt=build_questioner_prompt(frozen_dialogue=self.helper.dialogue(),
+            valid_turn_ids=list(self.turns),valid_session_ids=["S1","S2"],
+            assigned_gold_letters=["A","B","C"],recent_frontier_history=[],
+            span_catalog=self.catalog,reasoning_contracts=self.contracts)
+        self.assertIn('"span_id": "T1#S0001"',prompt)
+        self.assertNotIn('"turn_id":',prompt); self.assertNotIn('"session_id":',prompt)
+        self.assertNotIn('"target_letter":',prompt)
 
 
 if __name__ == "__main__": unittest.main()

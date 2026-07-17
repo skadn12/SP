@@ -12,8 +12,14 @@ import inspect
 import json
 from typing import Any, Iterable, Mapping, Sequence
 
+from .questioner_contract import (
+    SPAN_CATALOG_VERSION, REASONING_CONTRACT_VERSION, QUESTIONER_SCHEMA_VERSION,
+    build_span_catalog, default_reasoning_contracts, model_reasoning_contract_view,
+    model_span_catalog_view, span_catalog_index, validate_reasoning_contracts,
+)
+
 REALIZER_PROMPT_VERSION = "rolling_dialogue_realizer_v4_local_entity_ledger"
-QUESTIONER_PROMPT_VERSION = "spell_dialogue_mcq_3x_v6_structured_evidence_local_binding"
+QUESTIONER_PROMPT_VERSION = "spell_dialogue_mcq_3x_v7_span_contract_local_derivation"
 RESPONDER_PROMPT_VERSION = "mcq_boxed_letter_v1"
 
 REALIZER_SYSTEM_INSTRUCTION = """You are the Realizer in a rolling dialogue-expansion pipeline.
@@ -56,19 +62,16 @@ QUESTIONER_GENERATED_ITEM_SCHEMA: dict[str, Any] = {
     "question": "string",
     "correct_answer_text": "string",
     "distractors": ["string", "string", "string"],
+    "answer_support_span_ids": ["span_id", "span_id"],
+    "answer_evidence_values": [{"span_id": "span_id", "value": "minimal meaningful phrase"}],
+    "distractor_support": [{
+        "distractor_index": 0,
+        "span_ids": ["span_id"],
+        "evidence_values": ["minimal meaningful phrase"],
+    }],
     "correct_answer_explanation": "string",
     "distractor_explanations": ["string", "string", "string"],
-    "distractor_values_from_evidence": ["string", "string", "string"],
-    "distractor_supporting_quotes": [[{"turn_id": "string", "exact_quote": "string"}]],
-    "evidence_turn_ids": ["string"],
-    "evidence_session_ids": ["string"],
-    "answer_support_type": "direct_span|multi_hop",
-    "answer_evidence_values": [{"turn_id": "string", "value": "string",
-                                "exact_quote": "string", "role": "answer_value|supporting_fact"}],
-    "final_reasoning_conclusion": "string",
     "reasoning_steps": ["string"],
-    "reasoning_type": "string",
-    "difficulty_level": "L1|L2|L3",
 }
 
 # Backward-compatible exported name: this is now the model-facing, unlabeled schema.
@@ -170,6 +173,8 @@ def build_questioner_prompt(
     *, frozen_dialogue: Sequence[Mapping[str, Any]], valid_turn_ids: Sequence[str],
     valid_session_ids: Sequence[str], assigned_gold_letters: Sequence[str],
     recent_frontier_history: Sequence[Mapping[str, Any]], batch_index: int = 0,
+    span_catalog: Mapping[str, Any] | None = None,
+    reasoning_contracts: Sequence[Mapping[str, Any]] | None = None,
 ) -> str:
     """Build a strict three-item batch protocol; each item remains independently gateable."""
     letters = [str(x).upper() for x in assigned_gold_letters]
@@ -179,54 +184,61 @@ def build_questioner_prompt(
         raise ValueError("valid_turn_ids must be unique")
     if not frozen_dialogue:
         raise ValueError("frozen_dialogue must not be empty")
+    catalog = dict(span_catalog or build_span_catalog(list(frozen_dialogue)))
+    catalog_index = span_catalog_index(catalog)
+    if set(valid_turn_ids) != {span["turn_id"] for span in catalog_index.values()}:
+        raise ValueError("span catalog does not cover the frozen turn whitelist")
+    if not {span["session_id"] for span in catalog_index.values()} <= set(valid_session_ids):
+        raise ValueError("span catalog contains a non-whitelisted session")
+    contracts = list(reasoning_contracts or default_reasoning_contracts(letters))
+    validate_reasoning_contracts(contracts)
     history = [{k: item.get(k) for k in (
         "question", "canonical_answer", "reasoning_type", "evidence_session_pattern",
         "verified_reward_mean", "round")}
         for item in recent_frontier_history[-10:]]
     payload = {
         "batch_index": batch_index,
-        "valid_turn_id_whitelist": list(valid_turn_ids),
-        "valid_session_id_whitelist": list(valid_session_ids),
+        "span_catalog_version": SPAN_CATALOG_VERSION,
+        "questioner_schema_version": QUESTIONER_SCHEMA_VERSION,
+        "reasoning_contract_version": REASONING_CONTRACT_VERSION,
+        "span_catalog": model_span_catalog_view(catalog),
+        "reasoning_contracts_by_array_position": model_reasoning_contract_view(contracts),
         "recent_accepted_frontier_history_for_novelty_only": history,
-        "frozen_dialogue": list(frozen_dialogue),
     }
     rules = [
         "Return an array of exactly three objects. Fewer or more invalidates the entire batch; never add a fourth item.",
-        "Generate correct_answer_text and exactly three unlabeled distractors. Never output options, A/B/C/D labels, reference_answer_letter, or reference_answer_text; the caller binds those fields locally.",
+        "The span catalog is the sole factual source. Do not copy or reproduce dialogue sentences; select only supplied span_id values.",
+        "Never invent a span ID. Never output exact_quote, turn_id, session_id, answer_supporting_quotes, evidence_turn_ids, or evidence_session_ids; the caller restores those fields from the catalog.",
+        "Generate correct_answer_text and exactly three unlabeled distractors. Never output options, A/B/C/D labels, target letter, reference_answer_letter, reference_answer_text, or canonical_answer_text; the caller binds those fields locally.",
+        "Never output reasoning_type or difficulty_level. Each array position has a different immutable reasoning contract; the caller derives reasoning type and difficulty locally from validated spans, sessions, values, and steps.",
         "correct_answer_text and all three distractors must be non-empty, distinct, and the same answer type.",
         "Each distractor must embody a different error path and distractor_explanations must contain exactly three explanations in matching array order.",
-        "For each distractor, provide the shortest real candidate value in distractor_values_from_evidence and one or more exact dialogue substrings in the matching distractor_supporting_quotes entry.",
-        "Every distractor value must occur verbatim in both its distractor text and at least one of its own exact supporting quotes. Distractor quote turn IDs must be real whitelist IDs, but are not answer evidence unless separately listed in evidence_turn_ids.",
-        "All evidence IDs must come from the supplied whitelists. Dialogue, not history or an outline, is the sole factual source.",
-        "answer_evidence_values must contain exactly grounded, distinct information points. Every evidence_turn_ids entry must have at least one matching entry and no entry may cite an undeclared answer-evidence turn.",
-        "Each evidence value must be the shortest meaningful value (education, aunt, infrastructure), never a stopword or template phrase such as the, is, during session, the person, or this event.",
-        "Each exact_quote must be copied from its turn and contain its value verbatim. role=answer_value requires the value to occur in correct_answer_text; role=supporting_fact records a distinct necessary intermediate fact.",
-        "For multi_hop, provide at least two distinct evidence values. Repeating the same generic value across turns is forbidden.",
-        "final_reasoning_conclusion must exactly equal correct_answer_text.",
+        "answer_support_span_ids must meet the assigned position's distinct span/turn/session minimums. Reusing one span as multiple information points is forbidden.",
+        "Every answer_support_span_id must have a matching answer_evidence_values entry. Each answer evidence value must be the shortest meaningful whole phrase present in both the selected span text and correct_answer_text.",
+        "For each distractor_index 0, 1, and 2, provide at least one real supporting span ID and at least one minimal evidence value present in both that span and the matching distractor text.",
+        "Evidence values must be distinct meaningful content phrases such as education, aunt, or infrastructure, never generic words such as the, is, during session, the person, or this event.",
         "Distractors must be plausible candidate values grounded in the dialogue, not irrelevant, absurd, or removable using common knowledge alone.",
-        "History is only a novelty/difficulty signal. Never use a historical answer or fact unless independently present in frozen_dialogue.",
+        "History is only a novelty signal. Never use a historical answer or fact unless independently present in the span catalog.",
         "The three questions must differ in subject, evidence combination, and reasoning path; paraphrases, option swaps, and answer-position variants are forbidden.",
-        "L1: >=2 evidence turns and >=2 information points; one turn alone cannot determine the answer.",
-        "L2: >=3 evidence turns, >=2 sessions, >=3 information points, and >=3 explicit reasoning_steps.",
-        "L3: either >=3 sessions, both parent and child evidence, a necessary middle session, or failure when only tail sessions remain.",
-        "Prefer L2/L3, but label only what the declared evidence and reasoning actually satisfy.",
+        "Follow each position's concrete reasoning contract exactly. Do not substitute a simpler one-turn fact and do not reuse a reasoning path assigned to another position.",
         "Use only directly supported facts. No outside knowledge, assumptions, subjective judgment, placeholders, answer-length hints, or formatting hints.",
-        "Question text must not reveal turn/session IDs, evidence, explanations, the target letter, or mention the dialogue as a document.",
+        "Question text must not reveal span IDs, evidence, explanations, or mention the dialogue as a document.",
         "Every key in the schema is required. Output strict JSON only with no Markdown or additional text.",
     ]
     minimal = [{**QUESTIONER_ITEM_SCHEMA, "qa_id": f"batch{batch_index}_item{i+1}",
         "correct_answer_text":"evidence-supported answer",
         "distractors":["same-type distractor 1","same-type distractor 2","same-type distractor 3"],
         "distractor_explanations":["error path 1","error path 2","error path 3"],
-        "distractor_values_from_evidence":["candidate 1","candidate 2","candidate 3"],
-        "distractor_supporting_quotes":[
-            [{"turn_id":"valid turn ID","exact_quote":"exact candidate 1 quote"}],
-            [{"turn_id":"valid turn ID","exact_quote":"exact candidate 2 quote"}],
-            [{"turn_id":"valid turn ID","exact_quote":"exact candidate 3 quote"}]],
+        "answer_support_span_ids":["supplied span ID 1", "supplied span ID 2"],
         "answer_evidence_values":[
-            {"turn_id":"valid turn ID", "value":"meaningful answer value",
-             "exact_quote":"exact quote containing meaningful answer value", "role":"answer_value"}],
-        "final_reasoning_conclusion":"evidence-supported answer"} for i in range(3)]
+            {"span_id":"supplied span ID 1", "value":"meaningful answer value 1"},
+            {"span_id":"supplied span ID 2", "value":"meaningful answer value 2"}],
+        "distractor_support":[
+            {"distractor_index":0,"span_ids":["supplied span ID"],"evidence_values":["candidate 1"]},
+            {"distractor_index":1,"span_ids":["supplied span ID"],"evidence_values":["candidate 2"]},
+            {"distractor_index":2,"span_ids":["supplied span ID"],"evidence_values":["candidate 3"]}],
+        "reasoning_steps":["Use the first selected information point.",
+                           "Combine it with the second selected information point."]} for i in range(3)]
     return "\n\n".join([
         QUESTIONER_SYSTEM_INSTRUCTION,
         f"PROMPT_VERSION: {QUESTIONER_PROMPT_VERSION}",

@@ -5,6 +5,11 @@ from typing import Any
 
 from .core import LETTERS, normalize_option
 from .prompts import QUESTIONER_GENERATED_ITEM_SCHEMA, REALIZER_OUTPUT_SCHEMA
+from .questioner_contract import (
+    QUESTIONER_SCHEMA_VERSION, REASONING_CONTRACT_VERSION, SPAN_CATALOG_VERSION,
+    STRUCTURAL_SUPPORT_ROLES, contract_is_satisfied, derive_local_difficulty,
+    single_reasoning_contract_sha256, span_catalog_index, span_catalog_sha256,
+)
 
 
 EVIDENCE_VALUE_STOPWORDS = frozenset({
@@ -59,7 +64,7 @@ def validate_answer_evidence_values(values: Any, evidence_turn_ids: list[str],
                 exact not in frozen_turns.get(str(turn_id), "") or
                 not _normalized_phrase_in_text(value, exact)):
             errors.append("bad_answer_evidence_binding")
-        if role not in ("answer_value", "supporting_fact"):
+        if role not in STRUCTURAL_SUPPORT_ROLES:
             errors.append("bad_answer_evidence_binding")
         elif role == "answer_value":
             answer_value_count += 1
@@ -82,7 +87,8 @@ def validate_config(c: dict[str, Any]) -> None:
         "no_context_bad_ground_threshold_after_extension": 3,
         "full_context_valid_k": 5, "permutation_valid_k_per_order": 5,
         "solver_effective_max_model_len": 16384,
-        "minimum_solver_eligible_candidates":1}
+        "minimum_solver_eligible_candidates":1,
+        "allow_local_difficulty_downgrade":False}
     mode = c.get("mode")
     if mode == "live_questioner_smoke":
         expected.update({"questioner_generations":1, "questioner_mcqs_per_generation":3,
@@ -220,26 +226,47 @@ def validate_qa(qa: dict[str, Any], turn_ids: set[str],
     difficulty = qa.get("difficulty_level")
     if difficulty == "L1" and (len(evidence) < 2 or len(steps) < 2):
         errors.append("bad_difficulty_evidence_contract")
-    elif difficulty == "L2" and (len(evidence) < 3 or len(actual_sessions) < 2 or len(steps) < 3):
+    elif difficulty == "L2" and (len(evidence) < 2 or len(actual_sessions) < 2 or len(steps) < 2):
         errors.append("bad_difficulty_evidence_contract")
     elif difficulty == "L3":
-        has_parent = any(not str(x).startswith("session_") for x in actual_sessions)
-        has_child = any(str(x).startswith("session_") for x in actual_sessions)
-        if len(evidence) < 3 or len(steps) < 3 or not (len(actual_sessions) >= 3 or has_parent and has_child):
+        if len(evidence) < 3 or len(actual_sessions) < 2 or len(steps) < 3:
             errors.append("bad_difficulty_evidence_contract")
     return sorted(set(errors))
 
 
-def materialize_questioner_item(item: Any, target_letter: str) -> tuple[dict[str, Any] | None, list[str]]:
-    """Bind an unlabeled model item to A-D locally; reference fields are never model-authored."""
-    if not isinstance(item, dict) or target_letter not in LETTERS:
+def materialize_questioner_item(item: Any, target_letter: str, *,
+                                span_catalog: dict[str, Any] | None = None,
+                                reasoning_contract: dict[str, Any] | None = None,
+                                allow_local_difficulty_downgrade: bool = False,
+                                ) -> tuple[dict[str, Any] | None, list[str]]:
+    """Restore every stable QA field from a catalog and an immutable local contract."""
+    if not isinstance(item, dict) or target_letter not in LETTERS or not isinstance(span_catalog, dict):
         return None, ["questioner_generated_schema_invalid"]
     errors: list[str] = []
-    forbidden = {"options", "reference_answer_letter", "reference_answer_text"}
-    if forbidden & set(item):
+    forbidden = {"options", "reference_answer_letter", "reference_answer_text",
+        "canonical_answer_text", "exact_quote", "answer_supporting_quotes",
+        "distractor_supporting_quotes", "evidence_turn_ids", "evidence_session_ids",
+        "reasoning_type", "difficulty_level", "target_letter", "final_reasoning_conclusion",
+        "answer_support_type", "distractor_values_from_evidence"}
+    def contains_forbidden(value: Any) -> bool:
+        if isinstance(value, dict):
+            return bool(forbidden & set(value)) or any(contains_forbidden(x) for x in value.values())
+        if isinstance(value, list):
+            return any(contains_forbidden(x) for x in value)
+        return False
+    if contains_forbidden(item):
         errors.append("model_supplied_local_binding_fields")
     if set(item) != set(QUESTIONER_GENERATED_ITEM_SCHEMA):
         errors.append("questioner_generated_schema_invalid")
+    try:
+        catalog = span_catalog_index(span_catalog)
+    except ValueError:
+        return None, ["span_catalog_invalid"]
+    if (not isinstance(reasoning_contract, dict) or
+            reasoning_contract.get("reasoning_contract_version") != REASONING_CONTRACT_VERSION or
+            reasoning_contract.get("target_letter") != target_letter or
+            reasoning_contract.get("item_index") not in (0, 1, 2)):
+        errors.append("bad_reasoning_contract")
     correct = item.get("correct_answer_text")
     distractors = item.get("distractors")
     explanations = item.get("distractor_explanations")
@@ -251,40 +278,118 @@ def materialize_questioner_item(item: Any, target_letter: str) -> tuple[dict[str
     if (not isinstance(explanations, list) or len(explanations) != 3 or
             any(not isinstance(x, str) or not x.strip() for x in explanations)):
         errors.append("bad_distractor_explanations")
-    required_strings = ("qa_id", "question", "correct_answer_explanation",
-                        "final_reasoning_conclusion",
-                        "reasoning_type")
+    required_strings = ("qa_id", "question", "correct_answer_explanation")
     if any(not isinstance(item.get(key), str) or not item[key].strip() for key in required_strings):
         errors.append("questioner_generated_schema_invalid")
-    for key in ("evidence_turn_ids", "evidence_session_ids", "reasoning_steps"):
-        values = item.get(key)
-        if (not isinstance(values, list) or not values or
-                any(not isinstance(x, str) or not x.strip() for x in values) or
-                len(values) != len(set(values))):
-            errors.append("questioner_generated_schema_invalid")
+    steps = item.get("reasoning_steps")
+    if (not isinstance(steps, list) or not steps or
+            any(not isinstance(x, str) or not x.strip() for x in steps)):
+        errors.append("questioner_generated_schema_invalid")
+
+    answer_span_ids = item.get("answer_support_span_ids")
+    if (not isinstance(answer_span_ids, list) or not answer_span_ids or
+            any(not isinstance(x, str) or not x for x in answer_span_ids)):
+        errors.append("questioner_generated_schema_invalid")
+        answer_span_ids = []
+    if len(answer_span_ids) != len(set(answer_span_ids)):
+        errors.append("bad_duplicate_information_point")
+    if any(span_id not in catalog for span_id in answer_span_ids):
+        errors.append("bad_span_id")
+
     evidence_values = item.get("answer_evidence_values")
     if (not isinstance(evidence_values, list) or not evidence_values or any(
             not isinstance(entry, dict) or
-            set(entry) != {"turn_id", "value", "exact_quote", "role"} or
+            set(entry) != {"span_id", "value"} or
             any(not isinstance(entry.get(key), str) or not entry[key].strip()
-                for key in ("turn_id", "value", "exact_quote", "role"))
+                for key in ("span_id", "value"))
             for entry in evidence_values or [])):
         errors.append("questioner_generated_schema_invalid")
-    distractor_values = item.get("distractor_values_from_evidence")
-    distractor_quotes = item.get("distractor_supporting_quotes")
-    if (not isinstance(distractor_values, list) or len(distractor_values) != 3 or
-            any(not isinstance(x, str) or not x.strip() for x in distractor_values) or
-            len({normalize_option(x) for x in distractor_values if isinstance(x, str)}) != 3 or
-            not isinstance(distractor_quotes, list) or len(distractor_quotes) != 3 or
-            any(not isinstance(group, list) or not group or any(
-                not isinstance(quote, dict) or set(quote) != {"turn_id", "exact_quote"} or
-                not isinstance(quote.get("turn_id"), str) or not quote["turn_id"].strip() or
-                not isinstance(quote.get("exact_quote"), str) or not quote["exact_quote"].strip()
-                for quote in group or []) for group in distractor_quotes or [])):
+    normalized_values: list[str] = []
+    covered_answer_spans: set[str] = set()
+    for entry in evidence_values if isinstance(evidence_values, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        span_id, value = entry.get("span_id"), entry.get("value")
+        normalized_values.append(normalize_evidence_value(value))
+        errors.extend(validate_minimal_evidence_value(value))
+        if span_id not in catalog:
+            errors.append("bad_span_id"); continue
+        covered_answer_spans.add(span_id)
+        if (span_id not in answer_span_ids or
+                not _normalized_phrase_in_text(value, catalog[span_id]["exact_text"]) or
+                not _normalized_phrase_in_text(value, correct or "")):
+            errors.append("bad_answer_evidence_binding")
+    if set(answer_span_ids) != covered_answer_spans:
+        errors.append("bad_answer_evidence_binding")
+    if len(normalized_values) != len(set(normalized_values)):
+        errors.append("bad_duplicate_information_point")
+
+    distractor_support = item.get("distractor_support")
+    local_distractor_quotes: list[list[dict[str, str]]] = []
+    local_distractor_values: list[str] = []
+    if not isinstance(distractor_support, list) or len(distractor_support) != 3:
         errors.append("bad_distractor_support")
-    if item.get("answer_support_type") not in ("direct_span", "multi_hop") or \
-            item.get("difficulty_level") not in ("L1", "L2", "L3"):
-        errors.append("questioner_generated_schema_invalid")
+    else:
+        by_index: dict[int, dict[str, Any]] = {}
+        invalid_or_duplicate_index = False
+        for entry in distractor_support:
+            index_value = entry.get("distractor_index") if isinstance(entry, dict) else None
+            if (not isinstance(index_value, int) or isinstance(index_value, bool) or
+                    index_value not in (0, 1, 2) or index_value in by_index):
+                invalid_or_duplicate_index = True
+                continue
+            by_index[index_value] = entry
+        if invalid_or_duplicate_index or set(by_index) != {0, 1, 2}:
+            errors.append("bad_distractor_support")
+        for index in range(3):
+            entry = by_index.get(index, {})
+            if set(entry) != {"distractor_index", "span_ids", "evidence_values"}:
+                errors.append("bad_distractor_support"); local_distractor_quotes.append([])
+                local_distractor_values.append(""); continue
+            span_ids = entry.get("span_ids")
+            values = entry.get("evidence_values")
+            if (not isinstance(span_ids, list) or not span_ids or len(span_ids) != len(set(span_ids)) or
+                    any(not isinstance(x, str) or not x for x in span_ids) or
+                    not isinstance(values, list) or not values or
+                    any(not isinstance(x, str) or not x for x in values)):
+                errors.append("bad_distractor_support"); local_distractor_quotes.append([])
+                local_distractor_values.append(""); continue
+            if any(span_id not in catalog for span_id in span_ids):
+                errors.extend(("bad_span_id", "bad_distractor_support"))
+            for value in values:
+                errors.extend(validate_minimal_evidence_value(value))
+                if (not _normalized_phrase_in_text(value, distractors[index] if isinstance(distractors, list) else "") or
+                        not any(span_id in catalog and
+                                _normalized_phrase_in_text(value, catalog[span_id]["exact_text"])
+                                for span_id in span_ids)):
+                    errors.append("bad_distractor_support")
+            if any(not any(_normalized_phrase_in_text(value, catalog[span_id]["exact_text"])
+                           for value in values) for span_id in span_ids if span_id in catalog):
+                errors.append("bad_distractor_support")
+            local_distractor_quotes.append([
+                {"turn_id":catalog[span_id]["turn_id"],
+                 "exact_quote":catalog[span_id]["exact_text"]}
+                for span_id in span_ids if span_id in catalog])
+            local_distractor_values.append(values[0] if values else "")
+
+    answer_spans = [catalog[span_id] for span_id in answer_span_ids if span_id in catalog]
+    distinct_turns = len({span["turn_id"] for span in answer_spans})
+    distinct_sessions = len({span["session_id"] for span in answer_spans})
+    stats = {"distinct_spans":len(set(answer_span_ids)), "distinct_turns":distinct_turns,
+        "distinct_sessions":distinct_sessions, "distinct_values":len(set(normalized_values)),
+        "reasoning_steps":len(steps) if isinstance(steps, list) else 0}
+    reasoning_type = str((reasoning_contract or {}).get("reasoning_type") or "")
+    difficulty = derive_local_difficulty(**stats, reasoning_type=reasoning_type)
+    try:
+        contract_ok = bool(reasoning_contract) and contract_is_satisfied(reasoning_contract, **stats)
+    except (KeyError, TypeError, ValueError):
+        contract_ok = False
+    if not contract_ok:
+        errors.extend(("bad_reasoning_contract", "bad_difficulty_evidence_contract"))
+    if difficulty is None:
+        errors.append("bad_difficulty_evidence_contract")
+    if allow_local_difficulty_downgrade:
+        errors.append("unsafe_local_difficulty_downgrade_enabled")
     if errors:
         return None, sorted(set(errors))
     options: dict[str, str] = {}
@@ -298,8 +403,28 @@ def materialize_questioner_item(item: Any, target_letter: str) -> tuple[dict[str
             options[letter] = distractors[cursor]
             explanation_map[letter] = explanations[cursor]
             cursor += 1
-    generated_only = {"correct_answer_text", "distractors", "distractor_explanations"}
-    qa = {key: value for key, value in item.items() if key not in generated_only}
+    evidence_turn_ids = list(dict.fromkeys(span["turn_id"] for span in answer_spans))
+    evidence_session_ids = sorted({span["session_id"] for span in answer_spans})
+    local_answer_values = [{"turn_id":catalog[entry["span_id"]]["turn_id"],
+        "value":entry["value"], "exact_quote":catalog[entry["span_id"]]["exact_text"],
+        "role":"answer_value"} for entry in evidence_values]
+    qa = {"qa_id":item["qa_id"], "question":item["question"],
+        "correct_answer_explanation":item["correct_answer_explanation"],
+        "reasoning_steps":list(steps), "answer_support_type":"multi_hop",
+        "answer_support_span_ids":list(answer_span_ids),
+        "answer_supporting_quotes":[{"turn_id":span["turn_id"],
+            "exact_quote":span["exact_text"]} for span in answer_spans],
+        "answer_evidence_values":local_answer_values,
+        "distractor_supporting_quotes":local_distractor_quotes,
+        "distractor_values_from_evidence":local_distractor_values,
+        "evidence_turn_ids":evidence_turn_ids, "evidence_session_ids":evidence_session_ids,
+        "reasoning_type":reasoning_type, "difficulty_level":difficulty,
+        "final_reasoning_conclusion":correct,
+        "questioner_schema_version":QUESTIONER_SCHEMA_VERSION,
+        "span_catalog_version":SPAN_CATALOG_VERSION,
+        "reasoning_contract_version":REASONING_CONTRACT_VERSION,
+        "span_catalog_sha256":span_catalog_sha256(span_catalog),
+        "reasoning_contract_sha256":single_reasoning_contract_sha256(reasoning_contract)}
     qa.update({"options":options, "reference_answer_letter":target_letter,
                "reference_answer_text":options[target_letter],
                "distractor_explanations":explanation_map,
@@ -610,7 +735,10 @@ def validate_event_arc_advancement(advanced_ids: list[str], assigned_ids: set[st
 def validate_questioner_smoke_batch(batch: Any, assigned_letters: list[str],
                                     valid_turn_ids: set[str], valid_session_ids: set[str],
                                     frozen_turns: dict[str, str] | None = None,
-                                    turn_session_ids: dict[str, str] | None = None) -> dict[str, Any]:
+                                    turn_session_ids: dict[str, str] | None = None,
+                                    span_catalog: dict[str, Any] | None = None,
+                                    reasoning_contracts: list[dict[str, Any]] | None = None,
+                                    allow_local_difficulty_downgrade: bool = False) -> dict[str, Any]:
     """Strict one-batch parser result with independent per-item acceptance."""
     if not isinstance(batch, list) or len(batch) != 3:
         count = len(batch) if isinstance(batch, list) else 0
@@ -621,9 +749,16 @@ def validate_questioner_smoke_batch(batch: Any, assigned_letters: list[str],
     seen_ids: set[str] = set()
     seen_questions: set[str] = set()
     seen_option_sets: set[tuple[str, ...]] = set()
-    seen_reasoning_types: set[str] = set()
+    if (not isinstance(reasoning_contracts, list) or len(reasoning_contracts) != 3 or
+            not isinstance(span_catalog, dict)):
+        return {"json_top_level_array":True, "raw_object_count":3,
+            "batch_decision":"questioner_local_contract_invalid",
+            "questioner_candidate_shortfall":True, "schema_accepted_count":0,
+            "schema_rejected_count":3, "items":[]}
     for index, item in enumerate(batch):
-        qa, errors = materialize_questioner_item(item, assigned_letters[index])
+        qa, errors = materialize_questioner_item(item, assigned_letters[index],
+            span_catalog=span_catalog, reasoning_contract=reasoning_contracts[index],
+            allow_local_difficulty_downgrade=allow_local_difficulty_downgrade)
         if qa is not None:
             errors.extend(validate_qa(qa, valid_turn_ids, frozen_turns, turn_session_ids))
         qa_id = str(item.get("qa_id", "")).strip() if isinstance(item, dict) else ""
@@ -637,13 +772,11 @@ def validate_questioner_smoke_batch(batch: Any, assigned_letters: list[str],
             errors.append("option_answer_type_mismatch")
         if not question or question in seen_questions or (option_set and option_set in seen_option_sets):
             errors.append("duplicate_or_option_permutation")
-        reasoning_type = normalize_option(item.get("reasoning_type", "")) if isinstance(item, dict) else ""
-        if not reasoning_type or reasoning_type in seen_reasoning_types:
-            errors.append("duplicate_reasoning_path")
-        sessions = item.get("evidence_session_ids") or [] if isinstance(item, dict) else []
+        reasoning_type = str(reasoning_contracts[index].get("reasoning_type") or "")
+        sessions = qa.get("evidence_session_ids", []) if qa is not None else []
         if not sessions or any(x not in valid_session_ids for x in sessions):
             errors.append("bad_evidence_session")
-        if isinstance(item, dict) and item.get("difficulty_level") not in ("L1", "L2", "L3"):
+        if qa is not None and qa.get("difficulty_level") not in ("L1", "L2", "L3"):
             errors.append("bad_difficulty")
         material = canonical = normalize_option(json_like(item)) if isinstance(item, dict) else ""
         if any(token in material for token in ("placeholder", "insert answer", "external knowledge", "google")):
@@ -655,14 +788,14 @@ def validate_questioner_smoke_batch(batch: Any, assigned_letters: list[str],
             seen_questions.add(question)
         if option_set:
             seen_option_sets.add(option_set)
-        if reasoning_type:
-            seen_reasoning_types.add(reasoning_type)
         items.append({"item_index": index, "qa_id": qa_id or None,
             "target_letter": assigned_letters[index],
             "parsed_reference_letter": qa.get("reference_answer_letter") if qa else None,
             "schema_decision": "accept" if not errors else "reject", "reject_reasons": errors,
-            "evidence_turn_ids": item.get("evidence_turn_ids", []) if isinstance(item, dict) else [],
-            "evidence_session_ids": sessions, "difficulty": item.get("difficulty_level") if isinstance(item, dict) else None,
+            "evidence_turn_ids": qa.get("evidence_turn_ids", []) if qa else [],
+            "evidence_session_ids":sessions,
+            "reasoning_type":reasoning_type,
+            "difficulty":qa.get("difficulty_level") if qa else None,
             "materialized_qa":qa})
     accepted = sum(x["schema_decision"] == "accept" for x in items)
     return {"json_top_level_array": True, "raw_object_count": 3,

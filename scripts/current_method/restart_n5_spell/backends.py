@@ -22,6 +22,8 @@ class QuestionerRequest:
     prompt_sha256: str
     valid_turn_ids: tuple[str, ...]
     valid_session_ids: tuple[str, ...]
+    span_catalog: dict[str, Any] = field(default_factory=dict)
+    reasoning_contracts: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)

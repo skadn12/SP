@@ -58,42 +58,40 @@ class ScriptedMockRealizer:
         return BackendResponse(json.dumps(payload), self.model_identifier, {"script": "accepted"})
 
 
-def _qa(qa_id: str, gold: str, turn_ids: tuple[str, ...], session_ids: tuple[str, ...],
+def _qa(qa_id: str, request: QuestionerRequest, item_index: int,
         *, question: str | None = None, invalid: bool = False) -> dict[str, Any]:
     correct = f"education and infrastructure priorities for {qa_id} are confirmed"
     distractors = ["the neighborhood priorities brief", "resident observations", "the current plan"]
-    distractor_values = ["neighborhood priorities brief", "resident observations", "current plan"]
-    number = int(qa_id[-2:])
-    child_turn_ids = [x for x in turn_ids if str(x).startswith("C")]
-    child_session_ids = [x for x in session_ids if str(x).startswith("session_")]
-    if number >= 7 and len(child_turn_ids) >= 14 and len(child_session_ids) >= 2:
-        evidence = [child_turn_ids[0], child_turn_ids[12], child_turn_ids[13]]
-        sessions = list(child_session_ids[:2])
+    spans = request.span_catalog["spans"]
+    child = [span for span in spans if str(span["turn_id"]).startswith("C")]
+    by_session: dict[str, list[dict[str, str]]] = {}
+    for span in child:
+        by_session.setdefault(span["session_id"], []).append(span)
+    sessions = sorted(by_session)
+    if item_index == 0:
+        answer_spans = by_session[sessions[0]][:2]
+    elif item_index == 1:
+        answer_spans = [by_session[sessions[0]][0], by_session[sessions[1]][0]]
     else:
-        evidence = list(child_turn_ids[:2])
-        sessions = list(child_session_ids[:1])
+        answer_spans = [by_session[sessions[1]][1], by_session[sessions[2]][0]]
+    distractor_span = answer_spans[0]["span_id"]
     item = {"qa_id": qa_id, "question": question or f"Which conclusion follows for scenario {qa_id}?",
         "correct_answer_text": correct, "distractors": distractors,
+        "answer_support_span_ids":[span["span_id"] for span in answer_spans],
+        "answer_evidence_values":[
+            {"span_id":answer_spans[0]["span_id"], "value":"education"},
+            {"span_id":answer_spans[1]["span_id"], "value":"infrastructure"}],
+        "distractor_support":[
+            {"distractor_index":0, "span_ids":[distractor_span],
+             "evidence_values":["neighborhood priorities brief"]},
+            {"distractor_index":1, "span_ids":[distractor_span],
+             "evidence_values":["resident observations"]},
+            {"distractor_index":2, "span_ids":[distractor_span],
+             "evidence_values":["current plan"]}],
         "correct_answer_explanation": "The cited turns jointly establish the conclusion.",
         "distractor_explanations": [f"Distractor {index} follows a distinct incorrect path." for index in range(1, 4)],
-        "distractor_values_from_evidence":distractor_values,
-        "distractor_supporting_quotes":[
-            [{"turn_id":evidence[0], "exact_quote":"neighborhood priorities brief"}],
-            [{"turn_id":evidence[0], "exact_quote":"resident observations"}],
-            [{"turn_id":evidence[0], "exact_quote":"current plan"}]],
-        "evidence_turn_ids": evidence, "evidence_session_ids": sessions,
-        "answer_support_type": "multi_hop",
-        "answer_evidence_values":[
-            {"turn_id":turn_id, "value":("education" if position == 0 else
-                "infrastructure" if position == 1 else "resident observations"),
-             "exact_quote":("education repairs" if position == 0 else
-                "infrastructure safety" if position == 1 else "resident observations"),
-             "role":"answer_value" if position < 2 else "supporting_fact"}
-            for position, turn_id in enumerate(evidence)],
-        "final_reasoning_conclusion": correct,
-        "reasoning_steps": ["Combine the first fact.", "Apply the second fact.", "Derive the conclusion."],
-        "reasoning_type": f"mock_path_{qa_id}",
-        "difficulty_level": "L2" if number >= 7 else "L1"}
+        "reasoning_steps": ["Use the first selected information point.",
+                            "Combine it with the second selected information point."]}
     if invalid:
         item["distractors"][2] = item["distractors"][0]
     return item
@@ -113,15 +111,12 @@ class ScriptedMockQuestioner:
         rows = []
         for index, qa_id in enumerate(ids):
             if qa_id == "bad01":
-                rows.append(_qa(qa_id, request.assigned_gold_letters[index], request.valid_turn_ids,
-                                request.valid_session_ids, invalid=True))
+                rows.append(_qa(qa_id, request, index, invalid=True))
             elif qa_id == "dup01":
-                rows.append(_qa(qa_id, request.assigned_gold_letters[index], request.valid_turn_ids,
-                                request.valid_session_ids,
+                rows.append(_qa(qa_id, request, index,
                                 question="Which conclusion follows for scenario qa01?"))
             else:
-                rows.append(_qa(qa_id, request.assigned_gold_letters[index], request.valid_turn_ids,
-                                request.valid_session_ids))
+                rows.append(_qa(qa_id, request, index))
         if self.shortfall_batch == request.batch_index:
             rows = rows[:2]
         if self.reject_all:

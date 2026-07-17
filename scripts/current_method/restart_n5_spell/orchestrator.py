@@ -21,6 +21,11 @@ from .validation import (assess_candidate_shortfall, evidence_audit, parse_quest
                          validate_durable_candidate_indices, validate_new_hook_descriptions,
                          validate_questioner_smoke_batch)
 from .validation import DEFAULT_DURABLE_PREDICATES
+from .questioner_contract import (
+    QUESTIONER_SCHEMA_VERSION, REASONING_CONTRACT_VERSION, SPAN_CATALOG_VERSION,
+    build_span_catalog, default_reasoning_contracts, reasoning_contract_sha256,
+    span_catalog_sha256,
+)
 
 
 class SimulatedCrash(RuntimeError):
@@ -418,19 +423,29 @@ class CanaryOrchestrator:
         turn_session_ids = {x["turn_id"]: str(x.get("session_id") or x["turn_id"].split(":", 1)[0])
                             for x in frozen_dialogue}
         valid_session_ids = tuple(sorted(set(turn_session_ids.values())))
+        span_catalog = build_span_catalog(frozen_dialogue)
+        span_catalog_hash = span_catalog_sha256(span_catalog)
+        atomic_json(self.run_root / "frozen/questioner_span_catalog.json", span_catalog)
         schedules = [("A","B","C"), ("D","A","B"), ("C","D","A"), ("B","C","D")]
         parsed_batches, accepted, rejected = [], [], []
         seen_questions: set[str] = set()
         seen_qa_ids: set[str] = set()
         seen_option_sets: set[tuple[str, ...]] = set()
-        seen_reasoning_types: set[str] = set()
+        contract_hashes: list[str] = []
         for batch_index, letters in enumerate(schedules):
+            reasoning_contracts = default_reasoning_contracts(letters)
+            contract_hash = reasoning_contract_sha256(reasoning_contracts)
+            contract_hashes.append(contract_hash)
+            atomic_json(self.run_root / f"frozen/questioner_reasoning_contracts_b{batch_index:02d}.json",
+                        reasoning_contracts)
             prompt = build_questioner_prompt(frozen_dialogue=frozen_dialogue, valid_turn_ids=valid_turn_ids,
                 valid_session_ids=valid_session_ids, assigned_gold_letters=letters,
-                recent_frontier_history=[], batch_index=batch_index)
+                recent_frontier_history=[], batch_index=batch_index, span_catalog=span_catalog,
+                reasoning_contracts=reasoning_contracts)
             request_id = f"questioner-b{batch_index:02d}"
             request = QuestionerRequest(request_id, batch_index, letters, prompt, _hash_text(prompt),
-                                        valid_turn_ids, valid_session_ids)
+                                        valid_turn_ids, valid_session_ids, span_catalog,
+                                        tuple(reasoning_contracts))
             prompt_path = self.run_root / f"raw/prompts/{request_id}.json"
             if prompt_path.exists():
                 if _read_json(prompt_path).get("prompt_sha256") != request.prompt_sha256:
@@ -444,7 +459,10 @@ class CanaryOrchestrator:
                 budget_class="questioner", budget_limit=self.config["max_questioner_generations"],
                 request_metadata={"batch_id":batch_index, "assigned_gold_letters":list(letters),
                     "valid_turn_ids_sha256":_hash_text(canonical_json(list(valid_turn_ids))),
-                    "valid_session_ids_sha256":_hash_text(canonical_json(list(valid_session_ids)))},
+                    "valid_session_ids_sha256":_hash_text(canonical_json(list(valid_session_ids))),
+                    "span_catalog_sha256":span_catalog_hash,
+                    "reasoning_contract_sha256":contract_hash,
+                    "questioner_schema_version":QUESTIONER_SCHEMA_VERSION},
                 backend_identity=self._backend_identity(self.questioner),
                 total_budget_limit=self.config.get("max_total_paid_api_generations") if self.ledger.backend_mode == "live" else None)
             atomic_json(self.run_root / f"raw/questioner_batch_{batch_index:02d}.json",
@@ -459,7 +477,9 @@ class CanaryOrchestrator:
                 rejected.append({"batch_index": batch_index, "reason": "questioner_batch_count_invalid"})
                 continue
             batch_result = validate_questioner_smoke_batch(batch, list(letters), set(valid_turn_ids),
-                set(valid_session_ids), frozen_turns, turn_session_ids)
+                set(valid_session_ids), frozen_turns, turn_session_ids,
+                span_catalog=span_catalog, reasoning_contracts=reasoning_contracts,
+                allow_local_difficulty_downgrade=self.config["allow_local_difficulty_downgrade"])
             self.ledger.record_decision(request_id, batch_result["batch_decision"])
             for item_result in batch_result["items"]:
                 item_index = item_result["item_index"]
@@ -468,8 +488,7 @@ class CanaryOrchestrator:
                 key = normalize_option(qa.get("question", "")) if qa else ""
                 qa_id = str(qa.get("qa_id", "")) if qa else ""
                 option_set = tuple(sorted(normalize_option(x) for x in qa.get("options", {}).values())) if qa else ()
-                reasoning_type = normalize_option(qa.get("reasoning_type", "")) if qa else ""
-                if key in seen_questions or qa_id in seen_qa_ids or option_set in seen_option_sets or reasoning_type in seen_reasoning_types:
+                if key in seen_questions or qa_id in seen_qa_ids or option_set in seen_option_sets:
                     errors.append("cross_batch_duplicate")
                 if errors:
                     rejected.append({"batch_index": batch_index, "item_index": item_index,
@@ -477,7 +496,7 @@ class CanaryOrchestrator:
                                      "reason": sorted(set(errors))})
                 else:
                     seen_questions.add(key); seen_qa_ids.add(qa_id)
-                    seen_option_sets.add(option_set); seen_reasoning_types.add(reasoning_type)
+                    seen_option_sets.add(option_set)
                     accepted.append({**qa, "questioner_batch_index": batch_index})
         batching = parse_questioner_batches(parsed_batches)
         admission = assess_candidate_shortfall(batching["generation_counts"], len(accepted),
@@ -485,7 +504,12 @@ class CanaryOrchestrator:
         summary = {**batching, **admission, "physical_questioner_calls": 4,
                    "schema_accepted_count": len(accepted),
                    "questioner_schema_accepted_count":len(accepted), "item_rejects": rejected,
-                   "questioner_candidate_shortfall":admission["candidate_shortfall"]}
+                   "questioner_candidate_shortfall":admission["candidate_shortfall"],
+                   "span_catalog_version":SPAN_CATALOG_VERSION,
+                   "span_catalog_sha256":span_catalog_hash,
+                   "reasoning_contract_version":REASONING_CONTRACT_VERSION,
+                   "reasoning_contract_sha256_by_batch":contract_hashes,
+                   "questioner_schema_version":QUESTIONER_SCHEMA_VERSION}
         atomic_json(self.run_root / "questioner_summary.json", summary)
         atomic_json(self.run_root / "qa_candidates_accepted.json", accepted)
         atomic_json(self.run_root / "qa_candidates_rejected.json", rejected)
@@ -493,14 +517,21 @@ class CanaryOrchestrator:
 
     def question_smoke(self, frozen_dialogue: list[dict[str, Any]],
                        valid_turn_ids: tuple[str, ...], valid_session_ids: tuple[str, ...],
-                       assigned_letters: tuple[str, str, str]) -> dict[str, Any]:
+                       assigned_letters: tuple[str, str, str], *,
+                       span_catalog: dict[str, Any] | None = None,
+                       reasoning_contracts: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         """Execute exactly one live Questioner batch; never schedules filtering or another batch."""
+        catalog = span_catalog or build_span_catalog(frozen_dialogue)
+        contracts = reasoning_contracts or default_reasoning_contracts(assigned_letters)
+        catalog_hash = span_catalog_sha256(catalog)
+        contract_hash = reasoning_contract_sha256(contracts)
         prompt = build_questioner_prompt(frozen_dialogue=frozen_dialogue,
             valid_turn_ids=valid_turn_ids, valid_session_ids=valid_session_ids,
-            assigned_gold_letters=assigned_letters, recent_frontier_history=[], batch_index=0)
+            assigned_gold_letters=assigned_letters, recent_frontier_history=[], batch_index=0,
+            span_catalog=catalog, reasoning_contracts=contracts)
         request_id = "questioner-b00"
         request = QuestionerRequest(request_id, 0, assigned_letters, prompt, _hash_text(prompt),
-                                    valid_turn_ids, valid_session_ids)
+                                    valid_turn_ids, valid_session_ids, catalog, tuple(contracts))
         prompt_path = self.run_root / "raw/prompts/questioner-b00.json"
         if prompt_path.exists():
             if _read_json(prompt_path).get("prompt_sha256") != request.prompt_sha256:
@@ -514,7 +545,10 @@ class CanaryOrchestrator:
             budget_class="questioner", budget_limit=self.config["max_questioner_generations"],
             request_metadata={"batch_id":0, "assigned_gold_letters":list(assigned_letters),
                 "valid_turn_ids_sha256":_hash_text(canonical_json(list(valid_turn_ids))),
-                "valid_session_ids_sha256":_hash_text(canonical_json(list(valid_session_ids)))},
+                "valid_session_ids_sha256":_hash_text(canonical_json(list(valid_session_ids))),
+                "span_catalog_sha256":catalog_hash,
+                "reasoning_contract_sha256":contract_hash,
+                "questioner_schema_version":QUESTIONER_SCHEMA_VERSION},
             backend_identity=self._backend_identity(self.questioner),
             total_budget_limit=self.config.get("max_total_paid_api_generations") if self.ledger.backend_mode == "live" else None)
         atomic_json(self.run_root / "raw/questioner_batch_00.json",
@@ -526,7 +560,9 @@ class CanaryOrchestrator:
                 set(valid_turn_ids), set(valid_session_ids),
                 {x["turn_id"]: x["text"] for x in frozen_dialogue},
                 {x["turn_id"]:str(x.get("session_id") or x["turn_id"].split(":", 1)[0])
-                 for x in frozen_dialogue})
+                 for x in frozen_dialogue}, span_catalog=catalog,
+                reasoning_contracts=contracts,
+                allow_local_difficulty_downgrade=self.config["allow_local_difficulty_downgrade"])
         except json.JSONDecodeError:
             parse_status = "json_invalid"
             result = {"json_top_level_array":False, "raw_object_count":0,
@@ -534,7 +570,12 @@ class CanaryOrchestrator:
                 "items":[]}
         result.update({"parse_status":parse_status, "request_id":request_id,
             "physical_questioner_calls":1, "questioner_smoke_only":True,
-            "not_full_canary_context":True})
+            "not_full_canary_context":True,
+            "span_catalog_version":SPAN_CATALOG_VERSION,
+            "span_catalog_sha256":catalog_hash,
+            "reasoning_contract_version":REASONING_CONTRACT_VERSION,
+            "reasoning_contract_sha256":contract_hash,
+            "questioner_schema_version":QUESTIONER_SCHEMA_VERSION})
         atomic_json(self.run_root / "reports/questioner_materialized_items.json",
             [x.get("materialized_qa") for x in result.get("items", [])])
         self.ledger.record_decision(request_id, result["batch_decision"])

@@ -17,6 +17,11 @@ from .prompts import (QUESTIONER_PROMPT_VERSION, SOLVER_NOTHINK_RESPONDER_PROMPT
                       prompt_template_hashes)
 from .validation import (audit_continuity_hooks, materialize_questioner_item,
                          validate_config, validate_qa)
+from .questioner_contract import (
+    QUESTIONER_SCHEMA_VERSION, REASONING_CONTRACT_VERSION, SPAN_CATALOG_VERSION,
+    build_span_catalog, default_reasoning_contracts, reasoning_contract_sha256,
+    span_catalog_sha256,
+)
 
 DEFAULTS = {
     "qa_format": "mcq", "max_total_paid_api_generations": 25,
@@ -32,6 +37,8 @@ DEFAULTS = {
     # architectural limit, but runtime, preflight, and provenance all use 16K.
     "solver_effective_max_model_len": 16384,
     "minimum_solver_eligible_candidates": 1,
+    "allow_local_difficulty_downgrade": False,
+    "questioner_backend_context_limit": 32768,
 }
 
 
@@ -142,6 +149,10 @@ def write_post_run_provenance(run_root: Path, project: Path, manifest: dict[str,
         "ledger_sha_match":sha256_file(Path(__file__).with_name("ledger.py")) == manifest.get("ledger_source_sha256"),
         "run_canary_sha_match":sha256_file(Path(__file__)) == manifest.get("run_canary_source_sha256"),
         "parser_sha_match":sha256_file(Path(__file__).with_name("core.py")) == manifest.get("mcq_parser_source_sha256"),
+        "questioner_prompt_source_sha_match":sha256_file(Path(__file__).with_name("prompts.py")) ==
+            manifest.get("questioner_prompt_builder_source_sha256"),
+        "questioner_contract_source_sha_match":sha256_file(Path(__file__).with_name("questioner_contract.py")) ==
+            manifest.get("questioner_contract_source_sha256"),
         "source_snapshot_manifest_sha_match":sha256_file(Path(str(manifest["source_snapshot_manifest_path"]))) ==
             manifest.get("source_snapshot_manifest_sha256")}
     report = {"run_id":manifest.get("run_id"),
@@ -172,7 +183,9 @@ def item2_question_audit(qa: dict, frozen_context: dict) -> str:
 
 def select_solver_qa(raw_batch: list[dict], smoke_report: dict, qa_id: str, *,
                      frozen_turns: dict[str, str] | None = None,
-                     turn_session_ids: dict[str, str] | None = None) -> tuple[dict, dict, dict]:
+                     turn_session_ids: dict[str, str] | None = None,
+                     span_catalog: dict | None = None,
+                     reasoning_contracts: list[dict] | None = None) -> tuple[dict, dict, dict]:
     items = [x for x in smoke_report.get("items", []) if x.get("qa_id") == qa_id]
     if len(items) != 1 or items[0].get("schema_decision") != "accept":
         raise RuntimeError("solver_qa_not_admitted")
@@ -184,7 +197,13 @@ def select_solver_qa(raw_batch: list[dict], smoke_report: dict, qa_id: str, *,
     if len(generated) != 1 or materialized.get("qa_id") != qa_id:
         raise RuntimeError("solver_qa_integrity_mismatch")
     target = admission.get("target_letter")
-    rematerialized, materialize_errors = materialize_questioner_item(generated[0], target)
+    item_index = admission.get("item_index")
+    if (not isinstance(item_index, int) or not isinstance(reasoning_contracts, list) or
+            item_index < 0 or item_index >= len(reasoning_contracts) or
+            not isinstance(span_catalog, dict)):
+        raise RuntimeError("solver_qa_integrity_mismatch: local contract is required")
+    rematerialized, materialize_errors = materialize_questioner_item(generated[0], target,
+        span_catalog=span_catalog, reasoning_contract=reasoning_contracts[item_index])
     if (materialize_errors or rematerialized is None or
             canonical_json(rematerialized) != canonical_json(materialized)):
         raise RuntimeError("solver_qa_integrity_mismatch")
@@ -347,13 +366,34 @@ def main(argv: list[str] | None = None) -> int:
         parent_session_ids = {str(turn["turn_id"]).split(":", 1)[0] for turn in parent_turns}
         valid_session_ids = tuple(sorted(parent_session_ids | {turn["session_id"] for turn in child_turns}))
         letters = ("A", "B", "C")
+        span_catalog = build_span_catalog(frozen["combined_dialogue"])
+        reasoning_contracts = default_reasoning_contracts(letters)
+        span_catalog_path = args.run_root / "frozen/questioner_span_catalog.json"
+        reasoning_contracts_path = args.run_root / "frozen/questioner_reasoning_contracts.json"
+        freeze_json(span_catalog_path, span_catalog, args.resume)
+        freeze_json(reasoning_contracts_path, reasoning_contracts, args.resume)
         rendered = build_questioner_prompt(frozen_dialogue=frozen["combined_dialogue"],
             valid_turn_ids=valid_turn_ids, valid_session_ids=valid_session_ids,
-            assigned_gold_letters=letters, recent_frontier_history=[], batch_index=0)
+            assigned_gold_letters=letters, recent_frontier_history=[], batch_index=0,
+            span_catalog=span_catalog, reasoning_contracts=reasoning_contracts)
+        rendered_tokens = len(length_tokenizer.encode(rendered, add_special_tokens=False))
+        prompt_preflight = {"rendered_prompt_tokens":rendered_tokens,
+            "max_generation_tokens":resolved["challenger_questioner_max_tokens"],
+            "total_tokens":rendered_tokens + resolved["challenger_questioner_max_tokens"],
+            "backend_context_limit":resolved["questioner_backend_context_limit"]}
+        prompt_preflight["decision"] = ("pass" if prompt_preflight["total_tokens"] <=
+            prompt_preflight["backend_context_limit"] else "reject_context_overflow")
+        if prompt_preflight["decision"] != "pass":
+            raise RuntimeError("questioner_prompt_context_overflow")
+        prompt_preflight_path = args.run_root / "frozen/questioner_prompt_preflight.json"
+        freeze_json(prompt_preflight_path, prompt_preflight, args.resume)
         questioner_artifacts = {"source":source, "session_paths":session_paths, "sessions":sessions,
             "frozen":frozen, "frozen_path":frozen_path, "valid_turn_ids":valid_turn_ids,
             "valid_session_ids":valid_session_ids, "letters":letters, "rendered":rendered,
-            "source_integrity":source_integrity}
+            "source_integrity":source_integrity, "span_catalog":span_catalog,
+            "span_catalog_path":span_catalog_path, "reasoning_contracts":reasoning_contracts,
+            "reasoning_contracts_path":reasoning_contracts_path,
+            "prompt_preflight":prompt_preflight, "prompt_preflight_path":prompt_preflight_path}
     if args.backend_mode == "local":
         boxed_smoke = args.smoke_stage == "solver_boxed_output"
         source = args.solver_qa_source_root.resolve()
@@ -362,27 +402,33 @@ def main(argv: list[str] | None = None) -> int:
         if boxed_smoke:
             generated_qa = {"qa_id":"synthetic_boxed_protocol_01",
                 "question":"Which option exactly matches the target token 'blue' stated in this question?",
-                "correct_answer_text":"blue", "distractors":["red","green","gold"],
+                "correct_answer_text":"blue target token", "distractors":["red","green","gold"],
+                "answer_support_span_ids":["SYN1#S0001", "SYN2#S0001"],
+                "answer_evidence_values":[
+                    {"span_id":"SYN1#S0001", "value":"blue"},
+                    {"span_id":"SYN2#S0001", "value":"target token"}],
+                "distractor_support":[
+                    {"distractor_index":0,"span_ids":["SYN1#S0001"],"evidence_values":["red"]},
+                    {"distractor_index":1,"span_ids":["SYN1#S0001"],"evidence_values":["green"]},
+                    {"distractor_index":2,"span_ids":["SYN2#S0001"],"evidence_values":["gold"]}],
                 "correct_answer_explanation":"The synthetic protocol fixture names blue.",
                 "distractor_explanations":["red is a different fixture value",
                     "green is a different fixture value","gold is a different fixture value"],
-                "distractor_values_from_evidence":["red","green","gold"],
-                "distractor_supporting_quotes":[
-                    [{"turn_id":"SYN1","exact_quote":"red"}],
-                    [{"turn_id":"SYN1","exact_quote":"green"}],
-                    [{"turn_id":"SYN2","exact_quote":"gold"}]],
-                "evidence_turn_ids":["SYN1","SYN2"], "evidence_session_ids":["synthetic"],
-                "answer_support_type":"multi_hop", "answer_evidence_values":[
-                    {"turn_id":"SYN1","value":"blue","exact_quote":"blue","role":"answer_value"},
-                    {"turn_id":"SYN2","value":"target token","exact_quote":"target token",
-                     "role":"supporting_fact"}],
-                "final_reasoning_conclusion":"blue",
                 "reasoning_steps":["Read the target token.","Select the matching value."],
-                "reasoning_type":"synthetic_exact_token_match", "difficulty_level":"L1"}
-            qa, synthetic_errors = materialize_questioner_item(generated_qa, "B")
+            }
+            synthetic_dialogue = [
+                {"turn_id":"SYN1","session_id":"synthetic_a","speaker":"A",
+                 "text":"blue red green"},
+                {"turn_id":"SYN2","session_id":"synthetic_b","speaker":"B",
+                 "text":"target token gold"}]
+            local_span_catalog = build_span_catalog(synthetic_dialogue)
+            local_reasoning_contracts = default_reasoning_contracts(("A", "B", "C"))
+            qa, synthetic_errors = materialize_questioner_item(generated_qa, "B",
+                span_catalog=local_span_catalog,
+                reasoning_contract=local_reasoning_contracts[1])
             synthetic_turns = {"SYN1":"blue red green", "SYN2":"target token gold"}
             if synthetic_errors or qa is None or validate_qa(qa, set(synthetic_turns), synthetic_turns,
-                    {"SYN1":"synthetic","SYN2":"synthetic"}):
+                    {"SYN1":"synthetic_a","SYN2":"synthetic_b"}):
                 raise RuntimeError("synthetic boxed QA failed local materialization")
             original_qa = qa
             source = args.run_root / "frozen"
@@ -400,8 +446,11 @@ def main(argv: list[str] | None = None) -> int:
             turn_text = {x["turn_id"]:x["text"] for x in dialogue}
             turn_sessions = {x["turn_id"]:str(x.get("session_id") or x["turn_id"].split(":", 1)[0])
                              for x in dialogue}
+            local_span_catalog = build_span_catalog(dialogue)
+            local_reasoning_contracts = default_reasoning_contracts(("A", "B", "C"))
             generated_qa, qa, accepted_item = select_solver_qa(raw_batch, smoke_report,
-                args.solver_qa_id, frozen_turns=turn_text, turn_session_ids=turn_sessions)
+                args.solver_qa_id, frozen_turns=turn_text, turn_session_ids=turn_sessions,
+                span_catalog=local_span_catalog, reasoning_contracts=local_reasoning_contracts)
             original_qa = qa
         qa_path = args.run_root / "frozen/solver_qa.json"
         frozen_qa_payload = {"source_root":str(source),
@@ -416,7 +465,9 @@ def main(argv: list[str] | None = None) -> int:
                               "source_report_sha256":sha256_file(report_path)}
         freeze_json(qa_path, frozen_qa_payload, args.resume)
         solver_artifacts = {"source":source, "raw_path":raw_path, "report_path":report_path,
-                            "qa":qa, "original_qa":original_qa, "qa_path":qa_path}
+                            "qa":qa, "original_qa":original_qa, "qa_path":qa_path,
+                            "span_catalog":local_span_catalog,
+                            "reasoning_contracts":local_reasoning_contracts}
         if boxed_smoke:
             rendered = render_solver_prompt(length_tokenizer, qa, [])
             prompt_meta_path = args.run_root / "frozen/rendered_prompt_preflight.json"
@@ -485,6 +536,10 @@ def main(argv: list[str] | None = None) -> int:
         "resolved_config_sha256": sha256_file(config_path),
         "realizer_prompt_sha256": prompt_hashes["realizer"],
         "questioner_prompt_sha256": prompt_hashes["questioner"],
+        "questioner_prompt_version":QUESTIONER_PROMPT_VERSION,
+        "questioner_schema_version":QUESTIONER_SCHEMA_VERSION,
+        "span_catalog_version":SPAN_CATALOG_VERSION,
+        "reasoning_contract_version":REASONING_CONTRACT_VERSION,
         "responder_prompt_sha256": prompt_hashes["responder"],
         "mcq_parser_version": PARSER_VERSION,
         "mcq_parser_source_sha256": sha256_file(Path(__file__).with_name("core.py")),
@@ -508,10 +563,14 @@ def main(argv: list[str] | None = None) -> int:
             "full_context_valid_k": 5, "permutation_valid_k_per_order": 5},
         "questioner_batch_policy": ({"generations":1, "mcqs_per_generation":3, "total_candidates":3,
             "model_output":"unlabeled_correct_answer_plus_three_distractors",
-            "option_binding":"local_option_binding_v1"}
+            "option_binding":"local_option_binding_v1",
+            "evidence_binding":"local_span_catalog_v1",
+            "reasoning_and_difficulty":"local_contract_derivation_v1"}
             if args.backend_mode == "live" and args.smoke_stage == "questioner" else
             {"generations": 4, "mcqs_per_generation": 3, "total_candidates": 12,
-             "option_binding":"local_option_binding_v1"}),
+             "option_binding":"local_option_binding_v1",
+             "evidence_binding":"local_span_catalog_v1",
+             "reasoning_and_difficulty":"local_contract_derivation_v1"}),
         "paid_call_budgets": ({"max_total_paid_api_generations":resolved["smoke_max_paid_generations"],
             "max_realizer_generations":resolved["smoke_max_realizer_generations"],
             "max_questioner_generations":resolved["max_questioner_generations"],
@@ -524,6 +583,9 @@ def main(argv: list[str] | None = None) -> int:
         **source_snapshot,
         "orchestrator_source_sha256": sha256_file(Path(__file__).with_name("orchestrator.py")),
         "validation_source_sha256":sha256_file(Path(__file__).with_name("validation.py")),
+        "materializer_source_sha256":sha256_file(Path(__file__).with_name("validation.py")),
+        "questioner_prompt_builder_source_sha256":sha256_file(Path(__file__).with_name("prompts.py")),
+        "questioner_contract_source_sha256":sha256_file(Path(__file__).with_name("questioner_contract.py")),
         "ledger_source_sha256":sha256_file(Path(__file__).with_name("ledger.py")),
         "run_canary_source_sha256":sha256_file(Path(__file__)),
         "backend_source_sha256": sha256_file(Path(__file__).with_name("mock_backends.py")) if args.backend_mode == "mock" else "",
@@ -546,7 +608,19 @@ def main(argv: list[str] | None = None) -> int:
             "source_accepted_session_sha256":questioner_artifacts["source_integrity"]["source_session_sha256"],
             "legal_turn_ids_sha256":sha256_bytes(canonical_json(list(questioner_artifacts["valid_turn_ids"])) .encode()),
             "legal_session_ids_sha256":sha256_bytes(canonical_json(list(questioner_artifacts["valid_session_ids"])) .encode()),
-            "target_gold_letters":list(questioner_artifacts["letters"])})
+            "target_gold_letters":list(questioner_artifacts["letters"]),
+            "span_catalog_version":SPAN_CATALOG_VERSION,
+            "span_catalog_sha256":span_catalog_sha256(questioner_artifacts["span_catalog"]),
+            "span_catalog_file_sha256":sha256_file(questioner_artifacts["span_catalog_path"]),
+            "reasoning_contract_version":REASONING_CONTRACT_VERSION,
+            "reasoning_contract_sha256":reasoning_contract_sha256(
+                questioner_artifacts["reasoning_contracts"]),
+            "reasoning_contract_file_sha256":sha256_file(
+                questioner_artifacts["reasoning_contracts_path"]),
+            "questioner_schema_version":QUESTIONER_SCHEMA_VERSION,
+            "questioner_prompt_preflight":questioner_artifacts["prompt_preflight"],
+            "questioner_prompt_preflight_sha256":sha256_file(
+                questioner_artifacts["prompt_preflight_path"])})
     if solver_artifacts:
         extension = args.smoke_stage == "solver_grounding_extension"
         adaptive = args.smoke_stage == "solver_adaptive_item"
@@ -622,7 +696,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.smoke_stage == "questioner":
             result = orchestrator.question_smoke(questioner_artifacts["frozen"]["combined_dialogue"],
                 questioner_artifacts["valid_turn_ids"], questioner_artifacts["valid_session_ids"],
-                questioner_artifacts["letters"])
+                questioner_artifacts["letters"], span_catalog=questioner_artifacts["span_catalog"],
+                reasoning_contracts=questioner_artifacts["reasoning_contracts"])
             state = orchestrator.ledger.read("questioner-b00") or {}
             result.update({"physical_paid_generations":orchestrator.ledger.summary()["paid_api_generation_count"],
                 "request_status":state.get("status"), "usage":(state.get("response_metadata") or {}).get("usage"),
