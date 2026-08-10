@@ -1,0 +1,74 @@
+{
+  "manifest_version": "world_memory_slim_preflight_manifest_v1",
+  "roots": [
+    {
+      "root_id": "cc-train-episode-12596",
+      "input_path": "/root/autodl-tmp/gxy-selfplay/restart-n5-inputs/conversation_chronicles_v1/roots/cc-train-episode-12596/unified_root.json",
+      "expected_sha256": "b36aca2ff1d953d0b3e7104e8d073c01cc8e6bd25978f5d393787b048e3bcd23",
+      "source_kind": "unified_root"
+    },
+    {
+      "root_id": "cc-train-episode-13836",
+      "input_path": "/root/autodl-tmp/gxy-selfplay/restart-n5-inputs/conversation_chronicles_v1/roots/cc-train-episode-13836/unified_root.json",
+      "expected_sha256": "e1a6c932e0a7b558a455e21455150c80d0279d737e89d0bafa7f33bc2f7b56ce",
+      "source_kind": "unified_root"
+    },
+    {
+      "root_id": "cc-train-episode-146700",
+      "input_path": "/root/autodl-tmp/gxy-selfplay/restart-n5-inputs/conversation_chronicles_v1/roots/cc-train-episode-146700/unified_root.json",
+      "expected_sha256": "a7199f528b7382e716098bbee7b635f5e43c787cb0624ad96a57cbd3ba689818",
+      "source_kind": "unified_root"
+    },
+    {
+      "root_id": "cc-train-episode-178392",
+      "input_path": "/root/autodl-tmp/gxy-selfplay/restart-n5-inputs/conversation_chronicles_v1/roots/cc-train-episode-178392/unified_root.json",
+      "expected_sha256": "09fe3598a113edbf51709648d82898f434f637d874b442ac654ca6c7e28eb713",
+      "source_kind": "unified_root"
+    },
+    {
+      "root_id": "cc-train-episode-216742",
+      "input_path": "/root/autodl-tmp/gxy-selfplay/restart-n5-inputs/conversation_chronicles_v1/roots/cc-train-episode-216742/unified_root.json",
+      "expected_sha256": "9aad2313b583648c43f8e567a627c09169e2d2b476d5cf3b4b7ce58ebcb14533",
+      "source_kind": "unified_root"
+    },
+    {
+      "root_id": "cc-train-episode-34406",
+      "input_path": "/root/autodl-tmp/gxy-selfplay/restart-n5-inputs/conversation_chronicles_v1/roots/cc-train-episode-34406/unified_root.json",
+      "expected_sha256": "f79a65ba02b7d88e7c527d74d2a67d04b29c2252a22c44d079cc09641814c173",
+      "source_kind": "unified_root"
+    },
+    {
+      "root_id": "cc-train-episode-41409",
+      "input_path": "/root/autodl-tmp/gxy-selfplay/restart-n5-inputs/conversation_chronicles_v1/roots/cc-train-episode-41409/unified_root.json",
+      "expected_sha256": "c3b7ee8f09d5973cb706bcddfaa792a9065b14469c79cc16ab9fc5755db17f40",
+      "source_kind": "unified_root"
+    },
+    {
+      "root_id": "cc-train-episode-41625",
+      "input_path": "/root/autodl-tmp/gxy-selfplay/restart-n5-inputs/conversation_chronicles_v1/roots/cc-train-episode-41625/unified_root.json",
+      "expected_sha256": "f3b7039e27861a5b34465aaa64f6fc72d92e6e3325643dbf0bd789fc065d67ee",
+      "source_kind": "unified_root"
+    },
+    {
+      "root_id": "cc-train-episode-61555",
+      "input_path": "/root/autodl-tmp/gxy-selfplay/restart-n5-inputs/conversation_chronicles_v1/roots/cc-train-episode-61555/unified_root.json",
+      "expected_sha256": "c8976ae6bbb2c91403466a3987d4054bad099475c8eac16c9ab86a7be7244332",
+      "source_kind": "unified_root"
+    },
+    {
+      "root_id": "cc-train-episode-91716",
+      "input_path": "/root/autodl-tmp/gxy-selfplay/restart-n5-inputs/conversation_chronicles_v1/roots/cc-train-episode-91716/unified_root.json",
+      "expected_sha256": "1aef53099da7bcf5e0d05c0a379ad8ea96ef23a798bdc62c6f7afc1dcefd279f",
+      "source_kind": "unified_root"
+    },
+    {
+      "root_id": "locomo-conv-43",
+      "input_path": "/root/autodl-tmp/gxy-selfplay/base_restart_current_method_validation/05_stage2_repair_topup_from_stage1/train_mix/frontier_train.jsonl",
+      "expected_sha256": "afeeb8e749d9d90429cbd3bf81969deba07af3bd6cb76865b9acf269685a4837",
+      "source_kind": "locomo_attested_jsonl_record",
+      "source_line_number": 77,
+      "expected_identity": "conv-43",
+      "attestation_path": "/root/autodl-tmp/gxy-selfplay/restart-n5-runs/spell_cross_dialogue_calibration_5x3_v1/dialogues/conv-43/questioner/frozen/parent_source_attestation.json"
+    }
+  ]
+}

@@ -15,6 +15,7 @@ BOXED_PARSER_VERSION = "boxed_letter_v1"
 LEGACY_PARSER_MODE = "legacy_audit_only"
 BOXED_PARSER_MODE = BOXED_PARSER_VERSION
 NO_CONTEXT_PERMUTATION_DIAGNOSTIC_VERSION = "no_context_permutation_diagnostic_v1"
+BALANCED_GROUNDING_VERSION = "balanced_no_context_grounding_v2"
 
 
 def canonical_json(value: Any) -> str:
@@ -221,6 +222,64 @@ def classify_no_context_permutation_bias(orders: list[dict[str, Any]]) -> dict[s
         "answer_letter_counts":{letter:all_letters.count(letter) for letter in "ABCD"},
         "correct_semantic_followed_across_all_orders":semantic_leakage,
         "single_letter_selected_across_all_orders":position_bias}
+
+
+def balanced_grounding_decision(orders: list[dict[str, Any]]) -> dict[str, Any]:
+    """Classify K3 no-context results with the gold text in every A-D position.
+
+    The classifier deliberately separates semantic answer following from letter-position
+    preference.  It never upgrades an inconclusive or position-biased result to grounding pass.
+    """
+    if (not isinstance(orders, list) or len(orders) != 4 or
+            {row.get("gold_letter") for row in orders} != set("ABCD")):
+        return {"decision":"bad_no_context_eval",
+                "grounding_version":BALANCED_GROUNDING_VERSION,
+                "reason":"four_unique_gold_positions_required"}
+    summaries: list[dict[str, Any]] = []
+    all_answers: list[str] = []
+    all_rewards: list[int] = []
+    for row in orders:
+        answers = row.get("valid_answer_letters")
+        rewards = row.get("valid_rewards")
+        if (not isinstance(answers, list) or not isinstance(rewards, list) or
+                len(answers) != 3 or len(rewards) != 3 or
+                any(answer not in "ABCD" for answer in answers) or
+                any(reward not in (0, 1) for reward in rewards)):
+            return {"decision":"bad_no_context_eval",
+                    "grounding_version":BALANCED_GROUNDING_VERSION,
+                    "reason":"valid_k3_required_for_every_position"}
+        all_answers.extend(answers)
+        all_rewards.extend(rewards)
+        summaries.append({"order_id":row.get("order_id"),
+            "gold_letter":row["gold_letter"],
+            "valid_answer_letters":list(answers),
+            "valid_rewards":list(rewards),
+            "semantic_correct_count":sum(rewards),
+            "semantic_correct_rate":sum(rewards) / 3})
+    counts = {letter:all_answers.count(letter) for letter in "ABCD"}
+    semantic_following = all(reward == 1 for reward in all_rewards)
+    single_letter = len(set(all_answers)) == 1
+    dominant_letter = max(counts, key=counts.get)
+    dominant_count = counts[dominant_letter]
+    total_correct = sum(all_rewards)
+    if semantic_following:
+        decision = "bad_ground_semantic_leakage"
+    elif single_letter or dominant_count >= 9:
+        decision = "no_context_position_bias"
+    elif total_correct <= 4:
+        decision = "pass_grounding"
+    else:
+        decision = "grounding_inconclusive"
+    return {"decision":decision,
+        "grounding_version":BALANCED_GROUNDING_VERSION,
+        "orders":summaries, "total_valid_rollouts":12,
+        "semantic_correct_count":total_correct,
+        "semantic_correct_rate":total_correct / 12,
+        "answer_letter_counts":counts,
+        "dominant_answer_letter":dominant_letter,
+        "dominant_answer_letter_count":dominant_count,
+        "correct_semantic_followed_across_all_positions":semantic_following,
+        "single_letter_selected_across_all_positions":single_letter}
 
 
 def context_preflight(prompt_tokens: int, context_tokens: int, qa_tokens: int,

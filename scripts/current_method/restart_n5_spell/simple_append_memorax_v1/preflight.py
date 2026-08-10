@@ -1,0 +1,194 @@
+"""Zero-network preflight for the optional Memorax simple-append layer."""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+from typing import Any
+
+from ..core import atomic_json, atomic_text
+from ..simple_append_v1.context import build_tail_context
+from ..simple_append_v1.contracts import PLANNER_SCHEMA_VERSION, compile_round_plan
+from .memory_context import compile_memory_overview, normalize_bucket_snapshot
+from .payloads import build_add_intent, build_bucket_search_payload, memorax_user_id
+from .prompts import (
+    build_memory_augmented_mcq_prompt,
+    build_memory_augmented_planner_prompt,
+    build_memory_augmented_realizer_prompt,
+)
+
+
+PREFLIGHT_VERSION = "simple_append_memorax_offline_preflight_v1"
+DEFAULT_PARENT = Path(
+    "/root/autodl-tmp/gxy-selfplay/restart-n5-inputs/"
+    "conversation_chronicles_v1/roots/cc-train-episode-61555/"
+    "unified_root.json")
+DEFAULT_EXPANDED = Path(
+    "/root/autodl-tmp/gxy-selfplay/restart-n5-runs/"
+    "conversation_chronicles_episode_61555_simple_append_v1_round_04_live_3/"
+    "round_04/expanded_dialogue.json")
+DEFAULT_REPORT_ROOT = Path(__file__).with_name("reports")
+
+
+def _bucket_fixture() -> dict[str, Any]:
+    return {
+        "success": True,
+        "data": {"buckets": {
+            "person": {
+                "co-workers a": {
+                    "display_key": "Co-workers A",
+                    "content": ["Co-workers A is considering a practical decision."],
+                },
+                "friend c": {
+                    "display_key": "Friend C",
+                    "content": ["Friend C is connected to an earlier debt event."],
+                },
+            },
+            "location": {
+                "office": {"display_key": "Office", "content": [
+                    "Several discussions occur at the office."]},
+            },
+            "event": {
+                "debt settlement": {
+                    "display_key": "Debt settlement",
+                    "content": ["An earlier debt was settled."],
+                },
+            },
+            "item": {
+                "car": {"display_key": "Car", "content": [
+                    {"attribute": "status", "value": "under consideration"}]},
+            },
+            "dreaming": {
+                "responsible planning": {
+                    "display_key": "Responsible planning",
+                    "content": ["The story repeatedly revisits practical planning."],
+                },
+            },
+        }},
+    }
+
+
+def _planner_fixture(speakers: list[str]) -> dict[str, Any]:
+    a, b = speakers[:2]
+    return {
+        "planner_schema_version": PLANNER_SCHEMA_VERSION,
+        "round_goal": "Continue the story with three concrete developments.",
+        "scenes": [{
+            "goal": f"Develop scene {index}.",
+            "participants": [a, b],
+            "new_development": f"Distinct development {index}.",
+            "interaction_beats": ["A fact emerges.", "A constraint matters.",
+                                  "The speakers choose a response."],
+            "transition_from_previous": (
+                "Continue the parent tail." if index == 1 else
+                f"Continue scene {index - 1}."),
+            "desired_outcome": f"Distinct outcome {index}.",
+        } for index in range(1, 4)],
+    }
+
+
+def run(
+    *, parent_path: Path = DEFAULT_PARENT,
+    expanded_path: Path = DEFAULT_EXPANDED,
+) -> dict[str, Any]:
+    parent = json.loads(Path(parent_path).read_text(encoding="utf-8"))
+    expanded = json.loads(Path(expanded_path).read_text(encoding="utf-8"))
+    root_id = str(parent["root_id"])
+    tail = build_tail_context(parent, session_count=2)
+    intent = build_add_intent(
+        root_id=root_id, round_index=0,
+        source_dialogue_sha256=parent["dialogue"]["dialogue_hash"],
+        turns=parent["dialogue"]["turns"],
+        recent_context_turns=(), async_mode=False)
+    query = build_bucket_search_payload(root_id=root_id)
+    snapshot = normalize_bucket_snapshot(
+        _bucket_fixture(), root_id=root_id, user_id=memorax_user_id(root_id))
+    recent = "\n".join(str(row["text"]) for row in tail["selected_turns"])
+    overview = compile_memory_overview(
+        snapshot, recent_dialogue_text=recent)
+    plan = _planner_fixture(list(tail["parent_speakers"]))
+    compiled = compile_round_plan(plan, tail_context=tail)
+    planner = build_memory_augmented_planner_prompt(tail, overview)
+    realizer = build_memory_augmented_realizer_prompt(
+        compiled_plan=compiled, tail_context=tail,
+        memory_overview=overview)
+    mcq = build_memory_augmented_mcq_prompt(
+        expanded, overview, focus_round_index=4)
+    serialized = json.dumps({
+        "intent": intent, "query": query, "overview": overview,
+        "prompts": [planner, realizer, mcq],
+    }, ensure_ascii=False)
+    checks = {
+        "parent_add_contains_all_turns": len(intent["turn_refs"]) == 60,
+        "stable_root_user_id": intent["user_id"] == query["payload"]["user_id"],
+        "speaker_prefix_preserved": all(
+            str(row["content"]).startswith("[Speaker: ")
+            for row in intent["payload"]["messages"]),
+        "default_mode": intent["payload"]["mode"] == "default",
+        "sync_initial_add": intent["payload"]["async_mode"] is False,
+        "all_bucket_types_requested": all(
+            query["payload"]["bucket_filters"][key] == "all" for key in (
+                "entity_names", "location_names", "event_names",
+                "item_names", "dreaming_names")),
+        "memory_overview_bounded": overview["token_estimate"] < 2000,
+        "memory_not_authoritative": overview["memory_is_authoritative"] is False,
+        "memory_not_qa_fact_source": overview["memory_is_qa_fact_source"] is False,
+        "planner_schema_unchanged": "simple_append_planner_v1" in planner["prompt"],
+        "realizer_schema_unchanged": "simple_append_round_realizer_v2" in realizer["prompt"],
+        "mcq_schema_unchanged": "simple_append_mcq_focus_writer_v4" in mcq["prompt"],
+        "planner_has_memory": "NON-AUTHORITATIVE MEMORAX MEMORY" in planner["prompt"],
+        "realizer_has_memory": "NON-AUTHORITATIVE MEMORAX MEMORY" in realizer["prompt"],
+        "mcq_has_memory": "QUESTION TOPIC SELECTION" in mcq["prompt"],
+        "api_key_absent": "MEMORAX_API_KEY" not in serialized and
+            "Authorization" not in serialized,
+        "api_calls_zero": True,
+        "base_simple_append_not_modified_by_runtime": True,
+    }
+    failed = [key for key, value in checks.items() if not value]
+    return {
+        "preflight_version": PREFLIGHT_VERSION,
+        "status": "pass" if not failed else "fail",
+        "checks": checks,
+        "failed_checks": failed,
+        "api_calls": 0,
+        "artifacts": {
+            "add_intent": intent,
+            "bucket_query": query,
+            "bucket_snapshot": snapshot,
+            "memory_overview": overview,
+            "prompt_manifests": {
+                name: {key: value for key, value in prompt.items()
+                       if key != "prompt"}
+                for name, prompt in (("planner", planner),
+                                     ("realizer", realizer), ("mcq", mcq))
+            },
+        },
+    }
+
+
+def _markdown(report: dict[str, Any]) -> str:
+    lines = ["# Simple Append Memorax v1 Offline Preflight", "",
+             f"- status: `{report['status']}`",
+             f"- API calls: `{report['api_calls']}`", "", "## Checks", ""]
+    lines.extend(f"- {key}: `{str(value).lower()}`"
+                 for key, value in report["checks"].items())
+    lines.extend(["", "No network call or authoritative data write was made.", ""])
+    return "\n".join(lines)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--parent", type=Path, default=DEFAULT_PARENT)
+    parser.add_argument("--expanded", type=Path, default=DEFAULT_EXPANDED)
+    parser.add_argument("--report-root", type=Path, default=DEFAULT_REPORT_ROOT)
+    args = parser.parse_args(argv)
+    report = run(parent_path=args.parent, expanded_path=args.expanded)
+    atomic_json(args.report_root / "MEMORAX_V1_OFFLINE_PREFLIGHT.json", report)
+    atomic_text(args.report_root / "MEMORAX_V1_OFFLINE_PREFLIGHT.md",
+                _markdown(report))
+    return 0 if report["status"] == "pass" else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

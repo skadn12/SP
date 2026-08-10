@@ -102,6 +102,28 @@ def validate_config(c: dict[str, Any]) -> None:
     elif mode == "live_smoke_realizer_continuity":
         expected.update({"max_total_paid_api_generations":2, "max_realizer_generations":2,
                          "max_questioner_generations":0, "max_session_attempts_per_session":1})
+    elif mode == "live_graph_expansion":
+        expected.update({"max_total_paid_api_generations":30, "max_realizer_generations":30,
+                         "max_questioner_generations":0, "max_session_attempts_per_session":3,
+                         "max_post_freeze_memory_generations":0,
+                         "max_verifier_generations":0})
+    elif mode == "hybrid_semantic_leakage_repair":
+        expected.update({"max_total_paid_api_generations":2,
+                         "max_semantic_repair_generations":2,
+                         "max_realizer_generations":0,
+                         "max_questioner_generations":0,
+                         "max_verifier_generations":0,
+                         "semantic_repair_max_attempts":1,
+                         "semantic_repair_max_format_retries":1,
+                         "solver_effective_max_model_len":16384})
+    elif mode == "cross_dialogue_questioner_batch":
+        expected.update({"questioner_generations":1,
+                         "questioner_mcqs_per_generation":3,
+                         "questioner_total_candidates":3,
+                         "max_total_paid_api_generations":2,
+                         "max_realizer_generations":0,
+                         "max_questioner_generations":2,
+                         "max_verifier_generations":0})
     elif mode == "mock_e2e" or mode in (None, "dry_run"):
         expected.update({"questioner_generations":4, "questioner_mcqs_per_generation":3,
                          "questioner_total_candidates":12})
@@ -444,10 +466,12 @@ def validate_dialogue(parent: list[dict[str, Any]], child: list[dict[str, Any]],
     if child_tokens < 2000:
         errors.append("child_token_delta_below_2000")
     for i, session in enumerate(sessions):
+        coverage_only = session.get("stage_accounting_mode") == "coverage_only_v1"
         if i == 0 and not (session.get("used_parent_anchor_ids") or session.get("opening_hook_used")):
             errors.append("session_1_missing_anchor")
-        if i > 0 and not ((session.get("continued_unresolved_hook_ids") or []) +
-                          (session.get("resolved_hook_ids") or [])):
+        if (i > 0 and not coverage_only and
+                not ((session.get("continued_unresolved_hook_ids") or []) +
+                     (session.get("resolved_hook_ids") or []))):
             errors.append("session_missing_unresolved_hook")
         if set(session.get("continued_unresolved_hook_ids") or []) & set(session.get("resolved_hook_ids") or []):
             errors.append("continued_resolved_hook_overlap")

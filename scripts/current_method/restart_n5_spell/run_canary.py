@@ -18,11 +18,17 @@ from .prompts import (QUESTIONER_FEEDBACK_PROMPT_VERSION,
                       QUESTIONER_FORMAT_RETRY_VERSION, QUESTIONER_PROMPT_VERSION,
                       QUESTIONER_SPAN_IDS_ONLY_PROMPT_VERSION,
                       QUESTIONER_SPAN_IDS_ONLY_SCHEMA_VERSION,
+                      SEMANTIC_LEAKAGE_REPAIR_JSON_SCHEMA,
+                      SEMANTIC_LEAKAGE_REPAIR_PROMPT_VERSION,
+                      SEMANTIC_LEAKAGE_REPAIR_SCHEMA_VERSION,
                       SOLVER_NOTHINK_RESPONDER_PROMPT, build_questioner_feedback_prompt,
                       build_questioner_prompt,
+                      build_semantic_leakage_repair_prompt,
                       build_questioner_span_ids_only_feedback_prompt,
                       feedback_questioner_template_hash, prompt_template_hashes,
                       questioner_format_retry_suffix_hash,
+                      semantic_leakage_repair_template_hash,
+                      semantic_repair_format_retry_suffix_hash,
                       span_ids_only_questioner_template_hash)
 from .validation import (audit_continuity_hooks, materialize_questioner_item,
                          validate_config, validate_dual_admission_batch, validate_qa)
@@ -42,6 +48,10 @@ from .minimal_replay import (
     verify_bad_ground_permutation_source, verify_minimal_replay_source, verify_questioner_replay_source,
     verify_solver_feedback_source,
 )
+from .semantic_repair import (SEMANTIC_LEAKAGE_REPAIR_REASON,
+                              SEMANTIC_LEAKAGE_REPAIR_VERSION,
+                              build_semantic_repair_feedback_summary,
+                              verify_semantic_repair_sources)
 
 DEFAULTS = {
     "qa_format": "mcq", "max_total_paid_api_generations": 25,
@@ -186,6 +196,59 @@ def write_post_run_provenance(run_root: Path, project: Path, manifest: dict[str,
     if manifest.get("vllm_backend_source_sha256"):
         checks["vllm_backend_sha_match"] = (sha256_file(Path(__file__).with_name(
             "vllm_backends.py")) == manifest.get("vllm_backend_source_sha256"))
+    if manifest.get("live_backend_source_sha256"):
+        checks["live_backend_sha_match"] = (sha256_file(Path(__file__).with_name(
+            "live_backends.py")) == manifest.get("live_backend_source_sha256"))
+    if manifest.get("semantic_repair_source_sha256"):
+        checks["semantic_repair_source_sha_match"] = (sha256_file(Path(__file__).with_name(
+            "semantic_repair.py")) == manifest.get("semantic_repair_source_sha256"))
+    if manifest.get("cross_dialogue_calibration_source_sha256"):
+        checks["cross_dialogue_calibration_source_sha_match"] = (sha256_file(
+            Path(__file__).with_name("cross_dialogue_calibration.py")) == manifest.get(
+                "cross_dialogue_calibration_source_sha256"))
+    if manifest.get("cross_dialogue_runner_source_sha256"):
+        checks["cross_dialogue_runner_source_sha_match"] = (sha256_file(
+            Path(__file__).with_name("run_cross_dialogue_calibration.py")) == manifest.get(
+                "cross_dialogue_runner_source_sha256"))
+    if manifest.get("graph_expansion_source_sha256"):
+        checks["graph_expansion_source_sha_match"] = (sha256_file(
+            Path(__file__).with_name("graph_expansion.py")) == manifest.get(
+                "graph_expansion_source_sha256"))
+    if manifest.get("graph_expansion_runner_source_sha256"):
+        checks["graph_expansion_runner_source_sha_match"] = (sha256_file(
+            Path(__file__).with_name("run_graph_expansion.py")) == manifest.get(
+                "graph_expansion_runner_source_sha256"))
+    if manifest.get("full_graph_qa_pilot_source_sha256"):
+        checks["full_graph_qa_pilot_source_sha_match"] = (sha256_file(
+            Path(__file__).with_name("run_full_graph_qa_pilot.py")) == manifest.get(
+                "full_graph_qa_pilot_source_sha256"))
+    if manifest.get("evidence_view_ablation_source_sha256"):
+        checks["evidence_view_ablation_source_sha_match"] = (sha256_file(
+            Path(__file__).with_name("evidence_view_ablation.py")) == manifest.get(
+                "evidence_view_ablation_source_sha256"))
+    if manifest.get("evidence_view_ablation_runner_source_sha256"):
+        checks["evidence_view_ablation_runner_source_sha_match"] = (sha256_file(
+            Path(__file__).with_name("run_evidence_view_ablation.py")) == manifest.get(
+                "evidence_view_ablation_runner_source_sha256"))
+    if manifest.get("three_scope_canary_source_sha256"):
+        checks["three_scope_canary_source_sha_match"] = (sha256_file(
+            Path(__file__).with_name("three_scope_canary.py")) == manifest.get(
+                "three_scope_canary_source_sha256"))
+    if manifest.get("three_scope_canary_runner_source_sha256"):
+        checks["three_scope_canary_runner_source_sha_match"] = (sha256_file(
+            Path(__file__).with_name("run_three_scope_canary.py")) == manifest.get(
+                "three_scope_canary_runner_source_sha256"))
+    for field, filename in (
+            ("lineage_relation_miner_source_sha256", "lineage_relation_miner.py"),
+            ("lineage_qa_writer_source_sha256", "lineage_qa_writer.py"),
+            ("lineage_distractor_writer_source_sha256", "lineage_distractor_writer.py"),
+            ("lineage_full_dialogue_prompt_source_sha256",
+             "lineage_full_dialogue_prompts.py"),
+            ("lineage_three_stage_canary_source_sha256", "lineage_three_stage_canary.py"),
+            ("lineage_three_stage_runner_source_sha256", "run_lineage_three_stage_canary.py")):
+        if manifest.get(field):
+            checks[field.replace("_sha256", "_sha_match")] = (sha256_file(
+                Path(__file__).with_name(filename)) == manifest.get(field))
     report = {"run_id":manifest.get("run_id"),
               "run_manifest_sha256":sha256_file(run_root / "config/run_manifest.json"),
               **checks, "authoritative_release_provenance":all(checks.values()),
@@ -256,13 +319,16 @@ def select_minimal_solver_qa(raw_batch: list[dict], admission_item: dict, qa_id:
         raise RuntimeError("solver_qa_not_admitted")
     if not isinstance(materialized_qa, dict):
         raise RuntimeError("solver_qa_not_materialized")
-    generated = [item for item in raw_batch if isinstance(item, dict) and item.get("qa_id") == qa_id]
     item_index = admission_item.get("item_index")
-    if (len(generated) != 1 or not isinstance(item_index, int) or item_index not in (0, 1, 2) or
-            item_index >= len(reasoning_contracts) or materialized_qa.get("qa_id") != qa_id):
+    if (not isinstance(item_index, int) or item_index not in (0, 1, 2) or
+            item_index >= len(raw_batch) or item_index >= len(reasoning_contracts) or
+            materialized_qa.get("qa_id") != qa_id):
+        raise RuntimeError("solver_qa_integrity_mismatch")
+    generated = raw_batch[item_index]
+    if not isinstance(generated, dict) or generated.get("qa_id") != qa_id:
         raise RuntimeError("solver_qa_integrity_mismatch")
     strict_reasons = list((admission_item.get("strict_v7") or {}).get("reasons") or [])
-    rematerialized, errors, _ = materialize_spell_style_minimal(generated[0],
+    rematerialized, errors, _ = materialize_spell_style_minimal(generated,
         admission_item.get("target_letter"), span_catalog=span_catalog,
         strict_v7_reasons=strict_reasons, reasoning_contract=reasoning_contracts[item_index],
         schema_profile=str(materialized_qa.get("minimal_schema_profile") or
@@ -277,7 +343,7 @@ def select_minimal_solver_qa(raw_batch: list[dict], admission_item: dict, qa_id:
             options.get(letter) != materialized_qa.get("reference_answer_text") or
             materialized_qa.get("canonical_answer_text") != materialized_qa.get("reference_answer_text")):
         raise RuntimeError("solver_qa_integrity_mismatch")
-    return generated[0], dict(materialized_qa), admission_item
+    return generated, dict(materialized_qa), admission_item
 
 
 def build_input_dry_run_audit(*, parent_turns: int, parent_tokens: int, lineage: str,
@@ -311,7 +377,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run-root", type=Path, required=True)
     parser.add_argument("--lineage", default="conv-41")
     parser.add_argument("--resume", action="store_true")
-    parser.add_argument("--backend-mode", choices=("audit", "mock", "live", "local"), default="audit")
+    parser.add_argument("--backend-mode", choices=("audit", "mock", "live", "local", "hybrid"), default="audit")
     parser.add_argument("--smoke-stage", choices=("realizer", "realizer_continuity", "questioner",
                                                    "questioner_feedback",
                                                    "questioner_span_ids_feedback",
@@ -319,7 +385,8 @@ def main(argv: list[str] | None = None) -> int:
                                                    "solver_adaptive_item", "solver_boxed_output",
                                                    "questioner_minimal_replay",
                                                    "solver_minimal_full_audit",
-                                                   "solver_no_context_permutation_diagnostic"))
+                                                   "solver_no_context_permutation_diagnostic",
+                                                   "semantic_leakage_repair"))
     parser.add_argument("--admission-mode", choices=(STRICT_ADMISSION_MODE,
                                                        SPELL_STYLE_MINIMAL_MODE),
                         default=STRICT_ADMISSION_MODE)
@@ -335,6 +402,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--solver-prior-root", type=Path, default=Path(
         "/root/autodl-tmp/gxy-selfplay/restart-n5-runs/conv-41_spell_solver_smoke_s1_v2_nothink"))
     parser.add_argument("--solver-qa-id", default="batch0_item1")
+    parser.add_argument("--solver-diagnostic-source-root", type=Path)
     parser.add_argument("--bad-ground-feedback-root", type=Path, default=Path(
         "/root/autodl-tmp/gxy-selfplay/restart-n5-runs/conv-41_spell_v7_minimal_solver_batch0_item1_v1"))
     parser.add_argument("--reject-easy-feedback-root", type=Path, default=Path(
@@ -346,8 +414,14 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError("live execution requires an explicit supported smoke stage")
     if args.backend_mode == "local" and args.smoke_stage not in ("solver_no_context", "solver_grounding_extension", "solver_adaptive_item", "solver_boxed_output", "solver_minimal_full_audit", "solver_no_context_permutation_diagnostic"):
         raise RuntimeError("local execution requires an explicit supported solver smoke")
+    if args.backend_mode == "hybrid" and args.smoke_stage != "semantic_leakage_repair":
+        raise RuntimeError("hybrid execution is restricted to semantic leakage repair")
+    if args.smoke_stage == "semantic_leakage_repair" and (
+            args.backend_mode != "hybrid" or args.solver_diagnostic_source_root is None):
+        raise RuntimeError("semantic repair requires hybrid mode and a diagnostic source root")
     if args.smoke_stage in ("questioner_minimal_replay", "solver_minimal_full_audit",
-                            "solver_no_context_permutation_diagnostic") and \
+                            "solver_no_context_permutation_diagnostic",
+                            "semantic_leakage_repair") and \
             args.admission_mode != SPELL_STYLE_MINIMAL_MODE:
         raise RuntimeError("minimal replay/Solver requires spell_style_minimal_v1")
     if args.smoke_stage == "questioner_minimal_replay" and args.backend_mode != "audit":
@@ -362,7 +436,7 @@ def main(argv: list[str] | None = None) -> int:
     data = load_lineage(args.input_root, args.lineage, legacy)
     model_config = read_json(solver / "config.json")
     live_config = None
-    if args.backend_mode == "live":
+    if args.backend_mode in ("live", "hybrid"):
         from .live_backends import load_challenger_config
         live_config = load_challenger_config(args.api_config)
     spell_repo = Path("/root/autodl-tmp/third_party_readonly/Qwen-Doc")
@@ -388,6 +462,7 @@ def main(argv: list[str] | None = None) -> int:
             else "local_solver_boxed_output_smoke" if args.backend_mode == "local" and args.smoke_stage == "solver_boxed_output"
             else "local_solver_grounding_extension_smoke" if args.backend_mode == "local" and args.smoke_stage == "solver_grounding_extension"
             else "local_solver_no_context_smoke" if args.backend_mode == "local"
+            else "hybrid_semantic_leakage_repair" if args.backend_mode == "hybrid"
             else "mock_e2e" if args.backend_mode == "mock"
             else "spell_style_minimal_replay" if args.smoke_stage == "questioner_minimal_replay"
             else "dry_run")
@@ -434,6 +509,21 @@ def main(argv: list[str] | None = None) -> int:
             "solver_max_new_tokens":32, "solver_enable_thinking":False,
             "solver_add_generation_prompt":True, "solver_effective_max_model_len":16384,
             "solver_tokenizer_path":str(tokenizer), "solver_gpu_memory_utilization":0.80})
+    if args.backend_mode == "hybrid":
+        resolved.update({"smoke_stage":args.smoke_stage,
+            "max_total_paid_api_generations":2, "max_semantic_repair_generations":2,
+            "max_realizer_generations":0, "max_questioner_generations":0,
+            "max_post_freeze_memory_generations":0, "max_verifier_generations":0,
+            "max_session_attempts_per_session":1, "max_local_solver_generations":52,
+            "semantic_repair_max_attempts":1, "semantic_repair_max_format_retries":1,
+            "solver_temperature":0.7, "solver_top_p":0.9,
+            "solver_max_new_tokens":32, "solver_enable_thinking":False,
+            "solver_add_generation_prompt":True, "solver_effective_max_model_len":16384,
+            "solver_tokenizer_path":str(tokenizer), "solver_gpu_memory_utilization":0.80,
+            "challenger_temperature":live_config.temperature,
+            "challenger_questioner_max_tokens":live_config.questioner_max_tokens,
+            "challenger_semantic_repair_max_tokens":min(
+                live_config.questioner_max_tokens, 2048)})
     if args.smoke_stage == "questioner_minimal_replay":
         resolved.update({"max_total_paid_api_generations":0, "max_realizer_generations":0,
             "max_questioner_generations":0, "max_post_freeze_memory_generations":0,
@@ -455,6 +545,7 @@ def main(argv: list[str] | None = None) -> int:
     questioner_artifacts: dict[str, object] = {}
     solver_artifacts: dict[str, object] = {}
     minimal_replay_artifacts: dict[str, object] = {}
+    repair_artifacts: dict[str, object] = {}
     if args.smoke_stage == "questioner_minimal_replay":
         source = args.questioner_source_root.resolve()
         attestation = verify_questioner_replay_source(source)
@@ -610,6 +701,67 @@ def main(argv: list[str] | None = None) -> int:
             "reasoning_contracts_path":reasoning_contracts_path,
             "prompt_preflight":prompt_preflight, "prompt_preflight_path":prompt_preflight_path,
             "feedback_attestations":feedback_attestations, "feedback_path":feedback_path}
+    if args.backend_mode == "hybrid":
+        source = verify_semantic_repair_sources(
+            solver_root=args.solver_qa_source_root.resolve(),
+            diagnostic_root=args.solver_diagnostic_source_root.resolve(),
+            qa_id=args.solver_qa_id)
+        repaired_qa_id = f"{args.solver_qa_id}_repair1"
+        admission = source["frozen_qa"]["schema_acceptance"]
+        item_index = admission.get("item_index")
+        if not isinstance(item_index, int) or item_index not in (0, 1, 2):
+            raise RuntimeError("semantic_repair_source_qa_integrity_failed")
+        reasoning_contract = source["reasoning_contracts"][item_index]
+        frozen_dialogue = source["context"]["combined_dialogue"]
+        rendered = build_semantic_leakage_repair_prompt(
+            frozen_dialogue=frozen_dialogue, span_catalog=source["span_catalog"],
+            original_item=source["original_raw_item"], repaired_qa_id=repaired_qa_id,
+            target_answer_letter=source["target_letter"],
+            original_no_context=source["original_no_context"],
+            permutation_diagnostic=source["permutation_diagnostic"])
+        rendered_tokens = len(length_tokenizer.encode(rendered, add_special_tokens=False))
+        preflight = {"rendered_prompt_tokens":rendered_tokens,
+            "max_generation_tokens":resolved["challenger_semantic_repair_max_tokens"],
+            "total_tokens":rendered_tokens + resolved["challenger_semantic_repair_max_tokens"],
+            "backend_context_limit":resolved["questioner_backend_context_limit"]}
+        preflight["decision"] = ("pass" if preflight["total_tokens"] <=
+            preflight["backend_context_limit"] else "reject_context_overflow")
+        if preflight["decision"] != "pass":
+            raise RuntimeError("semantic_repair_prompt_context_overflow")
+        frozen_paths = {"context":args.run_root / "frozen/questioner_smoke_context.json",
+            "span_catalog":args.run_root / "frozen/questioner_span_catalog.json",
+            "reasoning_contracts":args.run_root / "frozen/questioner_reasoning_contracts.json",
+            "original_item":args.run_root / "frozen/original_questioner_item.json",
+            "diagnostic":args.run_root / "frozen/authoritative_permutation_diagnostic.json",
+            "source_attestation":args.run_root / "frozen/semantic_repair_source_attestation.json",
+            "prompt_preflight":args.run_root / "frozen/semantic_repair_prompt_preflight.json",
+            "seed_schedule":args.run_root / "frozen/seed_schedule.json"}
+        freeze_json(frozen_paths["context"], source["context"], args.resume)
+        freeze_json(frozen_paths["span_catalog"], source["span_catalog"], args.resume)
+        freeze_json(frozen_paths["reasoning_contracts"], source["reasoning_contracts"], args.resume)
+        freeze_json(frozen_paths["original_item"], source["original_raw_item"], args.resume)
+        freeze_json(frozen_paths["diagnostic"], source["permutation_diagnostic"], args.resume)
+        source_attestation = {key:value for key,value in source.items() if key not in {
+            "qa", "frozen_qa", "original_no_context", "context", "span_catalog",
+            "reasoning_contracts", "original_raw_item", "permutation_diagnostic"}}
+        freeze_json(frozen_paths["source_attestation"], source_attestation, args.resume)
+        freeze_json(frozen_paths["prompt_preflight"], preflight, args.resume)
+        seed_schedule = {}
+        for evaluation_mode, order_ids, slots in (
+                ("no_context", ("original",), range(5)),
+                ("full_context", ("original",), range(5)),
+                ("evidence_only", ("original",), range(3)),
+                ("evidence_masked", ("original",), range(3)),
+                ("option_permutation", ("perm1", "perm2"), range(5))):
+            for order_id in order_ids:
+                key = f"{evaluation_mode}:{order_id}"
+                seed_schedule[key] = {str(slot):[int(hashlib.sha256(
+                    f"{repaired_qa_id}:{evaluation_mode}:{order_id}:{slot}:{retry}".encode()
+                ).hexdigest()[:8], 16) for retry in (0, 1)] for slot in slots}
+        freeze_json(frozen_paths["seed_schedule"], seed_schedule, args.resume)
+        repair_artifacts = {"source":source, "repaired_qa_id":repaired_qa_id,
+            "reasoning_contract":reasoning_contract, "rendered":rendered,
+            "preflight":preflight, "frozen_paths":frozen_paths}
     if args.backend_mode == "local":
         boxed_smoke = args.smoke_stage == "solver_boxed_output"
         minimal_audit = args.smoke_stage == "solver_minimal_full_audit"
@@ -911,8 +1063,11 @@ def main(argv: list[str] | None = None) -> int:
         "challenger_model_identifier": live_config.model if live_config else "mock-scripted-v1" if args.backend_mode == "mock" else "NONE_LOCAL_ONLY" if args.backend_mode == "local" else "UNSET_DRY_RUN",
         "backend_mode": args.backend_mode,
         "sampling_parameters": ({"temperature":live_config.temperature,
-            "max_tokens":live_config.questioner_max_tokens if args.smoke_stage in
-                ("questioner", "questioner_feedback", "questioner_span_ids_feedback")
+            "max_tokens":resolved["challenger_semantic_repair_max_tokens"]
+                if args.smoke_stage == "semantic_leakage_repair" else
+                live_config.questioner_max_tokens if args.smoke_stage in
+                ("questioner", "questioner_feedback", "questioner_span_ids_feedback",
+                 )
                 else live_config.realizer_max_tokens}
             if live_config else {"temperature":resolved["solver_temperature"], "top_p":resolved["solver_top_p"],
                 "max_tokens":resolved["solver_max_new_tokens"]} if args.backend_mode == "local" else {}),
@@ -926,6 +1081,9 @@ def main(argv: list[str] | None = None) -> int:
             "reasoning_and_difficulty":"local_contract_derivation_v1"}
             if args.backend_mode == "live" and args.smoke_stage in
                 ("questioner", "questioner_feedback", "questioner_span_ids_feedback") else
+            {"task":"semantic_leakage_repair", "normal_requests":1,
+             "maximum_format_retries":1, "items_per_request":1}
+            if args.backend_mode == "hybrid" else
             {"generations": 4, "mcqs_per_generation": 3, "total_candidates": 12,
              "option_binding":"local_option_binding_v1",
              "evidence_binding":"local_span_catalog_v1",
@@ -935,6 +1093,10 @@ def main(argv: list[str] | None = None) -> int:
             "max_questioner_generations":resolved["max_questioner_generations"],
             "max_post_freeze_memory_generations":0, "max_verifier_generations":0}
             if args.backend_mode == "live" else
+            {"max_total_paid_api_generations":resolved["max_total_paid_api_generations"],
+             "max_semantic_repair_generations":resolved["max_semantic_repair_generations"],
+             "max_realizer_generations":0, "max_questioner_generations":0,
+             "max_verifier_generations":0} if args.backend_mode == "hybrid" else
             {k: v for k, v in resolved.items() if k.startswith("max_") and "generations" in k}),
         "spell_repo_status": "available", "spell_repo_path": str(spell_repo),
         "spell_commit": spell_commit, "spell_dirty": spell_dirty,
@@ -948,9 +1110,9 @@ def main(argv: list[str] | None = None) -> int:
         "ledger_source_sha256":sha256_file(Path(__file__).with_name("ledger.py")),
         "run_canary_source_sha256":sha256_file(Path(__file__)),
         "backend_source_sha256": sha256_file(Path(__file__).with_name("mock_backends.py")) if args.backend_mode == "mock" else "",
-        "live_backend_source_sha256": sha256_file(Path(__file__).with_name("live_backends.py")) if args.backend_mode == "live" else "",
-        "api_config_path": str(args.api_config.resolve()) if args.backend_mode == "live" else "",
-        "api_config_sha256": sha256_file(args.api_config) if args.backend_mode == "live" else "",
+        "live_backend_source_sha256": sha256_file(Path(__file__).with_name("live_backends.py")) if args.backend_mode in ("live", "hybrid") else "",
+        "api_config_path": str(args.api_config.resolve()) if args.backend_mode in ("live", "hybrid") else "",
+        "api_config_sha256": sha256_file(args.api_config) if args.backend_mode in ("live", "hybrid") else "",
     }
     if args.admission_mode == SPELL_STYLE_MINIMAL_MODE:
         manifest.update({"minimal_admission_mode":SPELL_STYLE_MINIMAL_MODE,
@@ -1042,6 +1204,63 @@ def main(argv: list[str] | None = None) -> int:
                 "strict_v7_accepted_count"],
             "minimal_accepted_count":minimal_replay_artifacts["report"][
                 "minimal_accepted_count"]})
+    if repair_artifacts:
+        source = repair_artifacts["source"]
+        paths = repair_artifacts["frozen_paths"]
+        manifest.update({"semantic_repair_version":SEMANTIC_LEAKAGE_REPAIR_VERSION,
+            "semantic_repair_reason":SEMANTIC_LEAKAGE_REPAIR_REASON,
+            "semantic_repair_prompt_version":SEMANTIC_LEAKAGE_REPAIR_PROMPT_VERSION,
+            "semantic_repair_prompt_sha256":semantic_leakage_repair_template_hash(),
+            "semantic_repair_rendered_prompt_sha256":sha256_bytes(
+                repair_artifacts["rendered"].encode()),
+            "semantic_repair_schema_version":SEMANTIC_LEAKAGE_REPAIR_SCHEMA_VERSION,
+            "semantic_repair_schema_sha256":sha256_bytes(canonical_json(
+                SEMANTIC_LEAKAGE_REPAIR_JSON_SCHEMA).encode()),
+            "semantic_repair_source_sha256":sha256_file(
+                Path(__file__).with_name("semantic_repair.py")),
+            "v8_generation_prompt_version":QUESTIONER_SPAN_IDS_ONLY_PROMPT_VERSION,
+            "v8_generation_prompt_sha256":span_ids_only_questioner_template_hash(),
+            "format_retry_suffix_version":QUESTIONER_FORMAT_RETRY_VERSION,
+            "format_retry_suffix_sha256":semantic_repair_format_retry_suffix_hash(),
+            "repair_attempt_limit_per_item":1, "format_retry_limit":1,
+            "parent_qa_id":args.solver_qa_id,
+            "repaired_qa_id":repair_artifacts["repaired_qa_id"],
+            "repair_index":1, "target_answer_letter":source["target_letter"],
+            "source_solver_root":source["source_root"],
+            "source_solver_manifest_sha256":source["source_manifest_sha256"],
+            "source_solver_report_sha256":source["source_report_sha256"],
+            "source_solver_provenance_sha256":source["source_provenance_sha256"],
+            "source_solver_ledger_aggregate_sha256":source[
+                "solver_ledger_aggregate_sha256"],
+            "source_qa_wrapper_sha256":source["source_qa_wrapper_sha256"],
+            "source_materialized_qa_sha256":source["source_materialized_qa_sha256"],
+            "source_diagnostic_root":source["diagnostic_root"],
+            "source_diagnostic_manifest_sha256":source["diagnostic_manifest_sha256"],
+            "source_diagnostic_report_sha256":source["diagnostic_report_sha256"],
+            "source_diagnostic_provenance_sha256":source["diagnostic_provenance_sha256"],
+            "source_diagnostic_ledger_aggregate_sha256":source[
+                "diagnostic_ledger_aggregate_sha256"],
+            "frozen_dialogue_sha256":sha256_file(paths["context"]),
+            "span_catalog_sha256":span_catalog_sha256(source["span_catalog"]),
+            "span_catalog_file_sha256":sha256_file(paths["span_catalog"]),
+            "reasoning_contract_sha256":reasoning_contract_sha256(
+                source["reasoning_contracts"]),
+            "source_attestation_sha256":sha256_file(paths["source_attestation"]),
+            "semantic_repair_prompt_preflight":repair_artifacts["preflight"],
+            "semantic_repair_max_tokens":resolved[
+                "challenger_semantic_repair_max_tokens"],
+            "semantic_repair_prompt_preflight_sha256":sha256_file(paths[
+                "prompt_preflight"]),
+            "seed_schedule_sha256":sha256_file(paths["seed_schedule"]),
+            "vllm_backend_source_sha256":sha256_file(Path(__file__).with_name(
+                "vllm_backends.py")),
+            "solver_inference_protocol":{"enable_thinking":False,
+                "add_generation_prompt":True, "tokenizer_path":str(tokenizer),
+                "temperature":resolved["solver_temperature"],
+                "top_p":resolved["solver_top_p"],
+                "max_tokens":resolved["solver_max_new_tokens"],
+                "max_model_len":resolved["solver_effective_max_model_len"],
+                "responder_output_format":"<box>[A-D]</box>"}})
     if solver_artifacts:
         extension = args.smoke_stage == "solver_grounding_extension"
         adaptive = args.smoke_stage == "solver_adaptive_item"
@@ -1244,6 +1463,134 @@ def main(argv: list[str] | None = None) -> int:
         atomic_json(args.run_root / "reports/live_realizer_smoke.json", smoke)
         write_post_run_provenance(args.run_root, project, manifest)
         print(json.dumps({"manifest":str(manifest_path), "live_realizer_smoke":smoke}, indent=2))
+    elif args.backend_mode == "hybrid":
+        from .live_backends import (LiveSemanticRepairBackend,
+                                    OpenAICompatibleChallengerClient)
+        from .orchestrator import CanaryOrchestrator
+        from .vllm_backends import VLLMSolverBackend
+
+        source = repair_artifacts["source"]
+        client = OpenAICompatibleChallengerClient(live_config)
+        live_orchestrator = CanaryOrchestrator(run_root=args.run_root, manifest=manifest,
+            config=resolved, data=data, tokenizer=length_tokenizer, realizer=None,
+            questioner=LiveSemanticRepairBackend(client,
+                resolved["challenger_semantic_repair_max_tokens"]),
+            solver=None, backend_mode="live")
+        source_contract = {"source_solver_manifest_sha256":source["source_manifest_sha256"],
+            "source_solver_report_sha256":source["source_report_sha256"],
+            "source_solver_ledger_aggregate_sha256":source["solver_ledger_aggregate_sha256"],
+            "source_diagnostic_manifest_sha256":source["diagnostic_manifest_sha256"],
+            "source_diagnostic_report_sha256":source["diagnostic_report_sha256"],
+            "source_diagnostic_ledger_aggregate_sha256":source[
+                "diagnostic_ledger_aggregate_sha256"],
+            "source_frozen_dialogue_sha256":sha256_file(repair_artifacts[
+                "frozen_paths"]["context"]),
+            "source_span_catalog_sha256":span_catalog_sha256(source["span_catalog"])}
+        admission = live_orchestrator.semantic_leakage_repair(
+            parent_qa_id=args.solver_qa_id,
+            repaired_qa_id=repair_artifacts["repaired_qa_id"],
+            target_letter=source["target_letter"],
+            semantic_prompt=repair_artifacts["rendered"],
+            span_catalog=source["span_catalog"],
+            reasoning_contract=repair_artifacts["reasoning_contract"],
+            source_contract=source_contract)
+        solver_result = None
+        solver_report = None
+        solver_preflight_path = None
+        if admission.get("materialized_qa_path"):
+            qa = admission["admission"]["materialized_qa"]
+            frozen_dialogue = source["context"]["combined_dialogue"]
+            evidence_contexts = build_answer_evidence_contexts(qa,
+                span_catalog=source["span_catalog"], frozen_dialogue=frozen_dialogue)
+            prompt_modes = {"no_context":[], "full_context":frozen_dialogue,
+                "evidence_only":evidence_contexts["evidence_only"],
+                "evidence_masked":evidence_contexts["evidence_masked"]}
+            solver_preflight = {}
+            for evaluation_mode, turns in prompt_modes.items():
+                rendered = render_solver_prompt(length_tokenizer, qa, turns)
+                tokens = len(length_tokenizer.encode(rendered, add_special_tokens=False))
+                solver_preflight[evaluation_mode] = {
+                    "rendered_prompt_sha256":sha256_bytes(rendered.encode()),
+                    "rendered_prompt_tokens":tokens,
+                    "reserved_generation_tokens":resolved["reserved_generation_tokens"],
+                    "solver_max_model_len":resolved["solver_effective_max_model_len"],
+                    "preflight_decision":"pass" if tokens + resolved[
+                        "reserved_generation_tokens"] <= resolved[
+                        "solver_effective_max_model_len"] else "reject_context_overflow"}
+            if any(value["preflight_decision"] != "pass"
+                   for value in solver_preflight.values()):
+                raise RuntimeError("semantic repair Solver context overflow")
+            solver_preflight_path = args.run_root / "frozen/repaired_solver_prompt_preflight.json"
+            freeze_json(solver_preflight_path, solver_preflight, args.resume)
+            backend = VLLMSolverBackend(model_path=solver, tokenizer_path=tokenizer,
+                max_model_len=resolved["solver_effective_max_model_len"],
+                temperature=resolved["solver_temperature"], top_p=resolved["solver_top_p"],
+                max_tokens=resolved["solver_max_new_tokens"],
+                gpu_memory_utilization=resolved["solver_gpu_memory_utilization"])
+            solver_orchestrator = CanaryOrchestrator(run_root=args.run_root,
+                manifest=manifest, config=resolved, data=data, tokenizer=length_tokenizer,
+                realizer=None, questioner=None, solver=backend, backend_mode="local")
+            solver_result = solver_orchestrator.audit_semantic_repair_candidate(
+                qa, args.solver_qa_id)
+            stages = [solver_result.get("initial_no_context"),
+                solver_result.get("adaptive_extension"), solver_result.get("full_context"),
+                solver_result.get("evidence_only"), solver_result.get("evidence_masked")]
+            stages.extend(order.get("rollout") for order in
+                          solver_result.get("option_orders") or [])
+            stages = [stage for stage in stages if isinstance(stage, dict)]
+            raw_rollouts = [row for stage in stages for row in stage.get("rollouts") or []]
+            solver_report = {"result":solver_result,
+                "vllm_generation_count":sum(stage.get("raw_generations", 0)
+                                              for stage in stages),
+                "model_identifier":backend.model_identifier,
+                "solver_max_model_len":backend.max_model_len,
+                "model_load_latency_seconds":backend.load_latency_seconds,
+                "generation_latency_seconds":sum(float((row.get("backend_metadata") or {}).get(
+                    "latency_seconds", 0.0)) for row in raw_rollouts)}
+        final_decision = (solver_result.get("final_decision") if solver_result else
+                          admission["final_decision"])
+        ledger_summary = live_orchestrator.ledger.summary()
+        final_state = live_orchestrator.ledger.read(admission["final_request_id"]) or {}
+        report = {"mode":mode, "semantic_repair_version":SEMANTIC_LEAKAGE_REPAIR_VERSION,
+            "parent_qa_id":args.solver_qa_id,
+            "qa_id":repair_artifacts["repaired_qa_id"], "repair_index":1,
+            "repair_attempt_count":1, "repair_reason":SEMANTIC_LEAKAGE_REPAIR_REASON,
+            "repair":admission, "solver":solver_report,
+            "repair_json_valid":admission["repair_json_valid"],
+            "repair_minimal_accepted":bool(admission.get("materialized_qa_path")),
+            "repair_passed_grounding":bool(solver_result and
+                solver_result.get("grounding_decision") == "pass_grounding"),
+            "final_decision":final_decision, **ledger_summary,
+            "semantic_repair_normal_requests":1,
+            "semantic_repair_format_retry_requests":max(0,
+                admission["physical_api_request_count"] - 1),
+            "paid_api_generations":ledger_summary["paid_api_generation_count"],
+            "usage":(final_state.get("response_metadata") or {}).get("usage"),
+            "realizer_generations":0, "ordinary_questioner_generations":0,
+            "verifier_generations":0, "training_runs":0,
+            "full_context_ran":bool(solver_result and solver_result.get("full_context")),
+            "evidence_audit_ran":bool(solver_result and solver_result.get("evidence_audit")),
+            "option_audit_ran":bool(solver_result and solver_result.get("option_audit"))}
+        report_path = args.run_root / "reports/semantic_repair_full_audit.json"
+        atomic_json(report_path, report)
+        ledger_hashes = {path.stem:sha256_file(path) for path in sorted(
+            (args.run_root / "ledger/requests").glob("*.json"))}
+        output_provenance = {"run_manifest_sha256":sha256_file(manifest_path),
+            "repair_report_sha256":sha256_file(report_path),
+            "repair_raw_sha256":(admission["attempts"][-1].get("raw_response_sha256")
+                                  if admission["attempts"] else None),
+            "repair_materialized_qa_sha256":admission.get("materialized_qa_sha256"),
+            "solver_prompt_preflight_sha256":sha256_file(solver_preflight_path)
+                if solver_preflight_path else None,
+            "ledger_sha256":ledger_hashes,
+            "ledger_aggregate_sha256":sha256_bytes(canonical_json(ledger_hashes).encode()),
+            "final_decision":final_decision}
+        atomic_json(args.run_root / "reports/semantic_repair_output_provenance.json",
+                    output_provenance)
+        write_post_run_provenance(args.run_root, project, manifest)
+        print(json.dumps({"manifest":str(manifest_path),
+            "semantic_leakage_repair":report}, indent=2))
+        return 0
     elif args.backend_mode == "local":
         from .orchestrator import CanaryOrchestrator
         from .vllm_backends import VLLMSolverBackend

@@ -6,9 +6,11 @@ import copy
 from pathlib import Path
 
 from scripts.current_method.restart_n5_spell.core import (
+    canonical_json,
     classify_reward_group, collect_valid_rollouts, context_preflight, grounding_decision,
     local_reward, option_audit, parse_mcq_response, parse_boxed_mcq_answer,
     classify_frontier_pre_audit, classify_no_context_permutation_bias, full_context_gate,
+    sha256_bytes,
 )
 from scripts.current_method.restart_n5_spell.core import sha256_file
 from scripts.current_method.restart_n5_spell.run_canary import (
@@ -19,7 +21,8 @@ from scripts.current_method.restart_n5_spell.backends import BackendResponse
 from scripts.current_method.restart_n5_spell.core import atomic_json
 from scripts.current_method.restart_n5_spell.ledger import AmbiguousRequestError, RequestLedger
 from scripts.current_method.restart_n5_spell.live_backends import (
-    ChallengerAPIConfig, LiveRealizerBackend, OpenAICompatibleChallengerClient,
+    ChallengerAPIConfig, LiveRealizerBackend, LiveSemanticRepairBackend,
+    OpenAICompatibleChallengerClient,
 )
 from scripts.current_method.restart_n5_spell.backends import RealizerRequest
 from scripts.current_method.restart_n5_spell.orchestrator import CanaryOrchestrator
@@ -27,10 +30,16 @@ from scripts.current_method.restart_n5_spell.input_adapter import dialogue_conte
 from scripts.current_method.restart_n5_spell import input_adapter as input_adapter_module
 from scripts.current_method.restart_n5_spell import validation as validation_module
 from scripts.current_method.restart_n5_spell import run_canary as run_canary_module
+from scripts.current_method.restart_n5_spell import run_cross_dialogue_calibration as cross_calibration_runner
 from scripts.current_method.restart_n5_spell.prompts import (
-    REALIZER_OUTPUT_SCHEMA, build_questioner_feedback_prompt, build_questioner_prompt,
-    build_questioner_span_ids_only_feedback_prompt, build_realizer_prompt,
-    feedback_questioner_template_hash, prompt_template_hashes,
+    REALIZER_OUTPUT_SCHEMA, build_graph_realizer_prompt,
+    build_graph_realizer_retry_prompt, build_questioner_feedback_prompt,
+    build_questioner_prompt, build_questioner_span_ids_only_feedback_prompt, build_realizer_prompt,
+    build_semantic_leakage_repair_prompt,
+    feedback_questioner_template_hash, graph_realizer_template_hash, prompt_template_hashes,
+    semantic_leakage_repair_template_hash,
+    SEMANTIC_LEAKAGE_REPAIR_JSON_SCHEMA,
+    SEMANTIC_LEAKAGE_REPAIR_PROMPT_VERSION,
     span_ids_only_questioner_template_hash,
 )
 from scripts.current_method.restart_n5_spell.validation import (
@@ -45,6 +54,63 @@ from scripts.current_method.restart_n5_spell.questioner_contract import (
     SPAN_CATALOG_VERSION, REASONING_CONTRACT_VERSION, QUESTIONER_SCHEMA_VERSION,
     build_span_catalog, default_reasoning_contracts, derive_local_difficulty,
     reasoning_contract_sha256, span_catalog_sha256,
+)
+from scripts.current_method.restart_n5_spell.semantic_repair import (
+    admit_semantic_repair_item, build_semantic_repair_feedback_summary,
+    semantic_repair_eligibility,
+)
+from scripts.current_method.restart_n5_spell.cross_dialogue_calibration import (
+    CALIBRATION_LINEAGES, CALIBRATION_TARGET_LETTERS, calibration_plan,
+    freeze_parent_dialogue, summarize_calibration,
+    verify_semantic_repair_feedback_source,
+)
+from scripts.current_method.restart_n5_spell.graph_expansion import (
+    GRAPH_SCENE_CONTRACT_VERSION, compile_graph_scene_contracts,
+    graph_completion_report, normalize_graph_realizer_managed_ids,
+    validate_graph_scene_output,
+)
+from scripts.current_method.restart_n5_spell.evidence_view_ablation import (
+    BALANCED_VIEW, CHILD_ONLY_VIEW, BALANCED_PARENT_SELECTION,
+    build_questioner_evidence_view, evidence_view_sha256,
+    selected_evidence_diagnostics, uniform_endpoint_indices,
+)
+from scripts.current_method.restart_n5_spell.three_scope_canary import (
+    CHILD_LOCAL, PARENT_CHILD_JOINT, PARENT_LOCAL, SCOPED_BATCH_JSON_SCHEMA,
+    SCOPE_ASSIGNMENTS, batch_distractor_schema_valid, build_three_scope_prompt,
+    classify_joint_necessity, compile_arc_lineage_views,
+    run_scoped_questioner_batch, strip_scope_field, validate_scope_item,
+)
+from scripts.current_method.restart_n5_spell.lineage_relation_miner import (
+    RELATION_MINER_JSON_SCHEMA, build_relation_miner_prompt,
+    relation_schema_sha256, validate_relation_candidate,
+)
+from scripts.current_method.restart_n5_spell.lineage_qa_writer import (
+    QA_WRITER_JSON_SCHEMA, build_qa_writer_prompt,
+    validate_question_answer_object,
+)
+from scripts.current_method.restart_n5_spell.lineage_distractor_writer import (
+    DISTRACTOR_WRITER_JSON_SCHEMA, build_distractor_writer_prompt,
+    validate_attempt_feedback, validate_distractor_object,
+)
+from scripts.current_method.restart_n5_spell.lineage_three_stage_canary import (
+    ApiBudget, build_relation_diagnostic_contexts,
+    classify_joint_necessity_v1, deterministic_answer_placement,
+    materialize_three_stage_mcq, run_single_object_task,
+    should_stop_after_first_retain_frontier,
+)
+from scripts.current_method.restart_n5_spell.lineage_full_dialogue_prompts import (
+    FULL_DIALOGUE_INPUT_VERSION,
+    build_full_dialogue_distractor_writer_prompt,
+    build_full_dialogue_qa_writer_prompt,
+    build_full_dialogue_relation_miner_prompt,
+    full_dialogue_distractor_prompt_sha256,
+    full_dialogue_qa_prompt_sha256, full_dialogue_relation_prompt_sha256,
+)
+from scripts.current_method.restart_n5_spell.run_lineage_three_stage_canary import (
+    DEFAULT_SOURCE_ROOT as THREE_STAGE_SOURCE_ROOT,
+    _attest_source as attest_three_stage_source,
+    _request_view as three_stage_request_view,
+    _route_conclusion as three_stage_route_conclusion,
 )
 
 
@@ -85,6 +151,18 @@ class RewardTests(unittest.TestCase):
                     "C. Maria was inspired...", "a charity event", "<BOX>A</BOX>",
                     "<box>a</box>", "<box>A"):
             self.assertEqual(parse_boxed_mcq_answer(raw, OPTIONS)["parse_status"], "parse_invalid")
+
+    def test_solver_format_retry_instructions_are_format_only(self):
+        from scripts.current_method.restart_n5_spell.prompts import (
+            SOLVER_PARSE_RETRY_SUFFIX,
+            SOLVER_TRAILING_FORMAT_INSTRUCTION,
+        )
+        self.assertIn("<box>A</box>", SOLVER_TRAILING_FORMAT_INSTRUCTION)
+        self.assertIn("Do not include the option text",
+                      SOLVER_TRAILING_FORMAT_INSTRUCTION)
+        self.assertIn("same unchanged question", SOLVER_PARSE_RETRY_SUFFIX)
+        self.assertNotIn("previous response:",
+                         SOLVER_PARSE_RETRY_SUFFIX.casefold())
 
 
 class GroundingTests(unittest.TestCase):
@@ -982,6 +1060,798 @@ class RemainingAuditRegressionTests(unittest.TestCase):
             self.assertNotIn("reference_answer_text", raw_batch[0])
 
 
+class EvidenceViewAblationTests(unittest.TestCase):
+    @staticmethod
+    def turns(prefix, count, *, child=False):
+        return [{"turn_id":f"{prefix}{index:02d}",
+                 "session_id":f"session_{index:02d}" if child else f"D{index}",
+                 "speaker":"A" if index % 2 else "B",
+                 "text":f"immutable {prefix} text {index}"}
+                for index in range(1, count + 1)]
+
+    @staticmethod
+    def outline():
+        return GraphExpansionTests.outline()
+
+    def test_child_only_hides_parent_text_and_spans(self):
+        parent = self.turns("P", 6)
+        child = self.turns("C", 4, child=True)
+        view = build_questioner_evidence_view(mode=CHILD_ONLY_VIEW,
+            parent_turns=parent, child_turns=child)
+        self.assertEqual(view["selected_parent_turn_count"], 0)
+        self.assertEqual(view["selected_child_turn_count"], 4)
+        self.assertEqual(view["combined_dialogue"], child)
+        catalog = build_span_catalog(view["combined_dialogue"])
+        self.assertTrue(all(span["span_id"].startswith("C")
+                            for span in catalog["spans"]))
+        self.assertTrue(all("immutable P" not in span["exact_text"]
+                            for span in catalog["spans"]))
+
+    def test_balanced_view_is_exact_and_preserves_source_order(self):
+        parent = self.turns("P", 6)
+        child = self.turns("C", 4, child=True)
+        view = build_questioner_evidence_view(mode=BALANCED_VIEW,
+            parent_turns=parent, child_turns=child)
+        self.assertEqual(view["selection"]["algorithm"], BALANCED_PARENT_SELECTION)
+        self.assertEqual(view["selection"]["parent_indices"], [0, 1, 3, 5])
+        self.assertEqual(view["selected_parent_turn_count"], 4)
+        self.assertEqual(view["selected_child_turn_count"], 4)
+        self.assertEqual([turn["turn_id"] for turn in view["combined_dialogue"]],
+                         ["P01", "P02", "P04", "P06",
+                          "C01", "C02", "C03", "C04"])
+        without_hash = {key:value for key,value in view.items() if key != "view_sha256"}
+        self.assertEqual(view["view_sha256"], evidence_view_sha256(without_hash))
+
+    def test_uniform_selection_is_endpoint_inclusive_and_unique(self):
+        indices = uniform_endpoint_indices(237, 134)
+        self.assertEqual(len(indices), 134)
+        self.assertEqual(len(set(indices)), 134)
+        self.assertEqual(indices[0], 0)
+        self.assertEqual(indices[-1], 236)
+        self.assertEqual(tuple(sorted(indices)), indices)
+
+    def test_selected_evidence_diagnostics_are_soft_counts(self):
+        parent = self.turns("P", 2)
+        child = self.turns("C", 10, child=True)
+        catalog = build_span_catalog(parent + child)
+        contracts = compile_graph_scene_contracts(self.outline())
+        diagnostics = selected_evidence_diagnostics(
+            span_ids=["P01#S0001", "C03#S0001", "C07#S0001"],
+            catalog=catalog, scene_contracts=contracts)
+        self.assertEqual(diagnostics["selected_parent_span_count"], 1)
+        self.assertEqual(diagnostics["selected_child_span_count"], 2)
+        self.assertEqual(diagnostics["selected_session_count"], 3)
+        self.assertEqual(diagnostics["selected_turn_count"], 3)
+        self.assertEqual(diagnostics["selected_event_arc_ids"], ["E1", "E2", "E3"])
+        self.assertEqual(diagnostics["selected_event_arc_count"], 3)
+        self.assertEqual(diagnostics["selected_event_stage_count"], 5)
+
+    def test_invalid_view_or_claimed_span_is_rejected_deterministically(self):
+        parent = self.turns("P", 2)
+        child = self.turns("C", 2, child=True)
+        with self.assertRaisesRegex(ValueError, "questioner_evidence_view_mode_invalid"):
+            build_questioner_evidence_view(mode="full", parent_turns=parent,
+                                           child_turns=child)
+        with self.assertRaisesRegex(ValueError, "evidence_view_selected_span_missing"):
+            selected_evidence_diagnostics(span_ids=["missing"],
+                catalog=build_span_catalog(parent + child),
+                scene_contracts=compile_graph_scene_contracts(self.outline()))
+
+
+class ThreeScopeCanaryTests(unittest.TestCase):
+    @staticmethod
+    def fixture():
+        outline = copy.deepcopy(GraphExpansionTests.outline())
+        outline["parent_anchors"] = [
+            {"anchor_id":f"P{index}", "turn_id":f"P{index}",
+             "text":f"parent anchor {index}"} for index in range(1, 5)]
+        for index, arc in enumerate(outline["planned_event_arcs"], start=1):
+            arc["parent_anchor_ids"] = [f"P{index}"]
+        parent = [{"turn_id":f"P{index}", "session_id":f"D{index}",
+                   "speaker":"A" if index % 2 else "B",
+                   "text":f"immutable parent anchor {index}"}
+                  for index in range(1, 5)]
+        contracts = compile_graph_scene_contracts(outline)
+        child = []
+        for contract in contracts:
+            session = int(contract["scene_index"])
+            child.append({"turn_id":f"C{session:02d}:01",
+                          "session_id":f"session_{session:02d}",
+                          "speaker":"A",
+                          "text":f"immutable child stage scene {session}"})
+        views = compile_arc_lineage_views(outline=outline, parent_turns=parent,
+            child_turns=child, scene_contracts=contracts)
+        return outline, contracts, views
+
+    @staticmethod
+    def item(scope, spans, *, qa_id="q"):
+        return {"qa_id":qa_id, "qa_scope":scope, "question":"Which state followed?",
+            "correct_answer_text":"state alpha",
+            "distractors":["state beta", "state gamma", "state delta"],
+            "answer_support_span_ids":list(spans),
+            "reasoning_steps":["Compare the selected frozen facts."]}
+
+    def test_schema_enforces_exactly_three_distractors_and_no_extras(self):
+        item_schema = SCOPED_BATCH_JSON_SCHEMA["items"]
+        distractors = item_schema["properties"]["distractors"]
+        self.assertEqual((distractors["minItems"], distractors["maxItems"]), (3, 3))
+        self.assertFalse(item_schema["additionalProperties"])
+        self.assertTrue(batch_distractor_schema_valid([
+            self.item(scope, ["span"]) for scope in SCOPE_ASSIGNMENTS]))
+        bad = [self.item(scope, ["span"]) for scope in SCOPE_ASSIGNMENTS]
+        bad[1]["distractors"].append("state epsilon")
+        self.assertFalse(batch_distractor_schema_valid(bad))
+
+    def test_four_lineage_views_cover_parent_anchor_and_all_arc_stages(self):
+        _, _, views = self.fixture()
+        self.assertEqual([view["event_arc_id"] for view in views],
+                         ["E1", "E2", "E3", "E4"])
+        for index, view in enumerate(views, start=1):
+            self.assertGreater(view["selected_parent_turn_count"], 0)
+            self.assertGreater(view["selected_child_turn_count"], 0)
+            self.assertEqual(view["covered_event_stage_ids"],
+                [f"E{index}:stage_{stage:02d}" for stage in range(1, 5)])
+            self.assertEqual(view["parent_anchor_turn_ids"], [f"P{index}"])
+            ids = [turn["turn_id"] for turn in view["combined_dialogue"]]
+            self.assertEqual(ids[:view["selected_parent_turn_count"]],
+                [turn["turn_id"] for turn in view["combined_dialogue"]
+                 if turn["turn_id"].startswith("P")])
+
+    def test_scope_gate_is_separate_and_deterministic(self):
+        _, _, views = self.fixture(); view = views[0]
+        parent = view["selected_parent_span_ids"][0]
+        child = view["selected_child_span_ids"][0]
+        rows = [self.item(PARENT_LOCAL, [parent]),
+                self.item(CHILD_LOCAL, [child]),
+                self.item(PARENT_CHILD_JOINT, [parent, child])]
+        for index, row in enumerate(rows):
+            self.assertEqual(validate_scope_item(row, item_index=index,
+                lineage_view=view)["decision"], "qa_scope_followed")
+        wrong = self.item(PARENT_CHILD_JOINT, [child])
+        result = validate_scope_item(wrong, item_index=2, lineage_view=view)
+        self.assertEqual(result["decision"], "qa_scope_not_followed")
+        self.assertIn("joint_support_missing_partition", result["reasons"])
+        self.assertNotIn("qa_scope", strip_scope_field(rows[0]))
+
+    def test_prompt_assigns_three_scopes_without_fixed_hop_contract(self):
+        _, _, views = self.fixture()
+        prompt = build_three_scope_prompt(lineage_view=views[0],
+            assigned_gold_letters=("A", "B", "C"), solver_feedback=[])
+        for scope in SCOPE_ASSIGNMENTS:
+            self.assertIn(scope, prompt)
+        self.assertIn("exactly three distinct distractors", prompt)
+        self.assertIn("removing either partition must make the answer underdetermined", prompt)
+        self.assertIn("Do not impose a fixed number of spans", prompt)
+
+    class Backend:
+        model_identifier = "three-scope-fixture"
+        def __init__(self, payloads):
+            self.payloads = iter(payloads); self.requests = []
+        def generate_batch(self, request):
+            self.requests.append(request)
+            return BackendResponse(next(self.payloads), self.model_identifier,
+                                   {"finish_reason":"stop"})
+
+    def run_batch(self, payloads):
+        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        atomic_json(root / "config/run_manifest.json", {"run_id":"three-scope-test"})
+        _, _, views = self.fixture(); view = views[0]
+        backend = self.Backend(payloads)
+        ledger = RequestLedger(root, sha256_file(root / "config/run_manifest.json"), "mock")
+        result = run_scoped_questioner_batch(ledger=ledger, backend=backend,
+            semantic_prompt="semantic three-scope prompt", event_arc_id="E1",
+            assigned_gold_letters=("A", "B", "C"), lineage_view=view,
+            prompt_protocol="three-scope-test", backend_identity={"backend":"mock"})
+        return result, backend, ledger, view
+
+    def test_schema_only_retry_regenerates_complete_batch_once(self):
+        _, _, views = self.fixture(); view = views[0]
+        parent = view["selected_parent_span_ids"][0]
+        child = view["selected_child_span_ids"][0]
+        valid = [self.item(PARENT_LOCAL, [parent], qa_id="q1"),
+                 self.item(CHILD_LOCAL, [child], qa_id="q2"),
+                 self.item(PARENT_CHILD_JOINT, [parent, child], qa_id="q3")]
+        invalid = copy.deepcopy(valid); invalid[0]["distractors"].append("fourth")
+        result, backend, ledger, _ = self.run_batch(
+            [json.dumps(invalid), json.dumps(valid)])
+        self.assertEqual(result["physical_questioner_calls"], 2)
+        self.assertTrue(result["schema_retry_used"])
+        self.assertEqual(result["final_decision"],
+                         "continue_to_scope_and_minimal_admission")
+        self.assertNotIn("fourth", backend.requests[1].prompt)
+        retry = ledger.read("questioner-E1-a01")
+        self.assertEqual(retry["request_metadata"]["retry_reason"],
+                         "distractor_count_invalid")
+        self.assertEqual(retry["request_metadata"]["retry_mode"],
+                         "full_batch_regeneration")
+
+        exhausted, exhausted_backend, _, _ = self.run_batch(
+            [json.dumps(invalid), json.dumps(invalid)])
+        self.assertEqual(len(exhausted_backend.requests), 2)
+        self.assertEqual(exhausted["final_decision"],
+                         "questioner_schema_invalid_exhausted")
+
+    def test_joint_necessity_classification(self):
+        joint = classify_joint_necessity(no_context_rewards=[0, 0, 1],
+            parent_only_rewards=[0, 1, 0], child_only_rewards=[1, 0, 0],
+            full_context_rewards=[1, 1, 1, 1, 1])
+        self.assertEqual(joint["decision"], "lineage_jointly_required")
+        self.assertEqual(classify_joint_necessity(no_context_rewards=[0, 0, 0],
+            parent_only_rewards=[1, 1, 1], child_only_rewards=[0, 0, 0],
+            full_context_rewards=[1] * 5)["decision"], "parent_only_sufficient")
+        self.assertEqual(classify_joint_necessity(no_context_rewards=[0, 0, 0],
+            parent_only_rewards=[0, 0, 0], child_only_rewards=[1, 1, 1],
+            full_context_rewards=[1] * 5)["decision"], "child_only_sufficient")
+
+
+class LineageThreeStageCanaryTests(unittest.TestCase):
+    @staticmethod
+    def view():
+        turns = [
+            {"turn_id":"P1", "session_id":"parent", "speaker":"A",
+             "text":"A planned to submit the original blue brief."},
+            {"turn_id":"P2", "session_id":"parent", "speaker":"B",
+             "text":"B expected the original review on Monday."},
+            {"turn_id":"C1", "session_id":"session_01", "speaker":"A",
+             "text":"A revised the brief to green after the review."},
+            {"turn_id":"C2", "session_id":"session_02", "speaker":"B",
+             "text":"B approved the revised green brief on Friday."},
+        ]
+        catalog = build_span_catalog(turns)
+        body = {"event_arc_id":"E1", "covered_event_stage_ids":[
+            "E1:stage_01", "E1:stage_02"],
+            "selected_parent_span_ids":["P1#S0001", "P2#S0001"],
+            "selected_child_span_ids":["C1#S0001", "C2#S0001"],
+            "combined_dialogue":turns, "span_catalog":catalog}
+        body["view_sha256"] = sha256_bytes(canonical_json(body).encode())
+        return body
+
+    @classmethod
+    def relation_raw(cls, relation_id="E1_R1"):
+        return {"relation_id":relation_id,
+            "parent_condition_span_ids":["P1#S0001"],
+            "child_consequence_span_ids":["C1#S0001"],
+            "relation_type":"state_revision",
+            "relation_description":"The planned blue brief became green after review.",
+            "joint_dependency_explanation":"Parent establishes blue; child establishes revision."}
+
+    @classmethod
+    def accepted_relation(cls):
+        result = validate_relation_candidate(cls.relation_raw(), arc_id="E1",
+            candidate_index=0, lineage_view=cls.view())
+        return result["relation_bundle"], result["relation_bundle_sha256"]
+
+    @classmethod
+    def qa_raw(cls):
+        return {"qa_id":"E1_R1_QA",
+            "question":"How did the brief differ after the review?",
+            "correct_answer_text":"It changed from blue to green.",
+            "answer_support_span_ids":["P1#S0001", "C1#S0001"],
+            "reasoning_steps":["Read the initial plan.", "Compare the revision."]}
+
+    def test_relation_schema_and_canonical_sha_are_strict_and_stable(self):
+        self.assertFalse(RELATION_MINER_JSON_SCHEMA["additionalProperties"])
+        self.assertEqual(RELATION_MINER_JSON_SCHEMA["properties"][
+            "parent_condition_span_ids"]["maxItems"], 4)
+        self.assertEqual(RELATION_MINER_JSON_SCHEMA["properties"][
+            "child_consequence_span_ids"]["maxItems"], 5)
+        first = validate_relation_candidate(self.relation_raw(), arc_id="E1",
+            candidate_index=0, lineage_view=self.view())
+        reordered = self.relation_raw()
+        second = validate_relation_candidate(reordered, arc_id="E1",
+            candidate_index=0, lineage_view=self.view())
+        self.assertEqual(first["decision"], "relation_accept")
+        self.assertEqual(first["relation_bundle_sha256"],
+                         second["relation_bundle_sha256"])
+        self.assertEqual(len(relation_schema_sha256()), 64)
+        extra = {**self.relation_raw(), "question":"forbidden"}
+        self.assertEqual(validate_relation_candidate(extra, arc_id="E1",
+            candidate_index=0, lineage_view=self.view())["decision"],
+            "relation_schema_invalid")
+
+    def test_relation_partition_and_lineage_span_gates(self):
+        parent_in_child = self.relation_raw()
+        parent_in_child["child_consequence_span_ids"] = ["P2#S0001"]
+        self.assertEqual(validate_relation_candidate(parent_in_child, arc_id="E1",
+            candidate_index=0, lineage_view=self.view())["decision"],
+            "relation_scope_invalid")
+        child_in_parent = self.relation_raw()
+        child_in_parent["parent_condition_span_ids"] = ["C2#S0001"]
+        self.assertEqual(validate_relation_candidate(child_in_parent, arc_id="E1",
+            candidate_index=0, lineage_view=self.view())["decision"],
+            "relation_scope_invalid")
+        outside = self.relation_raw()
+        outside["child_consequence_span_ids"] = ["OUTSIDE#S0001"]
+        result = validate_relation_candidate(outside, arc_id="E1",
+            candidate_index=0, lineage_view=self.view())
+        self.assertIn("relation_span_invalid", result["reasons"])
+
+    def test_duplicate_relation_support_set_is_rejected(self):
+        first, _ = self.accepted_relation()
+        duplicate = self.relation_raw("E1_R2")
+        result = validate_relation_candidate(duplicate, arc_id="E1",
+            candidate_index=1, lineage_view=self.view(),
+            prior_support_sets=[first["canonical_support_span_ids"]])
+        self.assertEqual(result["decision"], "duplicate_relation_candidate")
+
+    def test_qa_support_must_equal_relation_union_and_drift_is_rejected(self):
+        relation, relation_sha = self.accepted_relation()
+        accepted = validate_question_answer_object(self.qa_raw(),
+            relation_bundle=relation, relation_bundle_sha256=relation_sha,
+            lineage_view=self.view())
+        self.assertEqual(accepted["decision"], "qa_accept")
+        self.assertFalse(QA_WRITER_JSON_SCHEMA["additionalProperties"])
+        missing = self.qa_raw(); missing["answer_support_span_ids"] = ["P1#S0001"]
+        self.assertIn("qa_support_mismatch", validate_question_answer_object(missing,
+            relation_bundle=relation, relation_bundle_sha256=relation_sha,
+            lineage_view=self.view())["reasons"])
+        drift = self.qa_raw(); drift["answer_support_span_ids"] = [
+            "P1#S0001", "C1#S0001", "C2#S0001"]
+        result = validate_question_answer_object(drift, relation_bundle=relation,
+            relation_bundle_sha256=relation_sha, lineage_view=self.view())
+        self.assertIn("qa_relation_drift", result["reasons"])
+
+    def test_distractor_schema_never_trims_four_and_rejects_duplicates(self):
+        self.assertEqual(DISTRACTOR_WRITER_JSON_SCHEMA["properties"][
+            "distractors"]["minItems"], 3)
+        self.assertEqual(DISTRACTOR_WRITER_JSON_SCHEMA["properties"][
+            "distractors"]["maxItems"], 3)
+        valid = {"distractors":["blue to red", "green to blue", "red to green"]}
+        self.assertEqual(validate_distractor_object(valid,
+            correct_answer_text="blue to green")["decision"], "distractor_accept")
+        four = {"distractors":[*valid["distractors"], "fourth"]}
+        result = validate_distractor_object(four, correct_answer_text="blue to green")
+        self.assertEqual(result["decision"], "distractor_schema_invalid")
+        self.assertIsNone(result["distractors"])
+        duplicate = {"distractors":["same", " same ", "different"]}
+        self.assertIn("distractor_duplicate", validate_distractor_object(duplicate,
+            correct_answer_text="answer")["reasons"])
+
+    def test_deterministic_answer_placement_covers_letters_without_content(self):
+        attempt0 = [deterministic_answer_placement(arc, index, 0)["target_letter"]
+                    for arc in ("E1", "E4") for index in (0, 1)]
+        self.assertEqual(attempt0, ["A", "B", "C", "D"])
+        for arc in ("E1", "E4"):
+            for index in (0, 1):
+                first = deterministic_answer_placement(arc, index, 1)
+                second = deterministic_answer_placement(arc, index, 1)
+                self.assertEqual(first, second)
+                self.assertFalse(first["content_dependent"])
+
+    def test_attempt1_accepts_only_fixed_structured_feedback(self):
+        feedback = {"previous_distractors":["one", "two", "three"],
+            "previous_final_decision":"bad_ground",
+            "previous_grounding_diagnosis":"bad_ground_semantic_leakage"}
+        self.assertEqual(validate_attempt_feedback(1, feedback), feedback)
+        with self.assertRaisesRegex(ValueError, "feedback_label_invalid"):
+            validate_attempt_feedback(1, {**feedback,
+                "previous_grounding_diagnosis":"new free-form diagnosis"})
+        relation, relation_sha = self.accepted_relation()
+        qa_result = validate_question_answer_object(self.qa_raw(),
+            relation_bundle=relation, relation_bundle_sha256=relation_sha,
+            lineage_view=self.view())
+        qa = qa_result["question_answer_object"]
+        prompt = build_distractor_writer_prompt(lineage_view=self.view(),
+            relation_bundle=relation, relation_bundle_sha256=relation_sha,
+            question_answer_object=qa,
+            question_answer_sha256=qa_result["question_answer_object_sha256"],
+            attempt_index=1, structured_feedback=feedback)
+        self.assertIn('"previous_grounding_diagnosis": "bad_ground_semantic_leakage"', prompt)
+
+    class Backend:
+        model_identifier = "three-stage-fixture"
+        def __init__(self, responses):
+            self.responses = iter(responses); self.requests = []
+            config = type("Config", (), {"model":"fixture", "base_url":"fixture",
+                "temperature":0.25})()
+            self.client = type("Client", (), {"config":config})()
+            self.max_tokens = 128
+        def generate_batch(self, request):
+            self.requests.append(request)
+            return BackendResponse(next(self.responses), self.model_identifier,
+                                   {"usage":{"prompt_tokens":10,
+                                              "completion_tokens":2,
+                                              "total_tokens":12}})
+
+    def test_each_logical_request_has_at_most_one_format_retry(self):
+        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        atomic_json(root / "config/run_manifest.json", {"run_id":"three-stage"})
+        ledger = RequestLedger(root, sha256_file(root / "config/run_manifest.json"),
+                               "mock")
+        backend = self.Backend(["{", json.dumps(self.relation_raw())])
+        result = run_single_object_task(run_root=root, ledger=ledger,
+            backend=backend, budget=ApiBudget(), stage="relation_miner",
+            logical_request_id="relation-E1_R1", semantic_prompt="semantic secret",
+            lineage_view=self.view(), validator=lambda raw:validate_relation_candidate(
+                raw, arc_id="E1", candidate_index=0, lineage_view=self.view()),
+            schema_retry_decisions=("relation_schema_invalid",))
+        self.assertEqual(result["physical_request_count"], 2)
+        self.assertTrue(result["accepted"])
+        self.assertNotIn("{", backend.requests[1].prompt.split("semantic secret", 1)[-1])
+        self.assertEqual(ledger.read("relation-E1_R1-a01")["request_metadata"][
+            "retry_mode"], "full_object_regeneration")
+
+    def test_global_api_budget_and_retain_frontier_stop(self):
+        budget = ApiBudget()
+        for _ in range(4): budget.reserve("relation_miner", is_retry=False)
+        with self.assertRaisesRegex(RuntimeError, "relation_miner_normal_budget_exhausted"):
+            budget.reserve("relation_miner", is_retry=False)
+        budget = ApiBudget()
+        for _ in range(8): budget.reserve("relation_miner", is_retry=True)
+        with self.assertRaisesRegex(RuntimeError, "global_format_retry_budget_exhausted"):
+            budget.reserve("qa_writer", is_retry=True)
+        self.assertTrue(should_stop_after_first_retain_frontier("retain_frontier"))
+        self.assertFalse(should_stop_after_first_retain_frontier("reject_easy"))
+
+    def test_diagnostic_contexts_and_joint_necessity_thresholds(self):
+        contexts = build_relation_diagnostic_contexts(lineage_view=self.view())
+        self.assertEqual([turn["turn_id"] for turn in contexts["parent_only"]],
+                         ["P1", "P2"])
+        self.assertEqual([turn["turn_id"] for turn in contexts["child_only"]],
+                         ["C1", "C2"])
+        self.assertEqual(len(contexts["full_lineage"]), 4)
+        cases = [
+            ([1,1,0],[0,0,0],[1,1,1],"parent_only_sufficient"),
+            ([0,0,0],[1,0,1],[1,1,1],"child_only_sufficient"),
+            ([1,0,0],[0,1,0],[1,1,0],"lineage_jointly_required"),
+            ([0,0,0],[0,0,0],[1,0,0],"lineage_not_answerable"),
+        ]
+        for parent, child, lineage, expected in cases:
+            self.assertEqual(classify_joint_necessity_v1(parent_rewards=parent,
+                child_rewards=child, lineage_rewards=lineage)["decision"], expected)
+
+    def test_adaptive_bad_ground_still_runs_permutation_diagnosis(self):
+        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
+        orchestrator = object.__new__(CanaryOrchestrator)
+        orchestrator.run_root = Path(temporary.name)
+        relation, relation_sha = self.accepted_relation()
+        qa_result = validate_question_answer_object(self.qa_raw(),
+            relation_bundle=relation, relation_bundle_sha256=relation_sha,
+            lineage_view=self.view())
+        qa = materialize_three_stage_mcq(
+            question_answer=qa_result["question_answer_object"],
+            distractors=["blue to red", "green to blue", "red to green"],
+            target_letter="A", span_catalog=self.view()["span_catalog"])[
+                "materialized_qa"]
+        calls = []
+        def fake_rollouts(candidate, mode, order_id, requested, options, slot_start=0):
+            calls.append(order_id)
+            gold = next(letter for letter, text in options.items()
+                        if text == candidate["canonical_answer_text"])
+            return {"requested_valid_rollouts":3, "obtained_valid_rollouts":3,
+                "verified_rewards":[1, 0, 1], "raw_generations":3,
+                "parse_invalid_generations":0, "retry_generations":0,
+                "exhausted_target_slots":0,
+                "rollouts":[{"parsed_letter":gold, "local_reward":reward}
+                            for reward in (1, 0, 1)]}
+        orchestrator._rollouts = fake_rollouts
+        initial = fake_rollouts(qa, "no_context", "source", 3, qa["options"])
+        result = orchestrator.diagnose_adaptive_bad_ground_permutations(qa, initial)
+        self.assertEqual(calls[-2:], ["perm1", "perm2"])
+        self.assertIn(result["diagnostic_decision"], {
+            "bad_ground_mixed_bias", "bad_ground_semantic_leakage",
+            "bad_ground_position_bias"})
+
+    def test_materialization_reuses_minimal_gate(self):
+        relation, relation_sha = self.accepted_relation()
+        qa_result = validate_question_answer_object(self.qa_raw(),
+            relation_bundle=relation, relation_bundle_sha256=relation_sha,
+            lineage_view=self.view())
+        result = materialize_three_stage_mcq(
+            question_answer=qa_result["question_answer_object"],
+            distractors=["blue to red", "green to blue", "red to green"],
+            target_letter="D", span_catalog=self.view()["span_catalog"])
+        self.assertEqual(result["minimal_decision"], "accept")
+        self.assertEqual(result["materialized_qa"]["reference_answer_letter"], "D")
+        self.assertEqual(result["materialized_qa"]["reference_answer_text"],
+                         self.qa_raw()["correct_answer_text"])
+
+    def test_fixed_route_conclusions(self):
+        supported = {"retain_frontier":1, "materialized_mcqs":4}
+        self.assertEqual(three_stage_route_conclusion(supported, []),
+                         "three_stage_fixed_api_challenger_supported")
+        no_joint = {"retain_frontier":0, "materialized_mcqs":4}
+        self.assertEqual(three_stage_route_conclusion(no_joint, []),
+                         "fixed_api_joint_question_generation_not_supported")
+        inconclusive = {"retain_frontier":0, "materialized_mcqs":3}
+        self.assertEqual(three_stage_route_conclusion(inconclusive, []),
+                         "three_stage_canary_inconclusive")
+
+    def test_authoritative_source_attestation_is_read_only(self):
+        manifest = THREE_STAGE_SOURCE_ROOT / "config/run_manifest.json"
+        before = sha256_file(manifest)
+        source = attest_three_stage_source(THREE_STAGE_SOURCE_ROOT)
+        self.assertEqual(source["public"]["parent_turn_count"], 237)
+        self.assertEqual(source["public"]["child_turn_count"], 134)
+        self.assertEqual(before, sha256_file(manifest))
+
+    def test_full_dialogue_prompt_uses_ordered_verbatim_turns_not_outline(self):
+        view = self.view()
+        full_dialogue = [
+            *view["combined_dialogue"],
+            {"turn_id":"X1", "session_id":"unrelated", "speaker":"C",
+             "text":"This complete-dialogue turn is outside the E1 lineage."}]
+        relation_prompt = build_full_dialogue_relation_miner_prompt(
+            arc_id="E1", candidate_index=0, lineage_view=view,
+            full_dialogue=full_dialogue, span_stage_membership={},
+            prior_relation=None)
+        self.assertIn(FULL_DIALOGUE_INPUT_VERSION, relation_prompt)
+        self.assertIn('"full_dialogue_turn_count":5', relation_prompt)
+        self.assertIn('"turn_id":"X1"', relation_prompt)
+        self.assertIn("This complete-dialogue turn is outside", relation_prompt)
+        self.assertNotIn("event_arc_summary", relation_prompt)
+        self.assertNotIn("expansion_outline", relation_prompt)
+        self.assertNotIn("graph_gold", relation_prompt)
+
+    def test_full_dialogue_qa_and_distractor_prompts_preserve_frozen_relation(self):
+        view = self.view(); relation, relation_sha = self.accepted_relation()
+        qa_result = validate_question_answer_object(self.qa_raw(),
+            relation_bundle=relation, relation_bundle_sha256=relation_sha,
+            lineage_view=view)
+        qa = qa_result["question_answer_object"]
+        full_dialogue = [*view["combined_dialogue"],
+            {"turn_id":"X1", "session_id":"other", "speaker":"C",
+             "text":"A fifth verbatim turn."}]
+        qa_prompt = build_full_dialogue_qa_writer_prompt(lineage_view=view,
+            full_dialogue=full_dialogue, relation_bundle=relation,
+            relation_bundle_sha256=relation_sha)
+        distractor_prompt = build_full_dialogue_distractor_writer_prompt(
+            lineage_view=view, full_dialogue=full_dialogue,
+            relation_bundle=relation, relation_bundle_sha256=relation_sha,
+            question_answer_object=qa,
+            question_answer_sha256=qa_result["question_answer_object_sha256"],
+            attempt_index=0, structured_feedback=None)
+        for prompt in (qa_prompt, distractor_prompt):
+            self.assertIn('"full_dialogue_turn_count":5', prompt)
+            self.assertIn(relation_sha, prompt)
+            self.assertIn('"turn_id":"X1"', prompt)
+        self.assertEqual(len(full_dialogue_relation_prompt_sha256()), 64)
+        self.assertEqual(len(full_dialogue_qa_prompt_sha256()), 64)
+        self.assertEqual(len(full_dialogue_distractor_prompt_sha256()), 64)
+
+    def test_full_dialogue_request_view_changes_visibility_not_support_catalog(self):
+        view = self.view()
+        full = {"combined_dialogue":[*view["combined_dialogue"],
+            {"turn_id":"X1", "session_id":"other", "speaker":"C",
+             "text":"Outside lineage."}]}
+        request_view = three_stage_request_view(
+            view, full, FULL_DIALOGUE_INPUT_VERSION)
+        self.assertEqual(len(request_view["combined_dialogue"]), 5)
+        self.assertEqual(request_view["span_catalog"], view["span_catalog"])
+        self.assertEqual(request_view["selected_parent_span_ids"],
+                         view["selected_parent_span_ids"])
+
+
+class GraphExpansionTests(unittest.TestCase):
+    @staticmethod
+    def outline():
+        arcs = []
+        for arc_index in range(1, 5):
+            arcs.append({"event_id":f"E{arc_index}",
+                "summary":f"event arc {arc_index} progression",
+                "stages":[f"arc{arc_index} stage{stage}" for stage in range(1, 5)]})
+        scenes = []
+        for scene_index in range(1, 11):
+            scenes.append({"scene_id":f"S{scene_index}",
+                "target_child_tokens":420, "acceptable_token_range":[360, 480],
+                "target_turns":[8, 14], "participants":["A", "B"],
+                "purpose":f"scene {scene_index} purpose",
+                "required_parent_anchor_ids":["P1"] if scene_index == 1 else [],
+                "handoff_requirement":"continue the current plan"})
+        return {"target":{"child_token_growth":4200, "scene_count":10,
+                    "tokens_per_scene":420, "minimum_accepted_child_tokens":4000,
+                    "maximum_new_named_characters":2},
+            "source_parent":{"core_speakers":["A", "B"]},
+            "allowed_new_characters":[
+                {"name":"C", "introduction_scene":"S2"},
+                {"name":"D", "introduction_scene":"S5"}],
+            "allowed_locations":["first", "second", "third"],
+            "time_window":"five weeks", "planned_event_arcs":arcs,
+            "scene_plan":scenes, "parent_anchors":[{"anchor_id":"P1", "text":"anchor"}],
+            "forbidden_conflicts":[]}
+
+    def test_scene_compiler_covers_full_graph(self):
+        contracts = compile_graph_scene_contracts(self.outline())
+        self.assertEqual(len(contracts), 10)
+        self.assertEqual({stage for contract in contracts
+                          for stage in contract["assigned_event_stage_ids"]},
+                         {f"E{arc}:stage_{stage:02d}" for arc in range(1, 5)
+                          for stage in range(1, 5)})
+        self.assertEqual(len({stage for contract in contracts
+                              for stage in contract["assigned_event_stage_ids"]}), 16)
+        self.assertIn("C", contracts[1]["required_participants"])
+        self.assertIn("D", contracts[4]["required_participants"])
+        self.assertEqual({contract["session_location"] for contract in contracts},
+                         {"first", "second", "third"})
+        self.assertTrue(all(contract["target_dialogue_token_range"] == [360, 480]
+                            for contract in contracts))
+        self.assertTrue(all(contract["hard_dialogue_token_range"] == [220, 650]
+                            for contract in contracts))
+        self.assertEqual(contracts[0]["new_unresolved_hook_policy"], "exactly_one")
+        self.assertTrue(all(contract["new_unresolved_hook_policy"] == "forbidden"
+                            for contract in contracts[1:]))
+
+    def test_scene_output_contract_is_hard_gate(self):
+        contract = compile_graph_scene_contracts(self.outline())[1]
+        turns = [{"speaker":speaker, "text":"substantive scene text"}
+                 for speaker in ("A", "B", "C", "A", "B", "C", "A", "B")]
+        payload = {"dialogue_turns":turns, "used_parent_anchor_ids":[],
+            "advanced_event_arc_ids":contract["assigned_event_arc_ids"],
+            "new_unresolved_hooks":[]}
+        self.assertEqual(validate_graph_scene_output(payload, contract, 420), [])
+        missing = copy.deepcopy(payload); missing["dialogue_turns"] = [
+            {"speaker":"A", "text":"x"} for _ in range(8)]
+        self.assertIn("graph_required_participant_missing",
+                      validate_graph_scene_output(missing, contract, 420))
+        wrong_arc = copy.deepcopy(payload); wrong_arc["advanced_event_arc_ids"] = ["E4"]
+        self.assertIn("graph_assigned_event_arcs_incomplete",
+                      validate_graph_scene_output(wrong_arc, contract, 420))
+        self.assertIn("graph_scene_turn_count_out_of_range",
+                      validate_graph_scene_output({**payload, "dialogue_turns":turns[:2]},
+                                                  contract, 420))
+        self.assertIn("graph_scene_token_count_out_of_range",
+                      validate_graph_scene_output(payload, contract, 200))
+        unexpected_hook = copy.deepcopy(payload)
+        unexpected_hook["new_unresolved_hooks"] = [{"description":"duplicate"}]
+        self.assertIn("graph_scene_hook_policy_violation",
+                      validate_graph_scene_output(unexpected_hook, contract, 420))
+
+    def test_graph_realizer_managed_ids_are_removed_without_text_changes(self):
+        raw = {"dialogue_turns": [
+            {"speaker":"A", "text":"First.", "turn_id":"C0001"},
+            {"speaker":"B", "text":"Second.", "turn_id":"C0002",
+             "session_id":"session_01"}],
+            "session_id":"model-session"}
+        normalized, report = normalize_graph_realizer_managed_ids(raw)
+        self.assertEqual({"speaker":"A", "text":"First."},
+                         normalized["dialogue_turns"][0])
+        self.assertEqual({"speaker":"B", "text":"Second."},
+                         normalized["dialogue_turns"][1])
+        self.assertNotIn("session_id", normalized)
+        self.assertEqual("normalized_managed_ids", report["decision"])
+        self.assertFalse(report["semantic_text_modified"])
+        self.assertIn("turn_id", raw["dialogue_turns"][0])
+
+    def test_graph_realizer_normalization_preserves_unknown_extra_fields(self):
+        raw = {"dialogue_turns": [{"speaker":"A", "text":"First.",
+                                    "turn_id":"C0001", "emotion":"calm"}]}
+        normalized, _ = normalize_graph_realizer_managed_ids(raw)
+        self.assertNotIn("turn_id", normalized["dialogue_turns"][0])
+        self.assertEqual("calm", normalized["dialogue_turns"][0]["emotion"])
+        self.assertIn("bad_dialogue_turn_schema",
+                      validate_realizer_output_schema({
+                          **{key:[] for key in REALIZER_OUTPUT_SCHEMA
+                             if key != "dialogue_turns"},
+                          "dialogue_turns":normalized["dialogue_turns"]}))
+
+    def test_completion_requires_scenes_stages_and_minimum_tokens(self):
+        outline = self.outline(); contracts = compile_graph_scene_contracts(outline)
+        sessions = [{"graph_scene_id":contract["scene_id"],
+                     "completed_event_stage_ids":contract["assigned_event_stage_ids"]}
+                    for contract in contracts]
+        self.assertTrue(graph_completion_report(outline, contracts, sessions, 4100)["complete"])
+        self.assertFalse(graph_completion_report(outline, contracts, sessions, 3999)["complete"])
+        self.assertFalse(graph_completion_report(outline, contracts, sessions[:-1], 4100)["complete"])
+
+    def test_orchestrator_uses_scene_specific_beats_and_locations(self):
+        orchestrator = object.__new__(CanaryOrchestrator)
+        orchestrator.config = {"mode":"live_graph_expansion"}
+        orchestrator.data = {"outline":self.outline()}
+        contracts = compile_graph_scene_contracts(self.outline())
+        beats = orchestrator._assigned_narrative_beats(7, [])
+        self.assertEqual({beat["event_id"] for beat in beats},
+                         set(contracts[6]["assigned_event_arc_ids"]))
+        self.assertEqual(orchestrator._session_location(5), "third")
+
+    def test_graph_prompt_freezes_scene_execution_contract(self):
+        contract = compile_graph_scene_contracts(self.outline())[1]
+        kwargs = dict(session_index=2, narrative_beats=[{"event_id":"E1"}],
+            recent_sessions=[], continuity_summary={}, active_plans=[], pending_decisions=[],
+            superseded_information=[], character_knowledge={}, visibility_boundaries=[],
+            unresolved_hooks=[{"hook_id":"H0001"}], allowed_people=["A", "B", "C"],
+            session_location=contract["session_location"], allowed_event_arc_ids=["E1"],
+            forbidden_conflicts=[], parent_anchors=[{"anchor_id":"P1"}])
+        prompt = build_graph_realizer_prompt(graph_scene_contract=contract, **kwargs)
+        for expected in (GRAPH_SCENE_CONTRACT_VERSION, "required_participant",
+                         "target_dialogue_token_range", "hard_dialogue_token_range",
+                         "assigned_event_stage_ids",
+                         "Produce 8 to 14 dialogue turns", "Do not copy or paraphrase",
+                         "Follow new_unresolved_hook_policy exactly",
+                         "REQUIRED SPEAKER ROSTER FOR THIS RESPONSE: A, B, C"):
+            self.assertIn(expected, prompt)
+        self.assertEqual(len(graph_realizer_template_hash()), 64)
+
+    def test_graph_retry_prompt_uses_specific_labels_without_raw_output(self):
+        contract = compile_graph_scene_contracts(self.outline())[1]
+        prompt = build_graph_realizer_retry_prompt(
+            base_prompt="BASE", previous_errors=[
+                "bad_dialogue_turn_schema",
+                "graph_required_participant_missing",
+                "graph_required_parent_anchor_missing",
+                "graph_scene_token_count_out_of_range"],
+            retry_index=1, graph_scene_contract=contract,
+            dialogue_token_count=219, missing_required_participants=["C"],
+            missing_required_parent_anchor_ids=["P1"],
+            accepted_child_tokens=900)
+        self.assertIn("only speaker and text", prompt)
+        self.assertIn("220-650", prompt)
+        self.assertIn("Missing roster: C", prompt)
+        self.assertIn("Missing parent anchors: P1", prompt)
+        self.assertIn('"previous_raw_response_included": false', prompt)
+        self.assertNotIn("malformed model text", prompt)
+
+    def test_graph_mode_budget_is_frozen(self):
+        config = {**DEFAULTS, "mode":"live_graph_expansion",
+            "max_total_paid_api_generations":30, "max_realizer_generations":30,
+            "max_session_attempts_per_session":3, "max_questioner_generations":0,
+            "max_post_freeze_memory_generations":0, "max_verifier_generations":0}
+        validate_config(config)
+        bad = dict(config); bad["max_realizer_generations"] = 31
+        with self.assertRaises(ValueError): validate_config(bad)
+
+    def test_full_graph_mock_executes_all_ten_scenes(self):
+        outline = self.outline()
+        contracts = compile_graph_scene_contracts(outline)
+
+        class LineTokenizer:
+            def encode(self, text, add_special_tokens=False):
+                lines = 0 if not text else text.count("\n") + 1
+                return list(range(lines * 52))
+
+        class GraphRealizer:
+            model_identifier = "mock-graph-realizer"
+
+            def generate_session(self, request):
+                contract = contracts[request.session_index - 1]
+                participants = list(contract["required_participants"])
+                support = " ".join(
+                    stage["event_summary"] + " " + stage["stage"]
+                    for stage in contract["assigned_event_stages"])
+                turns = [{"speaker":participants[position % len(participants)],
+                          "text":f"{support} substantive scene line {position}."}
+                         for position in range(8)]
+                payload = {"dialogue_turns":turns,
+                    "used_parent_anchor_ids":contract["required_parent_anchor_ids"],
+                    "advanced_event_arc_ids":contract["assigned_event_arc_ids"],
+                    "continued_unresolved_hook_ids":[] if request.session_index == 1 else ["H0001"],
+                    "resolved_hook_ids":[],
+                    "new_unresolved_hooks":([{"description":"continue the graph plan"}]
+                                              if request.session_index == 1 else []),
+                    "durable_assertion_candidates":[], "local_scene_facts":[support]}
+                return BackendResponse(json.dumps(payload), self.model_identifier)
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            atomic_json(root / "config/run_manifest.json", {"run_id":"graph-mock"})
+            config = {**DEFAULTS, "mode":"live_graph_expansion",
+                "max_total_paid_api_generations":30, "max_realizer_generations":30,
+                "max_session_attempts_per_session":3, "max_questioner_generations":0,
+                "max_post_freeze_memory_generations":0, "max_verifier_generations":0,
+                "max_sessions":10}
+            data = {"outline":outline, "parent":{"dialogue":{"turns":[
+                {"turn_id":"PARENT1", "speaker":"A", "text":"anchor"}]}}}
+            orchestrator = CanaryOrchestrator(run_root=root,
+                manifest={"run_id":"graph-mock", "tokenizer_path":"mock"}, config=config,
+                data=data, tokenizer=LineTokenizer(), realizer=GraphRealizer(),
+                questioner=None, solver=None, backend_mode="mock")
+            sessions = orchestrator.realize()
+            self.assertEqual(len(sessions), 10)
+            child = [turn for session in sessions for turn in session["dialogue_turns"]]
+            completion = graph_completion_report(
+                outline, contracts, sessions, orchestrator._tokens(child))
+            self.assertTrue(completion["complete"])
+            self.assertEqual({session["session_location"] for session in sessions},
+                             {"first", "second", "third"})
+            self.assertEqual({name for session in sessions
+                              for name in session["newly_introduced_character_names"]},
+                             {"C", "D"})
+            resumed = orchestrator.realize()
+            self.assertEqual(len(resumed), 10)
+            self.assertEqual(orchestrator.ledger.summary()["mock_backend_call_count"], 10)
+
+
 class PromptTests(unittest.TestCase):
     def realizer_args(self, session=1):
         return dict(session_index=session, narrative_beats=[{"event_id":"E1","beat":"advance"}],
@@ -1486,6 +2356,29 @@ class SpellStyleMinimalRedTests(unittest.TestCase):
             select_minimal_solver_qa([raw], admission, raw["qa_id"],
                 materialized_qa=tampered, span_catalog=catalog, reasoning_contracts=contracts)
 
+    def test_minimal_solver_selector_uses_admitted_item_index_with_later_duplicate_id(self):
+        from scripts.current_method.restart_n5_spell.questioner_contract import (
+            build_span_catalog, default_reasoning_contracts)
+        _, minimal, _ = self.api(); catalog = build_span_catalog(self.dialogue())
+        contracts = default_reasoning_contracts(("A", "B", "C"))
+        raw = self.raw()
+        later_duplicate = copy.deepcopy(raw)
+        later_duplicate["question"] = "A different question with the same invalid ID?"
+        third = copy.deepcopy(raw); third["qa_id"] = "minimal_q3"
+        materialized, errors, diagnostics = minimal(raw, "A", span_catalog=catalog,
+            strict_v7_reasons=["bad_reasoning_contract"], reasoning_contract=contracts[0])
+        self.assertEqual(errors, [])
+        admission = {"qa_id":raw["qa_id"], "item_index":0, "target_letter":"A",
+            "strict_v7":{"decision":"reject", "reasons":["bad_reasoning_contract"]},
+            "spell_style_minimal_v1":{"decision":"accept", "reasons":[],
+                "diagnostics":diagnostics}, "solver_eligible":True}
+        selected_raw, selected, _ = select_minimal_solver_qa(
+            [raw, later_duplicate, third], admission, raw["qa_id"],
+            materialized_qa=materialized, span_catalog=catalog,
+            reasoning_contracts=contracts)
+        self.assertIs(selected_raw, raw)
+        self.assertEqual(selected, materialized)
+
     def test_span_ids_only_profile_accepts_core_fields_and_rejects_removed_fields(self):
         from scripts.current_method.restart_n5_spell.questioner_contract import build_span_catalog
         from scripts.current_method.restart_n5_spell.minimal_admission import (
@@ -1697,6 +2590,392 @@ class QuestionerFormatRetryTests(unittest.TestCase):
         self.assertEqual(len(backend.requests), 1)
         self.assertEqual(result["parse_status"], "json_parsed")
         self.assertEqual(result["batch_decision"], "questioner_batch_count_invalid")
+
+
+class SemanticLeakageRepairTests(unittest.TestCase):
+    V8_GENERATION_PROMPT_SHA = (
+        "0d01bf9e66a40eb243dd4efaf7cd192786e1fd173f52a0e3b1de910451c2a087"
+    )
+
+    @staticmethod
+    def dialogue():
+        return [
+            {"turn_id":"T1", "session_id":"S1", "speaker":"Maria",
+             "text":"Maria chose the library meeting after the charity dinner."},
+            {"turn_id":"T2", "session_id":"S2", "speaker":"John",
+             "text":"John chose the park meeting after the camera workshop."},
+        ]
+
+    @classmethod
+    def catalog(cls):
+        return build_span_catalog(cls.dialogue())
+
+    @staticmethod
+    def raw(qa_id="source_q_repair1"):
+        return {"qa_id":qa_id,
+            "question":"Which meeting did Maria choose after the charity dinner?",
+            "correct_answer_text":"the library meeting",
+            "distractors":["the park meeting", "the camera workshop", "the charity dinner"],
+            "answer_support_span_ids":["T1#S0001"],
+            "reasoning_steps":["Match Maria's later choice to the named event."]}
+
+    def contract(self):
+        return default_reasoning_contracts(("A", "B", "C"))[0]
+
+    def prompt(self):
+        return build_semantic_leakage_repair_prompt(
+            frozen_dialogue=self.dialogue(), span_catalog=self.catalog(),
+            original_item={**self.raw("source_q"), "qa_id":"source_q"},
+            repaired_qa_id="source_q_repair1", target_answer_letter="A",
+            original_no_context={"verified_rewards":[1, 1, 1]},
+            permutation_diagnostic={"decision":"bad_ground_semantic_leakage",
+                "orders":[{"order_id":"original", "gold_letter":"A",
+                           "valid_answer_letters":["A", "A", "A"],
+                           "valid_rewards":[1, 1, 1]}]})
+
+    def test_fixed_prompt_and_single_object_schema(self):
+        self.assertEqual(SEMANTIC_LEAKAGE_REPAIR_PROMPT_VERSION,
+                         "spell_dialogue_mcq_single_v8_semantic_leakage_repair_v1")
+        self.assertFalse(SEMANTIC_LEAKAGE_REPAIR_JSON_SCHEMA["additionalProperties"])
+        self.assertEqual(set(SEMANTIC_LEAKAGE_REPAIR_JSON_SCHEMA["properties"]), {
+            "qa_id", "question", "correct_answer_text", "distractors",
+            "answer_support_span_ids", "reasoning_steps"})
+        prompt = self.prompt()
+        for text in ("semantic answer leakage", "not letter-position bias",
+                     "same answer type", "parallel grammatical form",
+                     "similar length", "Regenerate one complete item from scratch"):
+            self.assertIn(text, prompt)
+        for forbidden in ("answer_evidence_values", "distractor_support", "repair_notes"):
+            self.assertIn(forbidden, prompt)
+        self.assertEqual(len(semantic_leakage_repair_template_hash()), 64)
+        self.assertEqual(span_ids_only_questioner_template_hash(),
+                         self.V8_GENERATION_PROMPT_SHA)
+
+    def test_only_authoritative_semantic_bad_ground_is_eligible_once(self):
+        base = {"original_final_decision":"bad_ground",
+            "diagnostic_decision":"bad_ground_semantic_leakage",
+            "repair_attempt_count":0, "source_authoritative":True,
+            "source_provenance_mixed":False}
+        self.assertTrue(semantic_repair_eligibility(**base)["eligible"])
+        variations = (
+            {"diagnostic_decision":"bad_ground_position_bias"},
+            {"diagnostic_decision":"bad_ground_mixed_bias"},
+            {"diagnostic_decision":"bad_ground_permutation_inconclusive"},
+            {"original_final_decision":"reject_easy"},
+            {"repair_attempt_count":1},
+            {"source_authoritative":False},
+            {"source_provenance_mixed":True},
+        )
+        for change in variations:
+            with self.subTest(change=change):
+                self.assertFalse(semantic_repair_eligibility(
+                    **{**base, **change})["eligible"])
+
+    def test_hybrid_budget_contract_is_frozen(self):
+        config = {**DEFAULTS, "mode":"hybrid_semantic_leakage_repair",
+            "max_total_paid_api_generations":2, "max_semantic_repair_generations":2,
+            "max_realizer_generations":0, "max_questioner_generations":0,
+            "max_verifier_generations":0, "semantic_repair_max_attempts":1,
+            "semantic_repair_max_format_retries":1,
+            "solver_effective_max_model_len":16384}
+        validate_config(config)
+        config["max_semantic_repair_generations"] = 3
+        with self.assertRaises(ValueError):
+            validate_config(config)
+
+    def test_repair_reuses_exact_minimal_gate_and_local_binding(self):
+        from scripts.current_method.restart_n5_spell.minimal_admission import (
+            SPAN_IDS_ONLY_SCHEMA_PROFILE, materialize_spell_style_minimal)
+        raw = self.raw()
+        admission = admit_semantic_repair_item(raw,
+            expected_qa_id=raw["qa_id"], target_letter="B",
+            span_catalog=self.catalog(), reasoning_contract=self.contract())
+        direct, direct_errors, _ = materialize_spell_style_minimal(raw, "B",
+            span_catalog=self.catalog(), reasoning_contract=self.contract(),
+            schema_profile=SPAN_IDS_ONLY_SCHEMA_PROFILE)
+        self.assertEqual(admission["minimal_decision"], "accept")
+        self.assertEqual(admission["materialized_qa"], direct)
+        self.assertEqual(direct_errors, [])
+        self.assertEqual(direct["reference_answer_letter"], "B")
+        self.assertEqual(direct["reference_answer_text"], raw["correct_answer_text"])
+        self.assertEqual(direct["parent_qa_id"] if "parent_qa_id" in direct else None, None)
+
+        for extra in ("options", "answer_evidence_values", "distractor_support",
+                      "difficulty_level", "repair_notes"):
+            stale = {**raw, extra:{} if extra == "options" else []}
+            rejected = admit_semantic_repair_item(stale,
+                expected_qa_id=raw["qa_id"], target_letter="B",
+                span_catalog=self.catalog(), reasoning_contract=self.contract())
+            self.assertEqual(rejected["minimal_decision"], "reject", extra)
+        bad_span = {**raw, "answer_support_span_ids":["missing"]}
+        self.assertIn("bad_span_id", admit_semantic_repair_item(bad_span,
+            expected_qa_id=raw["qa_id"], target_letter="A",
+            span_catalog=self.catalog(), reasoning_contract=self.contract())[
+                "minimal_reasons"])
+        self.assertIn("repair_qa_id_mismatch", admit_semantic_repair_item(raw,
+            expected_qa_id="other_repair1", target_letter="A",
+            span_catalog=self.catalog(), reasoning_contract=self.contract())[
+                "minimal_reasons"])
+
+    class Backend:
+        model_identifier = "semantic-repair-fixture"
+        def __init__(self, responses):
+            self.responses = iter(responses)
+            self.requests = []
+        def generate_batch(self, request):
+            self.requests.append(request)
+            return BackendResponse(next(self.responses), self.model_identifier,
+                                   {"finish_reason":"stop", "usage":{}})
+
+    def run_repair(self, responses):
+        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        manifest = {"run_id":"semantic-repair-test"}
+        atomic_json(root / "config/run_manifest.json", manifest)
+        backend = self.Backend(responses)
+        orchestrator = CanaryOrchestrator(run_root=root, manifest=manifest,
+            config={"max_semantic_repair_generations":2,
+                    "max_total_paid_api_generations":2}, data={}, tokenizer=None,
+            realizer=None, questioner=backend, solver=None, backend_mode="mock")
+        result = orchestrator.semantic_leakage_repair(
+            parent_qa_id="source_q", repaired_qa_id="source_q_repair1",
+            target_letter="A", semantic_prompt=self.prompt(),
+            span_catalog=self.catalog(), reasoning_contract=self.contract(),
+            source_contract={"source_qa_sha256":"qa-sha",
+                             "source_diagnostic_sha256":"diagnostic-sha"})
+        return result, backend, orchestrator
+
+    def test_json_invalid_gets_at_most_one_format_only_retry(self):
+        result, backend, orchestrator = self.run_repair([
+            "MALFORMED_REPAIR_SECRET", json.dumps(self.raw())])
+        self.assertEqual(len(backend.requests), 2)
+        self.assertEqual(result["physical_api_request_count"], 2)
+        self.assertTrue(result["format_retry_used"])
+        self.assertNotIn("MALFORMED_REPAIR_SECRET", backend.requests[1].prompt)
+        self.assertEqual(result["admission"]["minimal_decision"], "accept")
+        retry = orchestrator.ledger.read("semantic-repair-source_q-a01")
+        self.assertEqual(retry["request_metadata"]["retry_reason"], "json_invalid")
+        self.assertEqual(retry["request_metadata"]["retry_mode"],
+                         "full_item_regeneration")
+
+        exhausted, exhausted_backend, _ = self.run_repair(["{", "["])
+        self.assertEqual(len(exhausted_backend.requests), 2)
+        self.assertEqual(exhausted["final_decision"],
+                         "semantic_leakage_repair_json_invalid_exhausted")
+
+    def test_parseable_schema_failure_does_not_retry_or_run_solver(self):
+        result, backend, _ = self.run_repair([json.dumps([self.raw()])])
+        self.assertEqual(len(backend.requests), 1)
+        self.assertEqual(result["final_decision"], "semantic_repair_minimal_reject")
+        self.assertNotIn("materialized_qa_path", result)
+
+    def test_live_repair_backend_requests_json_object(self):
+        class Client:
+            config = type("Config", (), {"questioner_max_tokens":123})()
+            def __init__(self): self.kwargs = None
+            def complete(self, **kwargs):
+                self.kwargs = kwargs
+                return BackendResponse("{}", "fixture")
+        client = Client()
+        backend = LiveSemanticRepairBackend(client)
+        request = type("Request", (), {"prompt":"repair"})()
+        backend.generate_batch(request)
+        self.assertTrue(client.kwargs["json_object"])
+        self.assertEqual(client.kwargs["max_tokens"], 123)
+        limited = LiveSemanticRepairBackend(client, 77)
+        limited.generate_batch(request)
+        self.assertEqual(client.kwargs["max_tokens"], 77)
+
+    def test_repair_final_decisions_are_namespaced_and_never_repair_twice(self):
+        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
+        orchestrator = object.__new__(CanaryOrchestrator)
+        orchestrator.run_root = Path(temporary.name)
+        qa = MinimalSolverFinalMergeTests.qa()
+        cases = (("bad_ground", "bad_ground_after_semantic_repair"),
+                 ("reject_easy", "reject_easy_after_semantic_repair"),
+                 ("reject_all_wrong", "reject_all_wrong_after_semantic_repair"),
+                 ("retain_frontier", "retain_frontier"))
+        for base, expected in cases:
+            with self.subTest(base=base):
+                orchestrator.audit_minimal_candidate = lambda candidate, base=base: {
+                    "qa_id":candidate["qa_id"], "final_decision":base,
+                    "grounding_decision":"bad_ground" if base == "bad_ground" else
+                    "pass_grounding"}
+                result = orchestrator.audit_semantic_repair_candidate(qa, "source_q")
+                self.assertEqual(result["final_decision"], expected)
+                self.assertFalse(result["second_semantic_repair_allowed"])
+                self.assertEqual(result["origin"], "semantic_leakage_repair")
+
+    def test_feedback_summary_is_deterministic(self):
+        summary = build_semantic_repair_feedback_summary([
+            {"repair_json_valid":True, "repair_minimal_accepted":True,
+             "repair_passed_grounding":False,
+             "final_decision":"bad_ground_after_semantic_repair"},
+            {"repair_json_valid":True, "repair_minimal_accepted":True,
+             "repair_passed_grounding":True,
+             "final_decision":"reject_easy_after_semantic_repair"},
+            {"repair_json_valid":True, "repair_minimal_accepted":True,
+             "repair_passed_grounding":True, "final_decision":"retain_frontier"},
+        ])
+        self.assertEqual(summary["repair_attempted"], 3)
+        self.assertEqual(summary["repair_passed_grounding"], 2)
+        self.assertEqual(summary["repair_reject_easy"], 1)
+        self.assertEqual(summary["repair_retain_frontier"], 1)
+
+
+class CrossDialogueCalibrationTests(unittest.TestCase):
+    def test_plan_is_exactly_five_fresh_batches_without_repair(self):
+        plan = calibration_plan()
+        self.assertEqual(tuple(item["lineage"] for item in plan), CALIBRATION_LINEAGES)
+        self.assertEqual(tuple(tuple(item["assigned_target_letters"]) for item in plan),
+                         CALIBRATION_TARGET_LETTERS)
+        self.assertEqual(sum(item["mcqs_per_batch"] for item in plan), 15)
+        self.assertTrue(all(item["questioner_batches"] == 1 for item in plan))
+        self.assertTrue(all(item["semantic_repair_enabled"] is False for item in plan))
+
+    def test_parent_only_freeze_attests_source_row_and_content(self):
+        from scripts.current_method.restart_n5_spell.core import canonical_json, sha256_bytes
+        from scripts.current_method.restart_n5_spell.input_adapter import dialogue_content_hash
+        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
+        source = Path(temporary.name) / "source.jsonl"
+        source_row = {"sample_id":"source", "payload":{"stable":True}}
+        source.write_text(json.dumps(source_row) + "\n", encoding="utf-8")
+        turns = [{"turn_id":"D1:1", "speaker":"A", "text":"First fact."},
+                 {"turn_id":"D2:1", "speaker":"B", "text":"Second fact."}]
+        parent = {"sample_id":"parent", "source_id":"source", "split":"train",
+            "dialogue":{"turns":turns}, "source_snapshot":{
+                "source_path":str(source), "source_line_number":1,
+                "row_sha256":sha256_bytes(canonical_json(source_row).encode()),
+                "dialogue_content_sha256":dialogue_content_hash(turns),
+                "parent_identity_sha256":"parent-sha",
+                "reconstructed_graph_sha256":"graph-sha"}}
+        frozen = freeze_parent_dialogue("conv-26", parent)
+        self.assertTrue(frozen["context"]["parent_only"])
+        self.assertEqual([x["session_id"] for x in frozen["context"]["combined_dialogue"]],
+                         ["D1", "D2"])
+        self.assertEqual(frozen["source_attestation"]["source_row_sha256"],
+                         parent["source_snapshot"]["row_sha256"])
+        parent["dialogue"]["turns"][0]["text"] = "tampered"
+        with self.assertRaisesRegex(RuntimeError, "source_integrity_failed"):
+            freeze_parent_dialogue("conv-26", parent)
+
+    def feedback_fixture(self):
+        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        summary = {"source_failure_type":"bad_ground_semantic_leakage",
+            "source_item_count":3, "repair_attempted":3, "repair_json_valid":3,
+            "repair_minimal_accepted":3, "repair_passed_grounding":0,
+            "repair_reject_easy":0, "repair_reject_all_wrong":0,
+            "repair_retain_frontier":0}
+        items = []
+        for index in range(3):
+            child = root / f"child{index}"
+            atomic_json(child / "config/run_manifest.json", {"run_id":f"child{index}"})
+            atomic_json(child / "reports/semantic_repair_full_audit.json",
+                        {"final_decision":"bad_ground_after_semantic_repair"})
+            atomic_json(child / "reports/post_run_provenance.json",
+                        {"authoritative_release_provenance":True,
+                         "provenance_mixed":False})
+            items.append({"qa_id":f"q{index}", "run_root":str(child),
+                "run_manifest_sha256":sha256_file(child / "config/run_manifest.json"),
+                "repair_report_sha256":sha256_file(
+                    child / "reports/semantic_repair_full_audit.json")})
+        audit = {"items":items, "first_retain_frontier_found":False}
+        atomic_json(root / "frozen/semantic_repair_feedback_summary.json", summary)
+        atomic_json(root / "reports/semantic_repair_series_audit.json", audit)
+        manifest = {"feedback_summary_sha256":sha256_file(
+                root / "frozen/semantic_repair_feedback_summary.json"),
+            "series_audit_sha256":sha256_file(
+                root / "reports/semantic_repair_series_audit.json")}
+        atomic_json(root / "config/run_manifest.json", manifest)
+        atomic_json(root / "reports/post_run_provenance.json", {
+            "run_manifest_sha256":sha256_file(root / "config/run_manifest.json"),
+            "authoritative_release_provenance":True, "provenance_mixed":False})
+        return root
+
+    def test_feedback_memory_is_bound_to_authoritative_failed_repair(self):
+        root = self.feedback_fixture()
+        result = verify_semantic_repair_feedback_source(root)
+        self.assertFalse(result["factual_source"])
+        self.assertEqual(result["feedback"][0]["final_decision"],
+                         "bad_ground_semantic_leakage")
+        self.assertIn("Generate fresh items rather than repairing",
+                      result["feedback"][0]["diagnosis"])
+        summary_path = root / "frozen/semantic_repair_feedback_summary.json"
+        summary = json.loads(summary_path.read_text())
+        summary["repair_passed_grounding"] = 1
+        atomic_json(summary_path, summary)
+        with self.assertRaisesRegex(RuntimeError, "not_authoritative"):
+            verify_semantic_repair_feedback_source(root)
+
+    def test_calibration_summary_uses_frontier_and_leakage_thresholds(self):
+        dialogues = [{"raw_candidate_count":3, "minimal_accepted_count":3,
+            "items":[{"solver_evaluated":True, "final_decision":"retain_frontier"},
+                     {"solver_evaluated":True, "final_decision":"retain_frontier"},
+                     {"solver_evaluated":True, "final_decision":"reject_easy"}]}]
+        self.assertEqual(summarize_calibration(dialogues)["route_decision"],
+                         "training_free_route_feasible")
+        leakage = [{"raw_candidate_count":3, "minimal_accepted_count":3,
+            "items":[{"solver_evaluated":True, "final_decision":"bad_ground",
+                       "no_context_permutation_diagnostic":
+                           "bad_ground_semantic_leakage"} for _ in range(3)]}
+                   for _ in range(5)]
+        summary = summarize_calibration(leakage)
+        self.assertEqual(summary["retain_frontier_count"], 0)
+        self.assertEqual(summary["route_decision"],
+                         "single_stage_api_questioner_not_supported")
+
+    def test_runner_reuses_v8_and_contains_no_semantic_repair_backend(self):
+        source = (Path(__file__).resolve().parents[1] /
+            "scripts/current_method/restart_n5_spell/run_cross_dialogue_calibration.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("build_questioner_span_ids_only_feedback_prompt", source)
+        self.assertIn("audit_minimal_candidate", source)
+        self.assertIn("diagnose_no_context_permutations", source)
+        self.assertNotIn("LiveSemanticRepairBackend", source)
+        self.assertNotIn("semantic_leakage_repair(", source)
+        self.assertIn("adaptive_grounding_boundary_result", source)
+        self.assertEqual(span_ids_only_questioner_template_hash(),
+            SemanticLeakageRepairTests.V8_GENERATION_PROMPT_SHA)
+
+    def test_live_like_questioner_batch_reaches_materialized_minimal_qas(self):
+        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        turns = [{"turn_id":"T1", "session_id":"S1", "speaker":"A",
+                  "text":"Alpha chose red after lunch."},
+                 {"turn_id":"T2", "session_id":"S2", "speaker":"B",
+                  "text":"Beta chose blue before dinner."}]
+        catalog = build_span_catalog(turns)
+        contracts = default_reasoning_contracts(("A", "B", "C"))
+        raw = []
+        for index, span_id in enumerate(("T1#S0001", "T2#S0001", "T1#S0001")):
+            raw.append({"qa_id":f"calibration_q{index}",
+                "question":f"Which choice applies in case {index}?",
+                "correct_answer_text":f"correct {index}",
+                "distractors":[f"wrong {index} a", f"wrong {index} b",
+                               f"wrong {index} c"],
+                "answer_support_span_ids":[span_id]})
+        backend = QuestionerFormatRetryTests.Backend([json.dumps(raw)])
+        config = {**DEFAULTS, "mode":"cross_dialogue_questioner_batch",
+            "max_total_paid_api_generations":2, "max_realizer_generations":0,
+            "max_questioner_generations":2, "max_verifier_generations":0,
+            "questioner_generations":1, "questioner_mcqs_per_generation":3,
+            "questioner_total_candidates":3,
+            "allow_local_difficulty_downgrade":False}
+        manifest = {"run_id":"calibration-questioner-fixture"}
+        atomic_json(root / "config/run_manifest.json", manifest)
+        result = cross_calibration_runner._run_questioner(root=root,
+            manifest=manifest, config=config,
+            artifacts={"context":{"lineage":"fixture", "combined_dialogue":turns},
+                "catalog":catalog, "contracts":contracts,
+                "letters":("A", "B", "C"), "prompt":"v8 fixture prompt"},
+            backend=backend, tokenizer=None, feedback_sha="feedback-sha")
+        self.assertEqual(result["report"]["raw_candidate_count"], 3)
+        self.assertEqual(result["report"]["minimal_accepted_count"], 3)
+        self.assertEqual(set(result["materialized"]), {0, 1, 2})
+        self.assertTrue(all(qa["admission_mode"] == "spell_style_minimal_v1"
+                            for qa in result["materialized"].values()))
+        self.assertEqual(len(backend.requests), 1)
 
 
 if __name__ == "__main__": unittest.main()

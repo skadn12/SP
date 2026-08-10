@@ -9,14 +9,22 @@ from typing import Any, Sequence
 
 from .backends import QuestionerBackend, QuestionerRequest, RealizerBackend, RealizerRequest, SolverBackend, SolverRequest
 from .core import (atomic_json, canonical_json, classify_frontier_pre_audit,
-                   classify_no_context_permutation_bias, classify_reward_group, grounding_decision,
+                   balanced_grounding_decision, classify_no_context_permutation_bias,
+                   classify_reward_group, grounding_decision,
                    context_preflight, local_reward, normalize_option, option_audit, parse_boxed_mcq_answer,
                    sha256_bytes, sha256_file)
 from .ledger import RequestLedger
 from .prompts import (QUESTIONER_FORMAT_RETRY_SUFFIX, QUESTIONER_FORMAT_RETRY_VERSION,
                       RESPONDER_PROMPT, SOLVER_NOTHINK_RESPONDER_PROMPT,
+                      SOLVER_PARSE_RETRY_SUFFIX,
+                      SOLVER_POSITION_NEUTRAL_PARSE_RETRY_SUFFIX,
+                      SOLVER_POSITION_NEUTRAL_RESPONDER_PROMPT,
+                      SOLVER_TRAILING_FORMAT_INSTRUCTION,
+                      SEMANTIC_REPAIR_FORMAT_RETRY_SUFFIX,
+                      build_graph_realizer_prompt, build_graph_realizer_retry_prompt,
                       build_questioner_prompt, build_realizer_prompt,
-                      prompt_template_hashes, questioner_format_retry_suffix_hash)
+                      prompt_template_hashes, questioner_format_retry_suffix_hash,
+                      semantic_repair_format_retry_suffix_hash)
 from .validation import (assess_candidate_shortfall, evidence_audit, parse_questioner_batches, validate_dialogue,
                          materialize_questioner_item, validate_memory, validate_qa, validate_realizer_identity_contract,
                          validate_realizer_output_schema, derive_local_character_ledger,
@@ -33,6 +41,14 @@ from .minimal_admission import (LEGACY_OPTIONAL_SCHEMA_PROFILE,
                                 SPAN_IDS_ONLY_SCHEMA_PROFILE,
                                 SPELL_STYLE_MINIMAL_MODE,
                                 build_answer_evidence_contexts)
+from .semantic_repair import (SEMANTIC_LEAKAGE_REPAIR_REASON,
+                              SEMANTIC_LEAKAGE_REPAIR_VERSION,
+                              admit_semantic_repair_item)
+from .graph_expansion import (
+    GRAPH_STAGE_ACCOUNTING_COVERAGE_ONLY, compile_graph_scene_contracts,
+    graph_completion_report, graph_scene_coverage_report,
+    normalize_graph_realizer_managed_ids, validate_graph_scene_output,
+)
 
 
 class SimulatedCrash(RuntimeError):
@@ -68,6 +84,41 @@ class CanaryOrchestrator:
         self.ledger = RequestLedger(run_root, self.manifest_sha, backend_mode)
         self.prompt_hashes = prompt_template_hashes()
 
+    def _graph_mode(self) -> bool:
+        return self.config.get("mode") == "live_graph_expansion"
+
+    def _graph_coverage_only(self) -> bool:
+        return (self._graph_mode() and self.config.get(
+            "graph_stage_accounting_mode") ==
+            GRAPH_STAGE_ACCOUNTING_COVERAGE_ONLY)
+
+    def _graph_progress_report(
+            self, sessions: Sequence[dict[str, Any]], child_tokens: int,
+    ) -> dict[str, Any]:
+        if self._graph_coverage_only():
+            return graph_scene_coverage_report(
+                self.data["outline"], self._graph_contracts(), sessions,
+                child_tokens,
+                hard_minimum_child_tokens=self.config.get(
+                    "hard_minimum_child_tokens"),
+                target_child_token_range=self.config.get(
+                    "target_total_child_token_range"),
+            )
+        return graph_completion_report(
+            self.data["outline"], self._graph_contracts(), sessions,
+            child_tokens)
+
+    def _graph_contracts(self) -> list[dict[str, Any]]:
+        return compile_graph_scene_contracts(
+            self.data["outline"], coverage_only=self._graph_coverage_only()
+        ) if self._graph_mode() else []
+
+    def _graph_contract(self, index: int) -> dict[str, Any]:
+        contracts = self._graph_contracts()
+        if index < 1 or index > len(contracts):
+            raise RuntimeError("graph_scene_index_out_of_range")
+        return contracts[index - 1]
+
     @staticmethod
     def _backend_identity(backend: Any) -> dict[str, Any]:
         identity: dict[str, Any] = {"backend_class":type(backend).__name__,
@@ -80,7 +131,7 @@ class CanaryOrchestrator:
         if config is not None:
             identity["challenger_config"] = {key:getattr(config, key) for key in (
                 "base_url", "model", "timeout_seconds", "realizer_max_tokens",
-                "questioner_max_tokens", "temperature")}
+                "questioner_max_tokens", "temperature", "enable_thinking")}
         return identity
 
     def _tokens(self, turns: Sequence[dict[str, Any]]) -> int:
@@ -116,6 +167,8 @@ class CanaryOrchestrator:
         return [active[key] for key in sorted(active)]
 
     def _session_location(self, index: int) -> str:
+        if self._graph_mode():
+            return str(self._graph_contract(index)["session_location"])
         outline = self.data["outline"] if self is not None else {}
         scene_plan = outline.get("scene_plan") or []
         if scene_plan:
@@ -130,20 +183,55 @@ class CanaryOrchestrator:
 
     def _event_arc_state(self, sessions: Sequence[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         state: dict[str, dict[str, Any]] = {}
+        stage_field = ("covered_event_stage_ids" if self._graph_coverage_only()
+                       else "completed_event_stage_ids")
+        progressed_stage_ids = {str(stage_id) for session in sessions
+                                for stage_id in session.get(stage_field) or []}
         counts = Counter(event_id for session in sessions
                          for event_id in session.get("advanced_event_arc_ids") or [])
         for arc in self.data["outline"].get("planned_event_arcs") or []:
             event_id = str(arc.get("event_id"))
             stages = list(arc.get("stages") or [arc.get("summary") or event_id])
-            completed = min(int(counts.get(event_id, 0)), len(stages))
-            state[event_id] = {"completed_stage_count":completed,
-                "required_stage_count":len(stages), "closed":completed >= len(stages),
-                "next_stage":None if completed >= len(stages) else stages[completed],
-                "summary":str(arc.get("summary") or "")}
+            if self._graph_mode():
+                progressed = sum(
+                    f"{event_id}:stage_{position:02d}" in progressed_stage_ids
+                    for position in range(1, len(stages) + 1))
+            else:
+                progressed = min(int(counts.get(event_id, 0)), len(stages))
+            state[event_id] = {
+                "completed_stage_count": (0 if self._graph_coverage_only()
+                                          else progressed),
+                "covered_stage_count": progressed,
+                "required_stage_count": len(stages),
+                "closed": progressed >= len(stages),
+                "closure_basis": ("scene_coverage_only" if
+                                  self._graph_coverage_only() else
+                                  "legacy_completion"),
+                "semantic_transition_status": ("unknown_not_audited" if
+                                               self._graph_coverage_only() else
+                                               "legacy_reported"),
+                "next_stage": (None if progressed >= len(stages)
+                               else stages[progressed]),
+                "summary": str(arc.get("summary") or ""),
+            }
         return state
 
     def _assigned_narrative_beats(self, index: int,
                                   accepted: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+        if self._graph_mode():
+            contract = self._graph_contract(index)
+            beats = []
+            for event_id in contract["assigned_event_arc_ids"]:
+                stages = [stage for stage in contract["assigned_event_stages"]
+                          if stage["event_id"] == event_id]
+                beats.append({"event_id":event_id,
+                    "event_summary":stages[0]["event_summary"],
+                    "event_stage_indices":[stage["stage_index"] for stage in stages],
+                    "event_stages":[stage["stage"] for stage in stages],
+                    "event_stage_ids":[stage["stage_id"] for stage in stages],
+                    "scene_id":contract["scene_id"],
+                    "scene_purpose":contract["purpose"]})
+            return beats
         scene_plan = self.data["outline"].get("scene_plan") or []
         scene = scene_plan[min(index - 1, len(scene_plan) - 1)] if scene_plan else {}
         beats = []
@@ -164,7 +252,9 @@ class CanaryOrchestrator:
             x["name"] for x in outline.get("allowed_new_characters") or []
             if int(str(x.get("introduction_scene") or "S999").lstrip("S") or 999) <= index]
         advanced = {event_id for session in accepted for event_id in session.get("advanced_event_arc_ids") or []}
-        active_plans = [x for x in outline.get("planned_event_arcs") or [] if x.get("event_id") not in advanced]
+        arc_state = self._event_arc_state(accepted)
+        active_plans = [x for x in outline.get("planned_event_arcs") or []
+                        if not arc_state.get(str(x.get("event_id")), {}).get("closed")]
         seen_characters = sorted({turn.get("speaker") for session in accepted
                                   for turn in session.get("dialogue_turns") or [] if turn.get("speaker")})
         continuity_summary = {"accepted_session_count":len(accepted),
@@ -175,7 +265,7 @@ class CanaryOrchestrator:
         durable_subjects = list(allowed)
         durable_subjects.extend(phrase for phrase in ("application", "priorities brief", "brief", "report", "plan")
                                 if phrase in outline_text)
-        return build_realizer_prompt(session_index=index, narrative_beats=beat,
+        prompt_kwargs = dict(session_index=index, narrative_beats=beat,
             recent_sessions=accepted[-2:], continuity_summary=continuity_summary,
             active_plans=active_plans, pending_decisions=hooks, superseded_information=[],
             character_knowledge={"all_seen_character_names":seen_characters},
@@ -186,13 +276,22 @@ class CanaryOrchestrator:
             parent_anchors=outline.get("parent_anchors") or [],
             allowed_durable_subjects=sorted(set(durable_subjects)),
             durable_predicate_whitelist=sorted(DEFAULT_DURABLE_PREDICATES))
+        if self._graph_mode():
+            return build_graph_realizer_prompt(
+                graph_scene_contract=self._graph_contract(index), **prompt_kwargs)
+        return build_realizer_prompt(**prompt_kwargs)
 
     def realize(self, crash_before_session: int | None = None, request_limit: int | None = None) -> list[dict[str, Any]]:
         accepted = self._accepted_sessions()
         hooks = self._active_hooks(accepted)
         child_turn_count = sum(len(x["dialogue_turns"]) for x in accepted)
         hook_count = sum(len(x.get("new_unresolved_hooks") or []) for x in accepted)
-        if accepted and accepted[-1].get("event_arcs_closed"):
+        if self._graph_mode() and accepted:
+            existing_child = [turn for session in accepted for turn in session["dialogue_turns"]]
+            if self._graph_progress_report(
+                    accepted, self._tokens(existing_child))["complete"]:
+                return accepted
+        elif accepted and accepted[-1].get("event_arcs_closed"):
             existing_child = [turn for session in accepted for turn in session["dialogue_turns"]]
             if self._tokens(existing_child) >= 2000:
                 return accepted
@@ -201,7 +300,10 @@ class CanaryOrchestrator:
             if crash_before_session == index:
                 raise SimulatedCrash(f"simulated crash before session {index}")
             assigned_beats = self._assigned_narrative_beats(index, accepted)
-            prompt = self._session_prompt(index, accepted, hooks)
+            graph_contract = self._graph_contract(index) if self._graph_mode() else None
+            base_prompt = self._session_prompt(index, accepted, hooks)
+            prompt = base_prompt
+            retry_feedback: dict[str, Any] | None = None
             accepted_this_session = False
             for attempt in range(1, self.config["max_session_attempts_per_session"] + 1):
                 request_id = f"realizer-s{index:02d}-a{attempt:02d}"
@@ -218,7 +320,8 @@ class CanaryOrchestrator:
                     prompt_sha256=request.prompt_sha256, call=lambda r=request: self.realizer.generate_session(r),
                     budget_class="realizer", budget_limit=self.config["max_realizer_generations"],
                     request_metadata={"session_index":index, "attempt":attempt,
-                        "session_location":self._session_location(index)},
+                        "session_location":self._session_location(index),
+                        "retry_feedback":retry_feedback},
                     backend_identity=self._backend_identity(self.realizer),
                     total_budget_limit=self.config.get("max_total_paid_api_generations") if self.ledger.backend_mode == "live" else None)
                 # request_limit is a limit on physical calls made by this process.  A
@@ -237,6 +340,18 @@ class CanaryOrchestrator:
                     parsed, errors = {}, ["realizer_json_invalid"]
                 if not isinstance(parsed, dict):
                     parsed, errors = {}, ["realizer_schema_invalid"]
+                normalization = {
+                    "decision": "not_graph_mode",
+                    "semantic_text_modified": False,
+                }
+                if graph_contract is not None and isinstance(parsed, dict):
+                    parsed, normalization = normalize_graph_realizer_managed_ids(
+                        parsed)
+                    raw_record["managed_id_normalization"] = normalization
+                    atomic_json(
+                        self.run_root /
+                        f"raw/session_{index:02d}_attempt_{attempt:02d}.json",
+                        raw_record)
                 turns = parsed.get("dialogue_turns") or []
                 outline = self.data["outline"]
                 errors.extend(validate_realizer_output_schema(parsed))
@@ -251,6 +366,9 @@ class CanaryOrchestrator:
                 closed_arc_ids = {event_id for event_id, state in arc_state_before.items() if state["closed"]}
                 beat_support = {str(x["event_id"]):f"{x.get('event_summary','')} {x.get('event_stage','')} {x.get('scene_purpose','')}"
                                 for x in assigned_beats}
+                if self._graph_mode():
+                    beat_support = {str(x["event_id"]):f"{x.get('event_summary','')} {' '.join(x.get('event_stages') or [])} {x.get('scene_purpose','')}"
+                                    for x in assigned_beats}
                 errors.extend(validate_event_arc_advancement(
                     parsed.get("advanced_event_arc_ids") or [], assigned_arc_ids,
                     closed_arc_ids, turns, beat_support))
@@ -261,23 +379,50 @@ class CanaryOrchestrator:
                 errors.extend(validate_new_hook_descriptions(new_hooks, hooks))
                 errors.extend(validate_durable_candidate_indices(
                     parsed.get("durable_assertion_candidates") or [], len(turns)))
+                if graph_contract is not None:
+                    errors.extend(validate_graph_scene_output(
+                        parsed, graph_contract, self._tokens(turns)))
                 if index == 1 and not parsed.get("used_parent_anchor_ids"):
                     errors.append("session_1_missing_anchor")
-                if index > 1 and not (set(continued) | set(resolved_hook_ids)).intersection(allowed_hook_ids):
+                if (index > 1 and not self._graph_coverage_only() and
+                        not (set(continued) | set(resolved_hook_ids)).intersection(
+                            allowed_hook_ids)):
                     errors.append("unresolved_hook_not_continued_or_resolved")
-                prospective_arc_state = self._event_arc_state([*accepted,
-                    {"advanced_event_arc_ids":parsed.get("advanced_event_arc_ids") or []}])
+                prospective_session = {
+                    "advanced_event_arc_ids":parsed.get("advanced_event_arc_ids") or []}
+                if graph_contract is not None:
+                    stage_field = ("covered_event_stage_ids" if
+                                   self._graph_coverage_only() else
+                                   "completed_event_stage_ids")
+                    prospective_session[stage_field] = graph_contract[
+                        "assigned_event_stage_ids"]
+                prospective_arc_state = self._event_arc_state([*accepted, prospective_session])
                 all_arcs_closed_after = bool(prospective_arc_state) and all(
                     state["closed"] for state in prospective_arc_state.values())
                 prospective_turns = [turn for session in accepted for turn in session["dialogue_turns"]] + turns
                 prospective_tokens = self._tokens(prospective_turns)
-                can_stop_after = prospective_tokens >= 2000 and all_arcs_closed_after
-                transition = validate_hook_transition(set(allowed_hook_ids), set(continued),
-                    set(resolved_hook_ids), [f"NEW{position}" for position in range(len(new_hooks))],
-                    can_stop_after=can_stop_after)
-                errors.extend(transition["errors"])
-                if all_arcs_closed_after and prospective_tokens < 2000:
+                if graph_contract is not None:
+                    minimum_child_tokens = int(
+                        self.config.get("hard_minimum_child_tokens") or
+                        self.data["outline"]["target"][
+                            "minimum_accepted_child_tokens"])
+                    can_stop_after = (graph_contract["is_final_scene"] and
+                                      prospective_tokens >= minimum_child_tokens and
+                                      all_arcs_closed_after)
+                else:
+                    can_stop_after = prospective_tokens >= 2000 and all_arcs_closed_after
+                if not self._graph_coverage_only():
+                    transition = validate_hook_transition(
+                        set(allowed_hook_ids), set(continued),
+                        set(resolved_hook_ids),
+                        [f"NEW{position}" for position in range(len(new_hooks))],
+                        can_stop_after=can_stop_after)
+                    errors.extend(transition["errors"])
+                if graph_contract is None and all_arcs_closed_after and prospective_tokens < 2000:
                     errors.append("event_arcs_closed_before_min_tokens")
+                if (graph_contract is not None and graph_contract["is_final_scene"] and
+                        not can_stop_after):
+                    errors.append("graph_final_scene_completion_failed")
                 if errors:
                     self.ledger.record_decision(request_id, "reject:" + ",".join(sorted(set(errors))))
                     _append_unique_jsonl(self.run_root / "rejects.jsonl",
@@ -285,6 +430,45 @@ class CanaryOrchestrator:
                          "reasons": sorted(set(errors)), "final_decision": "reject"}, "request_id")
                     if request_limit is not None and requests_this_invocation >= request_limit:
                         return accepted
+                    if graph_contract is not None:
+                        valid_turns = turns if isinstance(turns, list) and all(
+                            isinstance(turn, dict) and
+                            isinstance(turn.get("speaker"), str) and
+                            isinstance(turn.get("text"), str)
+                            for turn in turns) else []
+                        dialogue_token_count = self._tokens(valid_turns)
+                        present_speakers = {
+                            str(turn.get("speaker")) for turn in valid_turns}
+                        missing_people = sorted(
+                            set(graph_contract["required_participants"]) -
+                            present_speakers)
+                        missing_parent_anchors = sorted(
+                            set(graph_contract["required_parent_anchor_ids"]) -
+                            set(parsed.get("used_parent_anchor_ids") or []))
+                        accepted_child_tokens = self._tokens([
+                            turn for session in accepted
+                            for turn in session.get("dialogue_turns") or []])
+                        retry_feedback = {
+                            "previous_validator_labels": sorted(set(errors)),
+                            "previous_dialogue_token_count": dialogue_token_count,
+                            "missing_required_participants": missing_people,
+                            "missing_required_parent_anchor_ids":
+                                missing_parent_anchors,
+                            "accepted_child_tokens_before_scene":
+                                accepted_child_tokens,
+                        }
+                        prompt = build_graph_realizer_retry_prompt(
+                            base_prompt=base_prompt,
+                            previous_errors=retry_feedback[
+                                "previous_validator_labels"],
+                            retry_index=attempt,
+                            graph_scene_contract=graph_contract,
+                            dialogue_token_count=dialogue_token_count,
+                            missing_required_participants=missing_people,
+                            missing_required_parent_anchor_ids=
+                                missing_parent_anchors,
+                            accepted_child_tokens=accepted_child_tokens,
+                        )
                     continue
                 assigned = []
                 for turn in turns:
@@ -299,6 +483,29 @@ class CanaryOrchestrator:
                 parsed["dialogue_turns"] = assigned
                 parsed["new_unresolved_hooks"] = assigned_hooks
                 parsed["session_location"] = self._session_location(index)
+                if graph_contract is not None:
+                    stage_accounting = ({
+                        "covered_event_stage_ids": graph_contract[
+                            "assigned_event_stage_ids"],
+                        "stage_accounting_mode":
+                            GRAPH_STAGE_ACCOUNTING_COVERAGE_ONLY,
+                        "semantic_transition_status": "unknown_not_audited",
+                    } if self._graph_coverage_only() else {
+                        "completed_event_stage_ids": graph_contract[
+                            "assigned_event_stage_ids"],
+                    })
+                    parsed.update({"graph_scene_contract_version":graph_contract["contract_version"],
+                        "graph_scene_id":graph_contract["scene_id"],
+                        "graph_scene_contract_sha256":graph_contract["contract_sha256"],
+                        "graph_relative_time":graph_contract["relative_time"],
+                        "dialogue_token_count":self._tokens(turns),
+                        "target_dialogue_token_range_met":graph_contract[
+                            "target_dialogue_token_range"][0] <= self._tokens(turns) <=
+                            graph_contract["target_dialogue_token_range"][1],
+                        "target_turn_range_met":graph_contract["target_turn_range"][0] <=
+                            len(turns) <= graph_contract["target_turn_range"][1],
+                        "realizer_managed_id_normalization":normalization,
+                        **stage_accounting})
                 parsed.update(derive_local_character_ledger(parsed, self.data["outline"], accepted))
                 arc_state_after = self._event_arc_state([*accepted, parsed])
                 parsed["event_arc_state_after"] = arc_state_after
@@ -331,7 +538,12 @@ class CanaryOrchestrator:
                      "final_decision": "accept", "turn_count": len(assigned)}, "request_id")
                 accepted_this_session = True
                 child = [t for s in accepted for t in s["dialogue_turns"]]
-                if parsed.get("event_arcs_closed") and self._tokens(child) >= 2000:
+                if graph_contract is not None:
+                    completion = self._graph_progress_report(
+                        accepted, self._tokens(child))
+                    if completion["complete"]:
+                        return accepted
+                elif parsed.get("event_arcs_closed") and self._tokens(child) >= 2000:
                     return accepted
                 if request_limit is not None and requests_this_invocation >= request_limit:
                     return accepted
@@ -663,6 +875,118 @@ class CanaryOrchestrator:
         atomic_json(self.run_root / "reports/live_questioner_smoke.json", result)
         return result
 
+    def semantic_leakage_repair(self, *, parent_qa_id: str, repaired_qa_id: str,
+                                target_letter: str, semantic_prompt: str,
+                                span_catalog: dict[str, Any],
+                                reasoning_contract: dict[str, Any],
+                                source_contract: dict[str, Any]) -> dict[str, Any]:
+        """Execute one semantic repair with only a conditional JSON-format retry."""
+        semantic_prompt_sha = _hash_text(semantic_prompt)
+        suffix_sha = semantic_repair_format_retry_suffix_hash()
+        attempts = []
+        final_admission: dict[str, Any] | None = None
+        final_raw: Any = None
+        final_request_id = ""
+        for attempt_index in (0, 1):
+            is_retry = attempt_index == 1
+            prompt = semantic_prompt if not is_retry else (
+                semantic_prompt + "\n\n" + SEMANTIC_REPAIR_FORMAT_RETRY_SUFFIX)
+            request_id = f"semantic-repair-{parent_qa_id}-a{attempt_index:02d}"
+            final_request_id = request_id
+            request = QuestionerRequest(request_id, 0,
+                (target_letter, target_letter, target_letter), prompt, _hash_text(prompt),
+                tuple(), tuple(), span_catalog, (reasoning_contract,))
+            prompt_path = self.run_root / f"raw/prompts/{request_id}.json"
+            prompt_record = {"request_id":request_id,
+                "attempt_index":attempt_index, "prompt_sha256":request.prompt_sha256,
+                "semantic_prompt_sha256":semantic_prompt_sha,
+                "format_retry_suffix_sha256":suffix_sha if is_retry else None,
+                "prompt":prompt}
+            if prompt_path.exists():
+                if _read_json(prompt_path) != prompt_record:
+                    raise RuntimeError("semantic repair prompt drift")
+            else:
+                atomic_json(prompt_path, prompt_record)
+            metadata = {"parent_qa_id":parent_qa_id, "repaired_qa_id":repaired_qa_id,
+                "repair_index":1, "repair_reason":SEMANTIC_LEAKAGE_REPAIR_REASON,
+                "repair_version":SEMANTIC_LEAKAGE_REPAIR_VERSION,
+                "target_letter":target_letter, "attempt_index":attempt_index,
+                "semantic_prompt_sha256":semantic_prompt_sha,
+                "format_retry_suffix_sha256":suffix_sha if is_retry else None,
+                "format_retry_suffix_version":QUESTIONER_FORMAT_RETRY_VERSION if is_retry else None,
+                "retry_of_request_id":f"semantic-repair-{parent_qa_id}-a00" if is_retry else None,
+                "retry_reason":"json_invalid" if is_retry else None,
+                "retry_mode":"full_item_regeneration" if is_retry else None,
+                **source_contract}
+            response = self.ledger.invoke(request_id=request_id,
+                intent="semantic_leakage_repair", attempt=attempt_index + 1,
+                prompt_sha256=request.prompt_sha256,
+                call=lambda request=request: self.questioner.generate_batch(request),
+                budget_class="semantic_repair",
+                budget_limit=self.config["max_semantic_repair_generations"],
+                total_budget_limit=self.config["max_total_paid_api_generations"],
+                request_metadata=metadata,
+                backend_identity=self._backend_identity(self.questioner))
+            atomic_json(self.run_root / f"raw/semantic_repair_attempt_{attempt_index:02d}.json",
+                {"request_id":request_id, "raw_response":response.raw_text})
+            try:
+                parsed = json.loads(response.raw_text)
+            except json.JSONDecodeError:
+                decision = ("retry_format_only" if attempt_index == 0 else
+                            "semantic_leakage_repair_json_invalid_exhausted")
+                self.ledger.record_decision(request_id, decision)
+                state = self.ledger.read(request_id) or {}
+                attempts.append({"attempt_index":attempt_index, "request_id":request_id,
+                    "parse_status":"json_invalid", "decision":decision,
+                    "raw_response_path":state.get("raw_response_path"),
+                    "raw_response_sha256":state.get("raw_response_sha256"),
+                    "response_metadata":state.get("response_metadata")})
+                if attempt_index == 0:
+                    continue
+                break
+            final_raw = parsed
+            final_admission = admit_semantic_repair_item(parsed,
+                expected_qa_id=repaired_qa_id, target_letter=target_letter,
+                span_catalog=span_catalog, reasoning_contract=reasoning_contract)
+            decision = ("semantic_repair_minimal_accept" if
+                        final_admission["minimal_decision"] == "accept" else
+                        "semantic_repair_minimal_reject")
+            self.ledger.record_decision(request_id, decision)
+            state = self.ledger.read(request_id) or {}
+            attempts.append({"attempt_index":attempt_index, "request_id":request_id,
+                "parse_status":"json_parsed", "decision":decision,
+                "raw_response_path":state.get("raw_response_path"),
+                "raw_response_sha256":state.get("raw_response_sha256"),
+                "response_metadata":state.get("response_metadata")})
+            break
+        result = {"repair_version":SEMANTIC_LEAKAGE_REPAIR_VERSION,
+            "parent_qa_id":parent_qa_id, "qa_id":repaired_qa_id,
+            "repair_index":1, "repair_attempt_count":1,
+            "repair_reason":SEMANTIC_LEAKAGE_REPAIR_REASON,
+            "semantic_prompt_sha256":semantic_prompt_sha,
+            "format_retry_suffix_sha256":suffix_sha,
+            "attempts":attempts, "physical_api_request_count":len(attempts),
+            "format_retry_used":len(attempts) == 2,
+            "final_request_id":final_request_id,
+            "repair_json_valid":final_admission is not None,
+            "admission":final_admission, "raw_item":final_raw}
+        if final_admission is None:
+            result["final_decision"] = "semantic_leakage_repair_json_invalid_exhausted"
+        elif final_admission["minimal_decision"] != "accept":
+            result["final_decision"] = "semantic_repair_minimal_reject"
+        else:
+            materialized_path = self.run_root / "materialized/repaired_qa.json"
+            if materialized_path.exists():
+                if canonical_json(_read_json(materialized_path)) != canonical_json(
+                        final_admission["materialized_qa"]):
+                    raise RuntimeError("semantic repair materialized QA drift")
+            else:
+                atomic_json(materialized_path, final_admission["materialized_qa"])
+            result.update({"materialized_qa_path":str(materialized_path),
+                "materialized_qa_sha256":sha256_file(materialized_path)})
+        atomic_json(self.run_root / "reports/semantic_repair_admission.json", result)
+        return result
+
     def _rollouts(self, qa: dict[str, Any], mode: str, order_id: str, requested: int,
                   options: dict[str, str], slot_start: int = 0) -> dict[str, Any]:
         if qa.get("admission_mode") == SPELL_STYLE_MINIMAL_MODE:
@@ -697,15 +1021,36 @@ class CanaryOrchestrator:
         context_sha256 = sha256_bytes(canonical_json(context_turns).encode("utf-8"))
         qa_text = qa["question"] + "\n" + "\n".join(f"{k}. {v}" for k,v in options.items())
         context_text = "\n".join(f"[{x.get('turn_id','')}] {x['speaker']}: {x['text']}" for x in context_turns)
-        user_text = (f"Context:\n{context_text}\n\n" if context_text else "") + qa_text
-        messages = [{"role":"system", "content":SOLVER_NOTHINK_RESPONDER_PROMPT},
-                    {"role":"user", "content":user_text}]
-        solver_prompt = self.tokenizer.apply_chat_template(messages, tokenize=False,
-            add_generation_prompt=True, enable_thinking=False)
-        thinking_disabled_marker = solver_prompt.endswith("<think>\n\n</think>\n\n")
-        if not thinking_disabled_marker or solver_prompt.count("<think>") != solver_prompt.count("</think>"):
-            raise RuntimeError("solver chat template did not render the expected pre-closed no-thinking block")
-        rendered_prompt_tokens = len(self.tokenizer.encode(solver_prompt, add_special_tokens=False))
+        user_text = ((f"Context:\n{context_text}\n\n" if context_text else "")
+                     + qa_text + "\n\n" + SOLVER_TRAILING_FORMAT_INSTRUCTION)
+
+        def render_solver_prompt(retry_index: int) -> str:
+            neutral = self.config.get("solver_position_neutral_prompt") is True
+            retry_instruction = (SOLVER_POSITION_NEUTRAL_PARSE_RETRY_SUFFIX
+                                 if neutral else SOLVER_PARSE_RETRY_SUFFIX)
+            retry_suffix = ("\n\n" + retry_instruction
+                            if retry_index > 0 else "")
+            messages = [
+                {"role":"system", "content":(
+                    SOLVER_POSITION_NEUTRAL_RESPONDER_PROMPT if neutral else
+                    SOLVER_NOTHINK_RESPONDER_PROMPT)},
+                {"role":"user", "content":user_text + retry_suffix},
+            ]
+            rendered = self.tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True,
+                enable_thinking=False)
+            thinking_disabled = rendered.endswith("<think>\n\n</think>\n\n")
+            if (not thinking_disabled or
+                    rendered.count("<think>") != rendered.count("</think>")):
+                raise RuntimeError(
+                    "solver chat template did not render the expected "
+                    "pre-closed no-thinking block")
+            return rendered
+
+        preflight_retry = int(self.config["max_parse_retries_per_target"])
+        preflight_prompt = render_solver_prompt(preflight_retry)
+        rendered_prompt_tokens = len(self.tokenizer.encode(
+            preflight_prompt, add_special_tokens=False))
         reserved = self.config["reserved_generation_tokens"]
         preflight = {"rendered_prompt_tokens":rendered_prompt_tokens,
             "reserved_generation_tokens":reserved,
@@ -723,6 +1068,7 @@ class CanaryOrchestrator:
         for slot in range(slot_start, slot_start + requested):
             valid = False
             for retry in range(self.config["max_parse_retries_per_target"] + 1):
+                solver_prompt = render_solver_prompt(retry)
                 seed = int(hashlib.sha256(f"{qa['qa_id']}:{mode}:{order_id}:{slot}:{retry}".encode()).hexdigest()[:8], 16)
                 prompt_material = canonical_json({"qa":qa["qa_id"],"mode":mode,"order":order_id,
                                                    "slot":slot,"options":options})
@@ -743,6 +1089,7 @@ class CanaryOrchestrator:
                     budget_class="local_solver", budget_limit=self.config.get("max_local_solver_generations"),
                     request_metadata={"qa_id":qa["qa_id"], "evaluation_mode":mode,
                         "permutation_id":order_id, "target_slot":slot, "retry_index":retry,
+                        "format_retry_suffix_applied":retry > 0,
                         "seed":seed, "options_sha256":_hash_text(canonical_json(options))},
                     backend_identity=self._backend_identity(self.solver))
                 parsed = parse_boxed_mcq_answer(response.raw_text, options)
@@ -909,6 +1256,120 @@ class CanaryOrchestrator:
         atomic_json(self.run_root / f"filter/{qa['qa_id']}.json", result)
         return result
 
+    def audit_minimal_candidate_balanced_grounding(
+            self, qa: dict[str, Any]) -> dict[str, Any]:
+        """Run four-position no-context grounding before the unchanged downstream filter.
+
+        This is a new protocol and does not alter historical ``audit_minimal_candidate``
+        decisions. Every order uses K3 and places the canonical answer in a different slot.
+        """
+        if qa.get("admission_mode") != SPELL_STYLE_MINIMAL_MODE:
+            raise RuntimeError("minimal_solver_qa_admission_mode_invalid")
+        orders: list[dict[str, Any]] = []
+        rollout_records: list[dict[str, Any]] = []
+        for shift, order_id in enumerate((
+                "balanced_original", "balanced_perm1", "balanced_perm2",
+                "balanced_perm3")):
+            options = (dict(qa["options"]) if shift == 0 else
+                       self._permuted(qa["options"], shift))
+            rollout = self._rollouts(
+                qa, "no_context", order_id, 3, options)
+            gold = next(letter for letter, value in options.items()
+                        if normalize_option(value) == normalize_option(
+                            qa["canonical_answer_text"]))
+            answers = [row.get("parsed_letter") for row in rollout.get("rollouts") or []
+                       if row.get("local_reward") is not None]
+            orders.append({"order_id":order_id, "gold_letter":gold,
+                "valid_answer_letters":answers,
+                "valid_rewards":list(rollout.get("verified_rewards") or [])})
+            rollout_records.append({"order_id":order_id, "options":options,
+                                    "gold_letter":gold, "rollout":rollout})
+        grounding = balanced_grounding_decision(orders)
+        result: dict[str, Any] = {"qa_id":qa["qa_id"],
+            "admission_mode":SPELL_STYLE_MINIMAL_MODE,
+            "difficulty_level":qa.get("difficulty_level", "unclassified"),
+            "grounding_protocol":"balanced_four_position_k3_v2",
+            "balanced_no_context_orders":rollout_records,
+            "balanced_grounding":grounding,
+            "grounding_decision":grounding["decision"]}
+        if grounding["decision"] != "pass_grounding":
+            result["final_decision"] = grounding["decision"]
+            atomic_json(self.run_root / f"filter/{qa['qa_id']}.json", result)
+            return result
+
+        full = self._rollouts(qa, "full_context", "original", 5, qa["options"])
+        frontier = classify_frontier_pre_audit(full["verified_rewards"])
+        result.update({"full_context":full,
+            "verified_rewards":full["verified_rewards"],
+            "verified_reward_mean":frontier["mean"],
+            "verified_reward_std":frontier["std"],
+            "frontier_decision":frontier["decision"]})
+        if frontier["decision"] != "retain_frontier_pre_audit":
+            result["final_decision"] = frontier["decision"]
+            atomic_json(self.run_root / f"filter/{qa['qa_id']}.json", result)
+            return result
+        evidence_only = self._rollouts(
+            qa, "evidence_only", "original", 3, qa["options"])
+        evidence_masked = self._rollouts(
+            qa, "evidence_masked", "original", 3, qa["options"])
+        evidence = evidence_audit(qa, evidence_only, evidence_masked)
+        context_hash = full["context_sha256"]
+        option_orders = [{"order_id":"original",
+            "valid_rewards":full["verified_rewards"],
+            "gold_letter":qa["reference_answer_letter"],
+            "context_hash":context_hash}]
+        permutation_records = []
+        for shift, order_id in ((1, "perm1"), (2, "perm2")):
+            options = self._permuted(qa["options"], shift)
+            rollout = self._rollouts(
+                qa, "option_permutation", order_id, 5, options)
+            gold = next(letter for letter, value in options.items()
+                        if normalize_option(value) == normalize_option(
+                            qa["canonical_answer_text"]))
+            option_orders.append({"order_id":order_id,
+                "valid_rewards":rollout["verified_rewards"],
+                "gold_letter":gold, "context_hash":rollout["context_sha256"]})
+            permutation_records.append({"order_id":order_id, "options":options,
+                                        "rollout":rollout})
+        option = option_audit(option_orders)
+        if evidence["decision"] == "bad_evidence_relevance":
+            final = "bad_evidence_relevance"
+        elif option["decision"] == "bad_option_bias":
+            final = "bad_option_bias"
+        elif (evidence["decision"] == "evidence_audit_inconclusive" or
+              option["decision"] == "option_audit_inconclusive"):
+            final = "frontier_audit_inconclusive"
+        else:
+            final = "retain_frontier"
+        result.update({"evidence_only":evidence_only,
+            "evidence_masked":evidence_masked, "evidence_audit":evidence,
+            "option_orders":permutation_records,
+            "original_full_context_reused_for_option_audit":True,
+            "option_audit":option, "final_decision":final,
+            "option_order_sensitive":option["decision"] == "option_order_sensitive"})
+        atomic_json(self.run_root / f"filter/{qa['qa_id']}.json", result)
+        return result
+
+    def audit_semantic_repair_candidate(self, qa: dict[str, Any],
+                                        parent_qa_id: str) -> dict[str, Any]:
+        """Run the unchanged minimal Solver chain and namespace repair-specific exits."""
+        result = self.audit_minimal_candidate(qa)
+        base_final = result.get("final_decision")
+        remapped = {"bad_ground":"bad_ground_after_semantic_repair",
+            "reject_easy":"reject_easy_after_semantic_repair",
+            "reject_all_wrong":"reject_all_wrong_after_semantic_repair"}.get(
+                str(base_final), base_final)
+        result.update({"origin":"semantic_leakage_repair",
+            "parent_qa_id":parent_qa_id, "repair_index":1,
+            "repair_attempt_count":1, "base_final_decision":base_final,
+            "final_decision":remapped,
+            "repair_grounding_decision":("pass_grounding_after_semantic_repair"
+                if result.get("grounding_decision") == "pass_grounding" else remapped
+                if base_final in ("bad_ground", "bad_no_context_eval") else None),
+            "second_semantic_repair_allowed":False})
+        atomic_json(self.run_root / f"filter/{qa['qa_id']}.json", result)
+        return result
+
     def diagnose_no_context_permutations(self, qa: dict[str, Any],
                                          original: dict[str, Any]) -> dict[str, Any]:
         """Reuse an authoritative original K3 and generate only two reordered no-context K3s."""
@@ -949,6 +1410,48 @@ class CanaryOrchestrator:
             "full_context_ran":False, "evidence_audit_ran":False,
             "frontier_option_audit_ran":False}
         atomic_json(self.run_root / f"filter/{qa['qa_id']}_no_context_permutation.json", result)
+        return result
+
+    def diagnose_adaptive_bad_ground_permutations(self, qa: dict[str, Any],
+                                                   initial_k3: dict[str, Any]) -> dict[str, Any]:
+        """Diagnose an adaptive-K5 bad-ground result while reusing its original valid K3."""
+        if (qa.get("admission_mode") != SPELL_STYLE_MINIMAL_MODE or
+                initial_k3.get("requested_valid_rollouts") != 3 or
+                initial_k3.get("obtained_valid_rollouts") != 3 or
+                len(initial_k3.get("verified_rewards") or []) != 3):
+            raise RuntimeError("adaptive_bad_ground_permutation_source_k3_mismatch")
+        original_answers = [row.get("parsed_letter") for row in
+            initial_k3.get("rollouts") or [] if row.get("local_reward") is not None]
+        orders = [{"order_id":"original", "options":dict(qa["options"]),
+            "gold_letter":qa["reference_answer_letter"],
+            "valid_answer_letters":original_answers,
+            "valid_rewards":list(initial_k3["verified_rewards"]),
+            "source":"reused_authoritative_initial_k3"}]
+        generated_orders = []
+        for shift, order_id in ((1, "perm1"), (2, "perm2")):
+            options = self._permuted(qa["options"], shift)
+            rollout = self._rollouts(qa, "no_context", order_id, 3, options)
+            gold = next(letter for letter, value in options.items()
+                        if normalize_option(value) == normalize_option(
+                            qa["canonical_answer_text"]))
+            answers = [row.get("parsed_letter") for row in rollout.get("rollouts") or []
+                       if row.get("local_reward") is not None]
+            order = {"order_id":order_id, "options":options, "gold_letter":gold,
+                "valid_answer_letters":answers,
+                "valid_rewards":list(rollout.get("verified_rewards") or []),
+                "source":"new_local_vllm", "rollout":rollout}
+            orders.append(order); generated_orders.append(order)
+        diagnosis = classify_no_context_permutation_bias(orders)
+        result = {"qa_id":qa["qa_id"], "admission_mode":SPELL_STYLE_MINIMAL_MODE,
+            "authoritative_grounding_decision":"bad_ground",
+            "authoritative_grounding_decision_changed":False,
+            "original_initial_k3_reused":True, "original_initial_k3":initial_k3,
+            "permutation_orders":generated_orders, "diagnostic":diagnosis,
+            "diagnostic_decision":diagnosis["decision"],
+            "full_context_ran":False, "evidence_audit_ran":False,
+            "frontier_option_audit_ran":False}
+        atomic_json(self.run_root /
+            f"filter/{qa['qa_id']}_adaptive_no_context_permutation.json", result)
         return result
 
     def report(self, sessions: list[dict[str, Any]], memory: dict[str, Any], q_summary: dict[str, Any],

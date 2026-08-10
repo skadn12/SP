@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import time
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,20 @@ class VLLMSolverBackend:
             max_model_len=self.max_model_len, gpu_memory_utilization=gpu_memory_utilization,
             dtype=dtype, trust_remote_code=True, enable_prefix_caching=False)
         self.load_latency_seconds = time.perf_counter() - started
+
+    def close(self) -> None:
+        """Release the vLLM engine and its worker process deterministically."""
+        engine = getattr(self, "engine", None)
+        if engine is None:
+            return
+        self.engine = None
+        llm_engine = getattr(engine, "llm_engine", None)
+        engine_core = getattr(llm_engine, "engine_core", None)
+        shutdown = getattr(engine_core, "shutdown", None)
+        if callable(shutdown):
+            shutdown()
+        del engine
+        gc.collect()
 
     def generate(self, request: SolverRequest) -> BackendResponse:
         from vllm import SamplingParams

@@ -10,6 +10,11 @@ eval_sets/
 eval_reports/
 base_restart_current_method_validation/
 current_method_runs/
+**/reports/
+*_REPORT.json
+*_REPORT.md
+*_PREFLIGHT.json
+*_PREFLIGHT.md
 *.jsonl
 *.partial.jsonl
 *.nohup.log

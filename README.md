@@ -1,5 +1,7 @@
 # Current Method Self-Play 代码包
 
+本地部署与文件分工见 [`docs/LOCAL_SETUP.md`](docs/LOCAL_SETUP.md)。该文档说明哪些文件需要从服务器复制到本地，以及如何继续使用远程 Qwen/Memorax API。
+
 ## 当前分支：Stage3 run234 checkpoint
 
 > 本节只描述 GitHub 分支 `checkpoint/stage3-run234-20260716`。它是一次可恢复的开发快照，不代表已经通过 Stage3 数据生产门槛。

@@ -23,8 +23,17 @@ QUESTIONER_PROMPT_VERSION = "spell_dialogue_mcq_3x_v7_span_contract_local_deriva
 QUESTIONER_FEEDBACK_PROMPT_VERSION = "spell_dialogue_mcq_3x_v7_span_ids_solver_feedback_v1"
 QUESTIONER_SPAN_IDS_ONLY_PROMPT_VERSION = "spell_dialogue_mcq_3x_v8_span_ids_only_solver_feedback_v1"
 QUESTIONER_SPAN_IDS_ONLY_SCHEMA_VERSION = "questioner_span_ids_only_v1"
+SEMANTIC_LEAKAGE_REPAIR_PROMPT_VERSION = "spell_dialogue_mcq_single_v8_semantic_leakage_repair_v1"
+SEMANTIC_LEAKAGE_REPAIR_SCHEMA_VERSION = "semantic_leakage_repair_span_ids_only_v1"
 QUESTIONER_FORMAT_RETRY_VERSION = "questioner_format_only_retry_v1"
 RESPONDER_PROMPT_VERSION = "mcq_boxed_letter_v1"
+POSITION_NEUTRAL_RESPONDER_PROMPT_VERSION = "mcq_boxed_letter_position_neutral_v2"
+SOLVER_TRAILING_FORMAT_VERSION = "mcq_boxed_letter_trailing_v1"
+SOLVER_PARSE_RETRY_VERSION = "mcq_boxed_letter_format_retry_v1"
+POSITION_NEUTRAL_SOLVER_PARSE_RETRY_VERSION = (
+    "mcq_boxed_letter_position_neutral_format_retry_v2")
+GRAPH_REALIZER_PROMPT_VERSION = "rolling_dialogue_realizer_graph_v2_error_feedback"
+GRAPH_REALIZER_RETRY_FEEDBACK_VERSION = "graph_realizer_error_feedback_v1"
 
 QUESTIONER_FORMAT_RETRY_SUFFIX = """Your previous response was not valid JSON.
 
@@ -55,6 +64,31 @@ Replace A with exactly one of A, B, C, or D.
 Do not output reasoning, punctuation, Markdown, or any text outside the box tags."""
 
 SOLVER_NOTHINK_RESPONDER_PROMPT = RESPONDER_PROMPT
+
+SOLVER_POSITION_NEUTRAL_RESPONDER_PROMPT = """Answer the multiple-choice question using only
+the supplied context. If no context is supplied, do not assume unstated facts.
+
+Return exactly one uppercase option letter enclosed by the literal opening tag <box> and closing
+tag </box>. The valid option letters are A, B, C, and D; no letter is preferred.
+
+Do not output reasoning, punctuation, Markdown, or any text outside the box tags."""
+
+SOLVER_TRAILING_FORMAT_INSTRUCTION = """Output exactly one of:
+<box>A</box>
+<box>B</box>
+<box>C</box>
+<box>D</box>
+
+Return only the box tags and letter. Do not include the option text."""
+
+SOLVER_PARSE_RETRY_SUFFIX = """FORMAT RETRY: Your previous response did not match the required
+boxed-letter format. Answer the same unchanged question again. Return only one exact boxed letter,
+for example <box>A</box>. Do not include the option text, explanation, punctuation, or Markdown."""
+
+SOLVER_POSITION_NEUTRAL_PARSE_RETRY_SUFFIX = """FORMAT RETRY: Your previous response did not
+match the required boxed-letter format. Answer the same unchanged question again. Return one
+uppercase option letter (A, B, C, or D) between the literal tags <box> and </box>. No option letter
+is preferred. Do not include the option text, explanation, punctuation, or Markdown."""
 
 REALIZER_OUTPUT_SCHEMA: dict[str, Any] = {
     "dialogue_turns": [{"speaker": "string", "text": "string"}],
@@ -106,6 +140,31 @@ QUESTIONER_SPAN_IDS_ONLY_ITEM_JSON_SCHEMA: dict[str, Any] = {
     },
 }
 
+SEMANTIC_LEAKAGE_REPAIR_JSON_SCHEMA: dict[str, Any] = {
+    "type":"object",
+    "required":["qa_id", "question", "correct_answer_text", "distractors",
+                "answer_support_span_ids"],
+    "properties":{
+        "qa_id":{"type":"string", "minLength":1},
+        "question":{"type":"string", "minLength":1},
+        "correct_answer_text":{"type":"string", "minLength":1},
+        "distractors":{"type":"array", "minItems":3, "maxItems":3,
+                       "items":{"type":"string", "minLength":1}},
+        "answer_support_span_ids":{"type":"array", "minItems":1,
+                                   "items":{"type":"string", "minLength":1}},
+        "reasoning_steps":{"type":"array", "items":{"type":"string", "minLength":1}},
+    },
+    "additionalProperties":False,
+}
+
+SEMANTIC_REPAIR_FORMAT_RETRY_SUFFIX = """Your previous response was not valid JSON.
+
+Regenerate the complete repair item from scratch as exactly one valid JSON object that follows the required schema.
+
+Do not repair or continue the previous response.
+Do not include Markdown, explanations, comments, or text outside the JSON object.
+Ensure all arrays and the object are fully closed before returning."""
+
 
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2)
@@ -126,18 +185,21 @@ def build_realizer_prompt(
     parent_anchors: Sequence[Mapping[str, Any]] = (),
     allowed_durable_subjects: Sequence[str] = (),
     durable_predicate_whitelist: Sequence[str] = (),
+    require_unresolved_hook: bool = True,
 ) -> str:
     """Build one session prompt. API turn IDs are forbidden and assigned after acceptance."""
     if session_index < 1:
         raise ValueError("session_index must be >= 1")
     if not narrative_beats:
         raise ValueError("at least one narrative beat is required")
-    if session_index > 1 and not unresolved_hooks:
+    if session_index > 1 and require_unresolved_hook and not unresolved_hooks:
         raise ValueError("session 2+ requires at least one unresolved hook")
     start_rule = (
         "Session 1: explicitly continue at least one supplied parent anchor or opening hook."
         if session_index == 1 else
         "Session 2+: explicitly continue at least one supplied unresolved hook; identify its ID in continued_unresolved_hook_ids and optionally resolved_hook_ids."
+        if require_unresolved_hook else
+        "Session 2+: continue the frozen Graph scene schedule; no unresolved hook is required."
     )
     payload = {
         "session_index": session_index,
@@ -196,6 +258,127 @@ def build_realizer_prompt(
         "REQUIRED OUTPUT SCHEMA\n" + _json(REALIZER_OUTPUT_SCHEMA),
         "MINIMAL LEGAL SHAPE (illustrative values only; do not copy facts)\n" + _json(example),
     ])
+
+
+def build_graph_realizer_prompt(*, graph_scene_contract: Mapping[str, Any],
+                                **realizer_kwargs: Any) -> str:
+    """Extend the rolling protocol with one frozen executable Graph scene contract."""
+    coverage_only = (graph_scene_contract.get("stage_accounting_mode") ==
+                     "coverage_only_v1")
+    base = build_realizer_prompt(
+        **realizer_kwargs, require_unresolved_hook=not coverage_only)
+    token_range = graph_scene_contract["target_dialogue_token_range"]
+    hard_token_range = graph_scene_contract["hard_dialogue_token_range"]
+    turn_range = graph_scene_contract["target_turn_range"]
+    word_range = graph_scene_contract["target_approximate_english_word_range"]
+    required_participants = ", ".join(graph_scene_contract["required_participants"])
+    graph_rules = [
+        "This is a full Graph expansion scene, not a continuity smoke.",
+        "Realize exactly the supplied graph scene; do not merge later scenes into this response.",
+        f"Produce {turn_range[0]} to {turn_range[1]} dialogue turns.",
+        (f"The dialogue_turns content must contain {token_range[0]} to {token_range[1]} tokens "
+         "under the frozen local tokenizer; aim near target_dialogue_tokens."),
+        (f"The target range is preferred; only outputs outside the hard safety range "
+         f"{hard_token_range[0]} to {hard_token_range[1]} are rejected for length."),
+        (f"As a practical length guide, write roughly {word_range[0]} to {word_range[1]} "
+         "English words across all dialogue turn texts."),
+        "Every required_participant must speak at least one meaningful dialogue turn.",
+        (f"REQUIRED SPEAKER ROSTER FOR THIS RESPONSE: {required_participants}. "
+         "Use each exact name as dialogue_turns[*].speaker at least once. If a required person "
+         "is new in this scene, introduce that person naturally before continuing the scene."),
+        "Use every required_parent_anchor_id in used_parent_anchor_ids.",
+        "advanced_event_arc_ids must contain exactly the assigned_event_arc_ids, once each.",
+        "Cover every assigned event stage concretely in the dialogue; do not merely announce completion.",
+        "Keep the whole scene at fixed_session_location and respect relative_time ordering.",
+        "Satisfy handoff_requirement naturally. Do not output scene-contract metadata.",
+        ("Do not copy or paraphrase an allowed_unresolved_hooks description into "
+         "new_unresolved_hooks. Continue or resolve the existing H* ID; create a new hook "
+         "only for a genuinely distinct future action introduced by this scene."),
+        ("Follow new_unresolved_hook_policy exactly: exactly_one means return one description; "
+         "forbidden means new_unresolved_hooks must be []."),
+    ]
+    return "\n\n".join([
+        base,
+        f"GRAPH_PROMPT_VERSION: {GRAPH_REALIZER_PROMPT_VERSION}",
+        "FULL GRAPH SCENE CONTRACT RULES\n- " + "\n- ".join(graph_rules),
+        "FROZEN GRAPH SCENE CONTRACT\n" + _json(graph_scene_contract),
+    ])
+
+
+def build_graph_realizer_retry_prompt(
+        *, base_prompt: str, previous_errors: Sequence[str], retry_index: int,
+        graph_scene_contract: Mapping[str, Any], dialogue_token_count: int,
+        missing_required_participants: Sequence[str], accepted_child_tokens: int,
+        missing_required_parent_anchor_ids: Sequence[str] = (),
+) -> str:
+    """Append fixed validator feedback without returning malformed model output."""
+    labels = sorted(set(str(error) for error in previous_errors if str(error)))
+    if not base_prompt or not labels or retry_index < 1:
+        raise ValueError("graph_realizer_retry_feedback_input_invalid")
+    instructions = [
+        "Regenerate the complete scene JSON from scratch under the unchanged frozen Graph contract.",
+        "Do not continue, quote, repair, or discuss the previous response.",
+        "Do not change the assigned scene, participants, anchors, event arcs, stages, or handoff.",
+    ]
+    schema_labels = {
+        "realizer_json_invalid", "realizer_schema_invalid",
+        "realizer_missing_fields", "realizer_extra_fields",
+        "bad_dialogue_turn_schema",
+    }
+    if set(labels).intersection(schema_labels):
+        instructions.append(
+            "Return exactly the required JSON object. Every dialogue_turns item must contain "
+            "only speaker and text; never output turn_id or session_id because the caller "
+            "assigns both after acceptance.")
+    if "graph_scene_token_count_out_of_range" in labels:
+        target = list(graph_scene_contract["target_dialogue_token_range"])
+        safety = list(graph_scene_contract["hard_dialogue_token_range"])
+        instructions.append(
+            f"The previous dialogue text had {int(dialogue_token_count)} local-tokenizer "
+            f"tokens. Rewrite it toward the soft target {target[0]}-{target[1]} and keep it "
+            f"inside the hard safety range {safety[0]}-{safety[1]}.")
+    if "graph_required_participant_missing" in labels:
+        missing = ", ".join(str(name) for name in missing_required_participants)
+        instructions.append(
+            "Give every missing required participant at least one meaningful turn using the "
+            f"exact speaker name. Missing roster: {missing or 'see frozen contract'}.")
+    if "graph_required_parent_anchor_missing" in labels:
+        missing_anchors = ", ".join(
+            str(anchor_id) for anchor_id in missing_required_parent_anchor_ids)
+        instructions.append(
+            "Include every missing frozen parent anchor ID exactly once in "
+            "used_parent_anchor_ids and ground the scene naturally in that anchor. "
+            f"Missing parent anchors: {missing_anchors or 'see frozen contract'}.")
+    if "graph_final_scene_completion_failed" in labels:
+        instructions.append(
+            f"The accepted child dialogue currently has {int(accepted_child_tokens)} tokens. "
+            "Make this final scene long enough for the complete ten-scene dialogue to reach "
+            "the frozen hard total minimum, while staying inside this scene's safety range.")
+    feedback = {
+        "feedback_version": GRAPH_REALIZER_RETRY_FEEDBACK_VERSION,
+        "retry_index": int(retry_index),
+        "previous_validator_labels": labels,
+        "previous_dialogue_token_count": int(dialogue_token_count),
+        "missing_required_participants": list(missing_required_participants),
+        "missing_required_parent_anchor_ids": list(
+            missing_required_parent_anchor_ids),
+        "accepted_child_tokens_before_scene": int(accepted_child_tokens),
+        "instructions": instructions,
+        "previous_raw_response_included": False,
+        "semantic_contract_changed": False,
+    }
+    return "\n\n".join([
+        base_prompt,
+        f"RETRY_FEEDBACK_VERSION: {GRAPH_REALIZER_RETRY_FEEDBACK_VERSION}",
+        "FIXED VALIDATOR FEEDBACK\n" + _json(feedback),
+    ])
+
+
+def graph_realizer_template_hash() -> str:
+    material = (GRAPH_REALIZER_PROMPT_VERSION + inspect.getsource(build_realizer_prompt) +
+                inspect.getsource(build_graph_realizer_prompt) +
+                inspect.getsource(build_graph_realizer_retry_prompt))
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
 def build_questioner_prompt(
@@ -383,6 +566,74 @@ def span_ids_only_questioner_template_hash() -> str:
                 inspect.getsource(build_questioner_span_ids_only_feedback_prompt) +
                 _json(QUESTIONER_SPAN_IDS_ONLY_ITEM_JSON_SCHEMA))
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def build_semantic_leakage_repair_prompt(
+    *, frozen_dialogue: Sequence[Mapping[str, Any]], span_catalog: Mapping[str, Any],
+    original_item: Mapping[str, Any], repaired_qa_id: str, target_answer_letter: str,
+    original_no_context: Mapping[str, Any], permutation_diagnostic: Mapping[str, Any],
+) -> str:
+    """Build the fixed single-item repair task without changing the v8 generator."""
+    if not frozen_dialogue or not repaired_qa_id or target_answer_letter not in "ABCD":
+        raise ValueError("repair requires frozen dialogue, a repaired ID, and a target letter")
+    original_fields = ("qa_id", "question", "correct_answer_text", "distractors",
+                       "answer_support_span_ids", "reasoning_steps")
+    original = {key:original_item.get(key) for key in original_fields
+                if key in original_item}
+    if not all(original.get(key) for key in ("qa_id", "question", "correct_answer_text",
+                                              "distractors", "answer_support_span_ids")):
+        raise ValueError("original repair item is incomplete")
+    catalog = span_catalog_index(span_catalog)
+    compact_catalog = [{"span_id":span_id, "turn_id":span["turn_id"],
+                        "session_id":span["session_id"], "speaker":span["speaker"]}
+                       for span_id, span in catalog.items()]
+    frozen = [{key:turn.get(key) for key in ("turn_id", "session_id", "speaker", "text")}
+              for turn in frozen_dialogue]
+    orders = [{key:order.get(key) for key in
+               ("order_id", "gold_letter", "valid_answer_letters", "valid_rewards")}
+              for order in permutation_diagnostic.get("orders") or []]
+    diagnosis = {"authoritative_original_no_context_rewards":list(
+            original_no_context.get("verified_rewards") or []),
+        "diagnostic_decision":permutation_diagnostic.get("decision"),
+        "orders":orders}
+    payload = {"repaired_qa_id_must_equal":repaired_qa_id,
+        "local_target_answer_letter_do_not_output":target_answer_letter,
+        "original_item":original,
+        "authoritative_solver_diagnosis":diagnosis,
+        "frozen_dialogue":frozen, "span_catalog":compact_catalog}
+    rules = [
+        "The original item failed because the Solver selected the correct semantic option without seeing the dialogue, across every tested option permutation.",
+        "This is semantic answer leakage, not letter-position bias.",
+        "Regenerate one complete item from scratch. Do not explain the repair and do not return the old item plus edits.",
+        "You may revise only the question, correct_answer_text, distractors, answer_support_span_ids, and optional reasoning_steps. qa_id MUST equal the supplied repaired_qa_id_must_equal.",
+        "Revise the item so that the correct answer cannot be identified from commonsense, wording, sentiment, detail level, or option plausibility alone.",
+        "All four answer texts must have the same answer type, parallel grammatical form, similar length, similar specificity, similar detail level, similar sentiment, and similar social plausibility.",
+        "Every answer text must be individually plausible without seeing the dialogue.",
+        "Prefer distractors based on other real people, events, actions, places, times, causes, states, decisions, or outcomes that appear elsewhere in the frozen dialogue.",
+        "The options should be distinguishable only by the exact relation asked: person, time, order, cause, state change, knowledge state, permission, decision, or event linkage.",
+        "Do not make the correct answer uniquely more natural, positive, detailed, specific, causally coherent from commonsense, or closely matched to the question wording.",
+        "Do not use absurd, unrelated, generic, or cross-type distractors.",
+        "Choose answer_support_span_ids exactly from the supplied span catalog. The frozen dialogue is the sole factual source.",
+        "Do not output options, reference_answer_letter, reference_answer_text, canonical_answer_text, answer_evidence_values, distractor_support, exact_quote, supporting_quotes, difficulty_level, reasoning_type, evidence_turn_ids, evidence_session_ids, explanations, repair_notes, or any field outside the schema.",
+        "Return exactly one JSON object and no Markdown or surrounding text.",
+    ]
+    return "\n\n".join([f"PROMPT_VERSION: {SEMANTIC_LEAKAGE_REPAIR_PROMPT_VERSION}",
+        "SEMANTIC-LEAKAGE REPAIR RULES\n- " + "\n- ".join(rules),
+        "REPAIR INPUT\n" + _json(payload),
+        "REPAIR JSON SCHEMA\n" + _json(SEMANTIC_LEAKAGE_REPAIR_JSON_SCHEMA)])
+
+
+def semantic_leakage_repair_template_hash() -> str:
+    material = (SEMANTIC_LEAKAGE_REPAIR_PROMPT_VERSION +
+                SEMANTIC_LEAKAGE_REPAIR_SCHEMA_VERSION +
+                inspect.getsource(build_semantic_leakage_repair_prompt) +
+                _json(SEMANTIC_LEAKAGE_REPAIR_JSON_SCHEMA))
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def semantic_repair_format_retry_suffix_hash() -> str:
+    return hashlib.sha256((QUESTIONER_FORMAT_RETRY_VERSION +
+                           SEMANTIC_REPAIR_FORMAT_RETRY_SUFFIX).encode("utf-8")).hexdigest()
 
 
 def questioner_format_retry_suffix_hash() -> str:
