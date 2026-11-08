@@ -8,10 +8,11 @@ from typing import Any, Mapping, Sequence
 from ..core import canonical_json, sha256_bytes
 
 
-MEMORAX_ADD_INTENT_VERSION = "memory_event_continuation_add_intent_v1"
+MEMORAX_ADD_INTENT_VERSION = "memory_event_continuation_add_intent_v2_all_user"
 MEMORAX_BUCKET_QUERY_VERSION = "memory_event_continuation_bucket_query_v1"
 MEMORAX_APP_ID = "gxy-selfplay-memory-event-continuation-v1"
 MEMORAX_AGENT_ID = "simple-append-memory-event-continuation-v1"
+MEMORAX_ROLE_POLICY = "all_user_speaker_identity_in_content_v1"
 MEMORAX_USER_NAMESPACE = (
     "gxy-selfplay:memory-event-continuation-semantic-gate-probe-v1")
 MAX_MESSAGE_CHARACTERS = 12_000
@@ -59,11 +60,14 @@ def build_add_intent(*, root_id: str, round_index: int,
     root = str(root_id).strip()
     round_ref = f"R{int(round_index):02d}"
     session_id = f"{root}:memorax:{round_ref}"
+    # Memorax requires a transport role, but this dataset is not a human/AI
+    # conversation. Keep every source turn on the same transport role and
+    # preserve actual identity only in the canonical [Speaker: ...] prefix.
     messages = [{
-        "role": "user" if i % 2 == 0 else "assistant",
+        "role": "user",
         "timestamp": -1,
         "content": row["content"],
-    } for i, row in enumerate(normalized)]
+    } for row in normalized]
     recent = [_turn_view(row) for row in recent_context_turns]
     payload = {
         "user_id": memorax_user_id(root, namespace=user_namespace),
@@ -84,12 +88,13 @@ def build_add_intent(*, root_id: str, round_index: int,
             "last_turn_ref": refs[-1],
             "turn_count": len(refs),
             "accepted_dialogue_only": True,
+            "memorax_role_policy": MEMORAX_ROLE_POLICY,
         },
         "window_context": [{
-            "role": "user" if i % 2 == 0 else "assistant",
+            "role": "user",
             "timestamp": -1,
             "content": row["content"],
-        } for i, row in enumerate(recent[-50:])],
+        } for row in recent[-50:]],
         "messages": messages,
     }
     payload_sha = sha256_bytes(canonical_json(payload).encode("utf-8"))

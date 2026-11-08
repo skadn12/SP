@@ -1,0 +1,83 @@
+{
+  "schema_version": "source_dependency_extraction_v1",
+  "snapshot_date": "2026-11-08",
+  "scope": "Source dependencies referenced by the published expansion and batch-delivery modules. No algorithms or original source bytes changed.",
+  "files": [
+    {
+      "source_workspace_relative_path": "current_method_github/scripts/current_method/restart_n5_spell/h4_round1_r03_feedback_view_v2/__init__.py",
+      "published_path": "scripts/current_method/restart_n5_spell/h4_round1_r03_feedback_view_v2/__init__.py",
+      "sha256": "8c18a29996f361fe49f96e715c71dc273bd22ba18fd60f5b9f9a0381eadd3729",
+      "size_bytes": 1856,
+      "byte_identical": true
+    },
+    {
+      "source_workspace_relative_path": "current_method_github/scripts/current_method/restart_n5_spell/h4_round1_r03_feedback_view_v2/compiler.py",
+      "published_path": "scripts/current_method/restart_n5_spell/h4_round1_r03_feedback_view_v2/compiler.py",
+      "sha256": "070dcc07356ff0869352383b96dbe2077791afc1c40ee39e2e9415619db11d24",
+      "size_bytes": 13856,
+      "byte_identical": true
+    },
+    {
+      "source_workspace_relative_path": "current_method_github/scripts/current_method/restart_n5_spell/h4_round1_r03_feedback_view_v2/renderers.py",
+      "published_path": "scripts/current_method/restart_n5_spell/h4_round1_r03_feedback_view_v2/renderers.py",
+      "sha256": "40632ad4d8ec45f864061b3def43688f62f99f209b7cc06dc6139d5f5b057c75",
+      "size_bytes": 10194,
+      "byte_identical": true
+    },
+    {
+      "source_workspace_relative_path": "current_method_github/scripts/current_method/restart_n5_spell/h4_round1_r03_feedback_view_v2/templates.py",
+      "published_path": "scripts/current_method/restart_n5_spell/h4_round1_r03_feedback_view_v2/templates.py",
+      "sha256": "3f34c7b2b81b623c38f9446f9b9b789841674a4799337e2d8c12e15a2bc54219",
+      "size_bytes": 13547,
+      "byte_identical": true
+    },
+    {
+      "source_workspace_relative_path": "current_method_github/scripts/current_method/restart_n5_spell/h4_round1_r03_qa_output_contract_v1_1_revision_1/__init__.py",
+      "published_path": "scripts/current_method/restart_n5_spell/h4_round1_r03_qa_output_contract_v1_1_revision_1/__init__.py",
+      "sha256": "24800910b2874f95c3dce10312820668e4489369f16fb4efa1507d1e77df0b93",
+      "size_bytes": 81,
+      "byte_identical": true
+    },
+    {
+      "source_workspace_relative_path": "current_method_github/scripts/current_method/restart_n5_spell/h4_round1_r03_qa_output_contract_v1_1_revision_1/prompts.py",
+      "published_path": "scripts/current_method/restart_n5_spell/h4_round1_r03_qa_output_contract_v1_1_revision_1/prompts.py",
+      "sha256": "4b2540c833c9c6f5071362d98f3b259bb1d2b68ac1e6ea4cad6554a11dfe4f8c",
+      "size_bytes": 2945,
+      "byte_identical": true
+    },
+    {
+      "source_workspace_relative_path": "offline-deliveries/h4_batch_codex_benchmark_v104/evidence/audit_public_duplicates_and_lengths.py",
+      "published_path": "offline-deliveries/h4_batch_codex_benchmark_v104/evidence/audit_public_duplicates_and_lengths.py",
+      "sha256": "0542cfe07fced0cbb6712e3a47a01891a8999a3df35ddc2eeb1c6715e07a6dd0",
+      "size_bytes": 17104,
+      "byte_identical": true
+    }
+  ],
+  "limitations": [
+    "feedback compiler load_frozen_inputs requires externally supplied historical run inputs; they are not in this code publication.",
+    "codex_batch_delivery.duplicate_audit locates the parser under batch.parent/h4_batch_codex_benchmark_v104/evidence; use the published offline-deliveries layout with separately supplied batch inputs.",
+    "The public duplicate parser only compares supported six-sentence exact public projections; it is not a semantic novelty validator."
+  ],
+  "checks": {
+    "python_ast_parsed": true,
+    "secret_pattern_scan_no_matches": true,
+    "raw_service_responses_added": false,
+    "dataset_or_model_files_added": false,
+    "code_only_index_checkout_import_smoke": {
+      "status": "PASS",
+      "module_count": 8,
+      "network_and_subprocess_calls_blocked": true,
+      "model_or_training_started": false,
+      "modules": [
+        "scripts.current_method.restart_n5_spell.h4_round1_r03_feedback_view_v2.compiler",
+        "scripts.current_method.restart_n5_spell.h4_round1_r03_feedback_view_v2.templates",
+        "scripts.current_method.restart_n5_spell.h4_round1_r03_feedback_view_v2.renderers",
+        "scripts.current_method.restart_n5_spell.h4_round1_r03_qa_output_contract_v1_1_revision_1.prompts",
+        "scripts.current_method.restart_n5_spell.simple_append_memorax_v1_memory_event_continuation_probe_v1.live",
+        "scripts.current_method.restart_n5_spell.simple_append_memorax_v1_memory_event_continuation_probe_v1.workflow",
+        "codex_batch_delivery",
+        "offline-deliveries/h4_batch_codex_benchmark_v104/evidence/audit_public_duplicates_and_lengths.py"
+      ]
+    }
+  }
+}

@@ -29,13 +29,35 @@ REQUIRED_EVENT_FIELDS = (
     "time_index",
 )
 OPTIONAL_EVENT_FIELDS = (
+    "event_type",
+    "node_type",
+    "constructor_role",
+    "claim_edge_role",
+    "qa_eligible",
+    "answer_bearing",
+    "answer_role",
+    "dependency_edge_role",
     "previous_value",
     "depends_on",
     "scope",
     "set_membership",
+    "owner",
+    "resource",
+    "observer",
+    "action",
+    "condition",
+    "access_class",
+    "global_time",
+    "local_time",
+    "local_time_index",
+    "global_time_index",
+    "session_index",
     "evidence_turn_ids",
     "provenance",
     "required_for_dialogue",
+    "depends_on_parent_event_ids",
+    "parent_topic_anchor_event_ids",
+    "parent_relation",
 )
 
 SUPPORTED_STATUSES = frozenset(
@@ -109,6 +131,75 @@ def _is_json_scalar(value: Any) -> bool:
 
 def _normalized_text(value: Any) -> str:
     return re.sub(r"[\W_]+", " ", str(value).casefold(), flags=re.UNICODE).strip()
+
+
+_PERSON_ATOM_TOKEN = re.compile(
+    r"[^\W\d_]+(?:[-'][^\W\d_]+)*\.?",
+    re.UNICODE,
+)
+_PERSON_ATOM_PARTICLES = frozenset(
+    {"al", "bin", "da", "de", "del", "der", "di", "du", "la", "le", "van", "von"}
+)
+_PERSON_ROLE_TOKENS = frozenset(
+    {
+        "advisor", "adviser", "artist", "assignee", "author", "captain",
+        "child", "coach", "colleague", "companion", "contact", "coordinator",
+        "curator", "delegate", "director", "discoverer", "employee", "founder",
+        "friend", "guest", "host", "leader", "manager", "member", "mentor",
+        "name", "observer", "organizer", "owner", "parent", "participant",
+        "partner", "person", "recipient", "relative", "resident", "sibling",
+        "speaker", "spouse", "teacher", "winner",
+    }
+)
+_NON_PERSON_ROLE_TOKENS = frozenset(
+    {
+        "address", "age", "amount", "appointment", "approval", "condition",
+        "confirmation", "count", "date", "day", "deadline", "destination",
+        "duration", "hour", "level", "location", "minute", "month", "number",
+        "permission", "quantity", "result", "room", "route", "schedule", "scope",
+        "score", "site", "state", "status", "time", "venue", "verification",
+        "week", "year",
+    }
+)
+
+
+def _is_atomic_person_name(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    tokens = value.strip().split()
+    if not 1 <= len(tokens) <= 5:
+        return False
+    for token in tokens:
+        if _PERSON_ATOM_TOKEN.fullmatch(token) is None:
+            return False
+        components = re.split(r"[-']", token.rstrip("."))
+        if any(
+            not component
+            or (
+                not component[0].isupper()
+                and component.casefold() not in _PERSON_ATOM_PARTICLES
+            )
+            for component in components
+        ):
+            return False
+    return True
+
+
+def _is_person_role_slot(slot: Any) -> bool:
+    normalized = re.sub(r"[\W]+", "_", str(slot or "").casefold()).strip("_")
+    if not normalized:
+        return False
+    tokens = [token for token in normalized.split("_") if token]
+    variants = set(tokens)
+    variants.update(
+        token[:-1] for token in tokens if len(token) > 3 and token.endswith("s")
+    )
+    if variants.intersection(_NON_PERSON_ROLE_TOKENS):
+        return False
+    return bool(
+        variants.intersection(_PERSON_ROLE_TOKENS)
+        or normalized.endswith("_by")
+    )
 
 
 def _same_value(left: Any, right: Any) -> bool:
@@ -247,6 +338,23 @@ def validate_event(event: Any, *, path: str = "$.events[0]") -> list[dict[str, A
                 )
             )
 
+    for time_field in ("local_time_index", "global_time_index", "session_index"):
+        if time_field not in event:
+            continue
+        time_value = event[time_field]
+        if (
+            isinstance(time_value, bool)
+            or not isinstance(time_value, int)
+            or time_value < 0
+        ):
+            issues.append(
+                _issue(
+                    f"invalid_{time_field}",
+                    f"{path}.{time_field}",
+                    f"{time_field} must be a non-negative integer when present.",
+                )
+            )
+
     if "previous_value" in event:
         previous_value = event["previous_value"]
         if previous_value is not None and not _is_json_scalar(previous_value):
@@ -260,6 +368,45 @@ def validate_event(event: Any, *, path: str = "$.events[0]") -> list[dict[str, A
 
     if "depends_on" in event:
         issues.extend(_validate_string_list(event["depends_on"], f"{path}.depends_on", "depends_on"))
+
+    for parent_ref_field in (
+        "depends_on_parent_event_ids",
+        "parent_topic_anchor_event_ids",
+    ):
+        if parent_ref_field in event:
+            issues.extend(
+                _validate_string_list(
+                    event[parent_ref_field],
+                    f"{path}.{parent_ref_field}",
+                    parent_ref_field,
+                )
+            )
+
+    for role_field in (
+        "constructor_role",
+        "claim_edge_role",
+        "answer_role",
+        "dependency_edge_role",
+        "parent_relation",
+    ):
+        if role_field in event and not _is_nonempty_string(event[role_field]):
+            issues.append(
+                _issue(
+                    f"invalid_{role_field}",
+                    f"{path}.{role_field}",
+                    f"{role_field} must be a non-empty string when present.",
+                )
+            )
+
+    for boolean_field in ("qa_eligible", "answer_bearing"):
+        if boolean_field in event and not isinstance(event[boolean_field], bool):
+            issues.append(
+                _issue(
+                    f"invalid_{boolean_field}",
+                    f"{path}.{boolean_field}",
+                    f"{boolean_field} must be a JSON boolean when present.",
+                )
+            )
 
     if "scope" in event:
         scope = event["scope"]
@@ -878,6 +1025,162 @@ def _bridge_target_issues(
     events: list[dict[str, Any]],
     reasoning_target: dict[str, Any],
 ) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    if len(events) < 3:
+        return [
+            _issue(
+                "bridge_target_insufficient_events",
+                "1events",
+                "A target-aware bridge requires E1, E2, and E3 roles.",
+            )
+        ]
+    event_ids = [str(event.get("event_id") or "") for event in events]
+    expected_dependencies = [
+        [],
+        [],
+        [event_ids[0], event_ids[1]],
+        *([] for _event in events[3:]),
+    ]
+    actual_dependencies = [
+        list(event.get("depends_on") or [])
+        if isinstance(event.get("depends_on"), list)
+        else []
+        for event in events
+    ]
+    if actual_dependencies != expected_dependencies:
+        issues.append(
+            _issue(
+                "bridge_target_dependency_roles_mismatch",
+                "1events",
+                "Only E3 may depend on events, and it must depend exactly on E1 then E2.",
+                expected=expected_dependencies,
+                actual=actual_dependencies,
+            )
+        )
+
+    binder_value = events[0].get("value")
+    target_entity = events[1].get("entity")
+    if (
+        not _is_nonempty_string(binder_value)
+        or not _is_nonempty_string(target_entity)
+        or binder_value != target_entity
+    ):
+        issues.append(
+            _issue(
+                "bridge_target_missing_binder_join",
+                "1events[0].value",
+                "E1.value must equal E2.entity byte-for-byte.",
+                binder_value=binder_value,
+                target_entity=target_entity,
+            )
+        )
+
+    answer_value = events[1].get("value")
+    preferred_answer_type = str(
+        reasoning_target.get("preferred_answer_type") or ""
+    ).strip()
+    answer_slot = events[1].get("slot")
+    if preferred_answer_type == "Person" and not _is_person_role_slot(
+        answer_slot
+    ):
+        issues.append(
+            _issue(
+                "bridge_target_answer_slot_type_mismatch",
+                "$.events[1].slot",
+                "A Person bridge target requires a person-valued semantic role as E2.slot.",
+                preferred_answer_type=preferred_answer_type,
+                answer_slot=answer_slot,
+            )
+        )
+    if preferred_answer_type == "Person" and not _is_atomic_person_name(
+        answer_value
+    ):
+        issues.append(
+            _issue(
+                "bridge_target_answer_type_mismatch",
+                "1events[1].value",
+                "A Person bridge target requires one atomic person name as E2.value.",
+                preferred_answer_type=preferred_answer_type,
+                answer_value=answer_value,
+            )
+        )
+    if preferred_answer_type == "Person":
+        answer_key = _normalized_text(answer_value)
+        answer_slot_key = _normalized_text(answer_slot)
+        typed_negative_values: list[str] = []
+        seen_values = {answer_key}
+        for event in events[3:6]:
+            candidate = event.get("value")
+            candidate_key = _normalized_text(candidate)
+            if (
+                _is_atomic_person_name(candidate)
+                and _is_person_role_slot(event.get("slot"))
+                and _normalized_text(event.get("slot")) == answer_slot_key
+                and candidate_key
+                and candidate_key not in seen_values
+            ):
+                seen_values.add(candidate_key)
+                typed_negative_values.append(str(candidate).strip())
+        if len(typed_negative_values) < 3:
+            issues.append(
+                _issue(
+                    "bridge_target_insufficient_typed_distractors",
+                    "$.events[3:]",
+                    "A Person bridge target requires three distinct Person-valued hard negatives.",
+                    typed_distractor_count=len(typed_negative_values),
+                    typed_distractor_values=typed_negative_values,
+                )
+            )
+    if (
+        str(reasoning_target.get("hard_negative_strategy") or "").strip()
+        == "one_hop_preserving_alternative"
+        and len(events) >= 4
+        and _normalized_text(events[3].get("entity"))
+        != _normalized_text(events[2].get("entity"))
+    ):
+        issues.append(
+            _issue(
+                "bridge_target_one_hop_negative_mismatch",
+                "$.events[3].entity",
+                "E4 must preserve the terminal entity for this bridge hard-negative strategy.",
+                terminal_entity=events[2].get("entity"),
+                hard_negative_entity=events[3].get("entity"),
+            )
+        )
+
+    answer_surface = _normalized_text(answer_value)
+    terminal_surfaces = [
+        _normalized_text(events[2].get(field))
+        for field in ("entity", "slot", "value")
+    ]
+    if not answer_surface or any(
+        f" {answer_surface} " in f" {surface} "
+        for surface in terminal_surfaces
+        if surface
+    ):
+        issues.append(
+            _issue(
+                "bridge_target_terminal_copies_answer",
+                "1events[2]",
+                "E3 is a proof connector and must not expose E2.value.",
+                answer_value=events[1].get("value"),
+            )
+        )
+    if not any(
+        _normalized_text(event.get("entity"))
+        == _normalized_text(events[2].get("entity"))
+        or _normalized_text(event.get("slot"))
+        == _normalized_text(events[2].get("slot"))
+        for event in events[3:]
+    ):
+        issues.append(
+            _issue(
+                "bridge_target_unrelated_hard_negatives",
+                "$.events[3:]",
+                "A bridge hard negative must share the terminal entity or slot.",
+            )
+        )
+
     by_id = _events_by_id(events)
     referenced_ids = {
         dependency
@@ -899,17 +1202,17 @@ def _bridge_target_issues(
                     "dependency_ancestors": sorted(ancestors),
                 }
             )
-    if len(endpoint_candidates) == 1:
-        return []
-    return [
-        _issue(
-            "bridge_target_missing_unique_dependency_endpoint",
-            "$.events",
-            "A target-aware bridge must have exactly one sink endpoint whose dependency closure contains at least two events.",
-            endpoint_candidates=endpoint_candidates,
-            candidate_count=len(endpoint_candidates),
+    if len(endpoint_candidates) != 1:
+        issues.append(
+            _issue(
+                "bridge_target_missing_unique_dependency_endpoint",
+                "1events",
+                "A target-aware bridge must have exactly one sink endpoint whose dependency closure contains at least two events.",
+                endpoint_candidates=endpoint_candidates,
+                candidate_count=len(endpoint_candidates),
+            )
         )
-    ]
+    return issues
 
 
 def _comparison_target_issues(
@@ -1198,15 +1501,28 @@ def _cause_target_issues(
             and event_id not in effect_dependencies
         ):
             adjacent_noncausal_ids.append(event_id)
-    if adjacent_noncausal_ids:
+    effect_related_ids = [
+        str(event.get("event_id") or "")
+        for event in events
+        if str(event.get("event_id") or "") not in {cause_id, effect_id}
+        and (
+            _normalized_text(event.get("entity"))
+            == _normalized_text(effect.get("entity"))
+            or _normalized_text(event.get("slot"))
+            == _normalized_text(effect.get("slot"))
+        )
+    ]
+    if adjacent_noncausal_ids and effect_related_ids:
         return []
     return [
         _issue(
-            "cause_target_missing_adjacent_noncausal_negative",
+            "cause_target_missing_structured_noncausal_negative",
             "$.events",
-            "A direct-causal target must preserve a temporally adjacent event with no dependency edge to the cause/effect pair.",
+            "A direct-causal target needs both an adjacent noncausal event and an effect-related wrong answer.",
             cause_event_id=cause_id,
             effect_event_id=effect_id,
+            adjacent_noncausal_event_ids=adjacent_noncausal_ids,
+            effect_related_event_ids=effect_related_ids,
         )
     ]
 

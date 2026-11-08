@@ -31,6 +31,7 @@ from scripts.current_method import accumulate_stage64_reliable_frontier as accum
 from scripts.current_method import native_api_graph_dialogue_expansion as native  # noqa: E402
 from scripts.current_method import recalibrate_stage64_shuffled_frontier as recal  # noqa: E402
 from scripts.current_method import stage3_operation_controller as stage3_operations  # noqa: E402
+from scripts.current_method import stage3_multiqa_rows  # noqa: E402
 from scripts.current_method import stage64_quality  # noqa: E402
 
 
@@ -287,18 +288,35 @@ def stage64_target_freeze_payload(sample: dict[str, Any]) -> dict[str, Any] | No
                 f"Sample {sample.get('sample_id')!r} has a partial Stage64 reasoning "
                 f"target: missing={missing_reasoning_fields}"
             )
-        try:
-            canonical_reasoning = native._stage64_reasoning_contract_from_target(  # noqa: SLF001
-                target
-            )
-        except Exception as exc:
-            raise RuntimeError(
-                f"Sample {sample.get('sample_id')!r} has an invalid Stage64 reasoning target"
-            ) from exc
-        if not isinstance(canonical_reasoning, dict):
-            raise RuntimeError(
-                f"Sample {sample.get('sample_id')!r} lacks a canonical Stage64 reasoning target"
-            )
+        qa = sample.get("qa") if isinstance(sample.get("qa"), dict) else {}
+        local_truth_sibling = (
+            target.get("target_basis") == "truth_first_local_sibling_qa"
+            and sample.get("qa_row_schema_version")
+            == stage3_multiqa_rows.SCHEMA_VERSION
+            and qa.get("qa_role") == "sibling"
+            and qa.get("truth_first_generate_by_construction") is True
+            and qa.get("semantic_contract_frozen") is True
+        )
+        if local_truth_sibling:
+            semantic_issues = stage64_quality.semantic_quality_issues(sample)
+            if semantic_issues:
+                raise RuntimeError(
+                    f"Sample {sample.get('sample_id')!r} has an invalid local "
+                    f"Truth-first sibling target: {semantic_issues[:4]}"
+                )
+        else:
+            try:
+                canonical_reasoning = native._stage64_reasoning_contract_from_target(  # noqa: SLF001
+                    target
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Sample {sample.get('sample_id')!r} has an invalid Stage64 reasoning target"
+                ) from exc
+            if not isinstance(canonical_reasoning, dict):
+                raise RuntimeError(
+                    f"Sample {sample.get('sample_id')!r} lacks a canonical Stage64 reasoning target"
+                )
         reasoning_contract = {
             field: copy.deepcopy(target[field]) for field in STAGE64_REASONING_TARGET_FIELDS
         }
@@ -441,6 +459,13 @@ def marked_bundle_id(bundle: dict[str, Any]) -> str:
 
 def locate_marked_samples(recalibration_dir: Path) -> Path:
     candidates = [
+        recalibration_dir.parent / "claim_first_marked_qa_rows.jsonl",
+        recalibration_dir.parent.parent
+        / "generation"
+        / "claim_first_marked_qa_rows.jsonl",
+        recalibration_dir.parent
+        / "generation"
+        / "claim_first_marked_qa_rows.jsonl",
         recalibration_dir.parent.parent / "generation" / "marked_samples.jsonl",
         recalibration_dir.parent / "generation" / "marked_samples.jsonl",
     ]
@@ -448,7 +473,8 @@ def locate_marked_samples(recalibration_dir: Path) -> Path:
         if candidate.is_file():
             return candidate
     raise RuntimeError(
-        "Cannot safely export QA-only work without generation/marked_samples.jsonl: "
+        "Cannot safely export QA-only work without generation/"
+        "claim_first_marked_qa_rows.jsonl or marked_samples.jsonl: "
         f"{recalibration_dir}"
     )
 

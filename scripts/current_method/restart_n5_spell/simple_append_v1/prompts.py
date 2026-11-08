@@ -39,6 +39,26 @@ def _prompt_result(prompt: str, *, version: str) -> dict[str, Any]:
     }
 
 
+def _dialogue_partition(
+    *, metadata: Mapping[str, Any], turns: list[Mapping[str, Any]],
+    compact: bool,
+) -> str:
+    if not compact:
+        return _json({**metadata, "turns": turns})
+    header = {
+        **metadata,
+        "row_format": ["evidence_ref", "scene_ref", "speaker", "text"],
+        "turn_count": len(turns),
+    }
+    rows = "\n".join(_json([
+        row.get("evidence_ref"),
+        row.get("scene_ref"),
+        row.get("speaker"),
+        row.get("text"),
+    ]) for row in turns)
+    return _json(header) + ("\n" + rows if rows else "")
+
+
 def _tail_prompt_view(context: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "root_id": context["root_id"],
@@ -166,6 +186,9 @@ def build_mcq_batch_prompt(
     expanded_dialogue: Mapping[str, Any], *, target_questions: int = 8,
     maximum_questions: int | None = None,
     focus_round_index: int | None = None,
+    compact_source_serialization: bool = False,
+    option_contract: bool = False,
+    position_first: bool = False,
 ) -> dict[str, Any]:
     if target_questions < 8:
         raise ValueError("simple_append_mcq_target_out_of_range")
@@ -220,9 +243,30 @@ def build_mcq_batch_prompt(
             "question_type": "causal",
             "question": "...",
             "options": {"A": "...", "B": "...", "C": "...", "D": "..."},
+            "gold_text": "...",
+            "evidence_positions": [12, 18],
+            "distractor_source_positions": [[23], [27], [31]],
+        }
+    if not position_first:
+        question_template.pop("gold_text")
+        question_template.pop("evidence_positions")
+        question_template.pop("distractor_source_positions")
+        question_template.update({
             "correct_option": "A",
             "evidence_turn_refs": ["..."],
-        }
+        })
+    if option_contract and not position_first:
+        question_template.update({
+            "answer_dimension": "cause",
+            "distractor_sources": {
+                "B": ["..."], "C": ["..."], "D": ["..."],
+            },
+        })
+    if position_first:
+        # The compact contract still needs the semantic answer slot.  Only
+        # evidence aliases, option letters, and canonical refs are derived
+        # locally; answer_dimension remains a Writer semantic judgment.
+        question_template["answer_dimension"] = "cause"
     template_roles = (
         ["current_round_only"] * 2 +
         ["current_round_joint_history"] * 2 +
@@ -236,6 +280,16 @@ def build_mcq_batch_prompt(
             for role in template_roles
         ],
     }
+    reference_contract = (
+        "Use only 1-based integer dialogue positions for evidence_positions and "
+        "distractor_source_positions. Positions refer to the complete dialogue in the "
+        "order shown below. Do not output D### aliases, canonical turn IDs, or any "
+        "additional evidence fields; the program performs that mapping."
+        if position_first else
+        "Use only exact D### evidence_ref aliases shown beside the dialogue turns and "
+        "include every turn needed to answer, not merely a nearby turn. Never construct "
+        "or output a canonical Parent or Child turn ID; the program resolves D### "
+        "aliases after generation.")
     prompt = "\n\n".join([
         "FULL-DIALOGUE MCQ CANDIDATE WRITER v3. Return JSON only.",
         count_instruction +
@@ -253,11 +307,8 @@ def build_mcq_batch_prompt(
         "reasoning about who knew which information and when. Use information_revision for "
         "reasoning about corrected, superseded, or currently valid information. Use "
         "task_dependency_or_constraint for prerequisites, blockers, responsibility handoffs, "
-        "or constraints on a task or plan. Every "
-        "question_type must match what the question actually asks. Use only exact D### "
-        "evidence_ref aliases shown beside the dialogue turns and include every turn needed "
-        "to answer, not merely a nearby turn. Never construct or output a canonical Parent "
-        "or Child turn ID; the program resolves D### aliases after generation.",
+        "or constraints on a task or plan. Every question_type must match what the question "
+        "actually asks. " + reference_contract,
         "DIFFICULTY AND OPTION CONTRACT\n"
         "- Each question must have exactly one correct answer when the complete dialogue is read.\n"
         "- Do not ask which phrase was merely 'mentioned' when one option is an obvious quote.\n"
@@ -288,6 +339,28 @@ def build_mcq_batch_prompt(
         "- A knowledgeable solver shown only the question and options should not reliably infer "
         "the answer without the dialogue. The correct_option letter is only a content binding; "
         "the program will reassign final answer positions.",
+        ("POSITION-FIRST OPTION SOURCE CONTRACT\n"
+         "In this run output only compact positions, never D### aliases or canonical turn IDs. "
+         "Each question must contain gold_text, evidence_positions, and "
+         "distractor_source_positions. evidence_positions must contain 2--4 positions "
+         "normally and never more than 8. Set distractor_source_positions to exactly three "
+         "source-position lists, ordered by the wrong option letters in alphabetical order "
+         "after gold_text is bound. Each list must contain 1--2 positions. The program maps "
+         "these 1-based positions to D### aliases and binds the correct option; do not output "
+         "correct_option or evidence_turn_refs. answer_dimension is the answer slot, not the "
+         "reasoning type: use state for revision/state_change, constraint for dependency, "
+         "information for visibility, order for temporal sequence, and comparison for synthesis."
+         if position_first else "") +
+        ("OPTION SOURCE CONTRACT\n"
+         "For every question also output answer_dimension using one of: actor, action, event, "
+         "object, time, order, cause, result, state, decision, relationship, information, "
+         "constraint, plan, comparison. Output distractor_sources for exactly the three wrong "
+         "option letters. Each value must be a non-empty list of exact D### aliases where the "
+         "dialogue contains the real nearby fact used to construct that wrong option. Do not "
+         "cite a position merely because it shares a topic. If a wrong option has no real "
+         "same-dimension source, omit the whole candidate. The program will mechanically "
+         "reject missing, duplicate, or invalid source aliases."
+         if option_contract and not position_first else ""),
         "TOPIC AND PROPOSITION DIVERSITY (soft preference, not a rejection gate)\n"
         "- After generating two questions about the same underlying event, thread, decision, "
         "or outcome, prefer a different supported person, event, task, relationship, or "
@@ -313,25 +386,42 @@ def build_mcq_batch_prompt(
                 "focus_alias_range": [focus_aliases[0], focus_aliases[-1]],
             },
         }),
+        ("COMPACT DIALOGUE ROW CONTRACT\n"
+         "Each following dialogue row is a JSON array in the declared row_format: "
+         "[evidence_ref, scene_ref, speaker, exact_text]. The compact form removes "
+         "repeated field names only; every authoritative turn and its exact text remain "
+         "present once. Use the D### value in column 1 for evidence_turn_refs."
+         if compact_source_serialization else
+         "FULL DIALOGUE OBJECT CONTRACT\n"
+         "Each following partition contains authoritative turn objects."),
         "CURRENT FOCUS ROUND — REQUIRED SOURCE FOR BOTH CURRENT-ROUND POOLS\n" +
-        _json({
-            "focus_round_index": focus_round_index,
-            "focus_alias_range": [focus_aliases[0], focus_aliases[-1]],
-            "turns": focus_turns,
-        }),
+        _dialogue_partition(
+            metadata={
+                "focus_round_index": focus_round_index,
+                "focus_alias_range": [focus_aliases[0], focus_aliases[-1]],
+            },
+            turns=focus_turns,
+            compact=compact_source_serialization,
+        ),
         "ORIGINAL PARENT — REQUIRED HISTORY SOURCE FOR JOINT QUESTIONS\n" +
-        _json({
-            "alias_range": [parent_aliases[0], parent_aliases[-1]],
-            "turns": parent_turns,
-        }),
+        _dialogue_partition(
+            metadata={
+                "alias_range": [parent_aliases[0], parent_aliases[-1]],
+            },
+            turns=parent_turns,
+            compact=compact_source_serialization,
+        ),
         "EARLIER GENERATED CHILD — OPTIONAL HISTORY, NOT A PARENT SUBSTITUTE\n" +
-        _json({
-            "alias_range": (
-                [earlier_child_turns[0]["evidence_ref"],
-                 earlier_child_turns[-1]["evidence_ref"]]
-                if earlier_child_turns else None),
-            "turns": earlier_child_turns,
-        }),
+        _dialogue_partition(
+            metadata={
+                "alias_range": (
+                    [earlier_child_turns[0]["evidence_ref"],
+                     earlier_child_turns[-1]["evidence_ref"]]
+                    if earlier_child_turns else None),
+            },
+            turns=earlier_child_turns,
+            compact=compact_source_serialization,
+        ),
         "FINAL HARD CHECKLIST\n" +
         final_count_instruction + " in the single questions "
         "array and no other fields. Every question must declare exactly one coverage_role: "
@@ -367,4 +457,8 @@ def build_mcq_batch_prompt(
         "returning JSON.",
         "OUTPUT EXACTLY THIS SHAPE\n" + _json(template),
     ])
-    return _prompt_result(prompt, version=MCQ_PROMPT_VERSION)
+    result = _prompt_result(prompt, version=MCQ_PROMPT_VERSION)
+    result["dialogue_serialization"] = (
+        "compact_dialogue_rows_v1" if compact_source_serialization
+        else "dialogue_objects_v1")
+    return result

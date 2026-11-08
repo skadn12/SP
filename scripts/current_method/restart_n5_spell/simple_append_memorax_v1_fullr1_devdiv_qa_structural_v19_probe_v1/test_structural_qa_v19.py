@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import copy
 import json
+import tempfile
 import unittest
 from pathlib import Path
 
 from ..simple_append_v1.qa import materialize_solver_candidate
 from ..simple_append_v1.qa_live import build_solver_source
 from .integrity import protected_manifests
+from .structural_qa_live import preflight
 from .structural_contract import (
     STRUCTURAL_QA_SCHEMA_VERSION,
     solver_partition,
@@ -26,6 +28,10 @@ LIVE_V19 = Path(
     "/root/autodl-tmp/gxy-selfplay/restart-n5-runs/"
     "conversation_chronicles_episode_146700_"
     "qa_structural_v19_probe_v1_live_1")
+LIVE_MEMORY_EXPANSION = Path(
+    "/root/autodl-tmp/gxy-selfplay/restart-n5-runs/"
+    "conversation_chronicles_episode_91716_"
+    "memory_event_continuation_recovery_live_2")
 
 
 class StructuralQAV19Tests(unittest.TestCase):
@@ -430,6 +436,21 @@ class StructuralQAV19Tests(unittest.TestCase):
         self.assertNotIn('"questions"', tail)
         repo = Path(__file__).resolve().parents[4]
         self.assertTrue(protected_manifests(repo)["unchanged"])
+
+    def test_explicit_input_override_preflight_is_zero_api(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report = preflight(
+                expanded_path=LIVE_MEMORY_EXPANSION / "expanded_dialogue.json",
+                memory_overview_path=(
+                    LIVE_MEMORY_EXPANSION /
+                    "memory/post_generation_overview.json"),
+                run_root=Path(temporary) / "new-qa-run",
+                input_override=True,
+            )
+        self.assertEqual(report["decision"], "pass", report)
+        self.assertEqual(report["api_calls"], 0)
+        self.assertTrue(report["details"]["input_override"])
+        self.assertEqual(report["checks"]["complete_dialogue_frozen"], True)
 
 
 if __name__ == "__main__":

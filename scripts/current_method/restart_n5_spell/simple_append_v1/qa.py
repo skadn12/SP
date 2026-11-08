@@ -34,6 +34,35 @@ _QUESTION_KEYS = {
     "question_type", "question", "options", "correct_option",
     "evidence_turn_refs",
 }
+_OPTION_CONTRACT_KEYS = {"answer_dimension", "distractor_sources"}
+_QUESTION_KEYS_EXTENDED = _QUESTION_KEYS | _OPTION_CONTRACT_KEYS
+ANSWER_DIMENSIONS = {
+    "actor", "action", "event", "object", "time", "order", "cause",
+    "result", "state", "decision", "relationship", "information",
+    "constraint", "plan", "comparison",
+}
+ANSWER_DIMENSION_ALIASES = {
+    # Models sometimes copy the reasoning-type label into the answer-slot
+    # field.  These are closed, deterministic aliases, not semantic guesses.
+    "revision": "state",
+    "state_change": "state",
+    "dependency": "constraint",
+    "task_dependency_or_constraint": "constraint",
+    "visibility": "information",
+    "information_visibility": "information",
+    "sequence": "order",
+    "temporal_sequence": "order",
+    "synthesis": "comparison",
+    "cross_context_synthesis": "comparison",
+    "cross_turn_comparison": "comparison",
+    "relationship_or_decision": "decision",
+    "causal": "cause",
+}
+
+
+def normalize_answer_dimension(value: Any) -> str:
+    raw = str(value or "").strip().casefold()
+    return ANSWER_DIMENSION_ALIASES.get(raw, raw)
 _FOCUS_WRITER_KEYS = {
     "mcq_focus_writer_schema_version",
     "questions",
@@ -174,6 +203,54 @@ def resolve_evidence_turn_refs(
     }
 
 
+def validate_option_contract(
+    row: Mapping[str, Any], *, expanded_dialogue: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Validate the source envelope for Writer-generated wrong options.
+
+    This is deliberately mechanical.  It proves that each distractor names
+    real dialogue positions; it does not claim that the cited fact is a good
+    semantic near-miss.  Solver admission remains the difficulty gate.
+    """
+    errors: list[str] = []
+    dimension = normalize_answer_dimension(row.get("answer_dimension"))
+    if dimension not in ANSWER_DIMENSIONS:
+        errors.append("answer_dimension_invalid")
+    options = row.get("options")
+    correct = row.get("correct_option")
+    expected_sources = _OPTION_KEYS - ({str(correct)} if correct else set())
+    sources = row.get("distractor_sources")
+    if not isinstance(sources, Mapping) or set(sources) != expected_sources:
+        errors.append("distractor_sources_keys")
+        sources = sources if isinstance(sources, Mapping) else {}
+    resolved_sources: dict[str, list[str]] = {}
+    invalid_sources: dict[str, list[str]] = {}
+    duplicate_sources: dict[str, bool] = {}
+    for option in sorted(expected_sources):
+        raw = sources.get(option)
+        resolution = resolve_evidence_turn_refs(
+            raw, expanded_dialogue=expanded_dialogue)
+        resolved_sources[option] = list(resolution["resolved_turn_refs"])
+        invalid_sources[option] = list(resolution["invalid_evidence_refs"])
+        duplicate_sources[option] = bool(
+            resolution["duplicate_raw_refs"] or
+            resolution["duplicate_resolved_refs"])
+        if not resolution["raw_refs"]:
+            errors.append(f"distractor_source_empty:{option}")
+        if resolution["invalid_evidence_refs"]:
+            errors.append(f"distractor_source_invalid:{option}")
+        if duplicate_sources[option]:
+            errors.append(f"distractor_source_duplicate:{option}")
+    return {
+        "valid": not errors,
+        "errors": errors,
+        "answer_dimension": dimension,
+        "resolved_distractor_sources": resolved_sources,
+        "invalid_distractor_sources": invalid_sources,
+        "duplicate_distractor_sources": duplicate_sources,
+    }
+
+
 def normalize_focus_writer_batch(
     value: Any, *, minimum_current_round_only: int = 2,
     minimum_current_round_joint_history: int = 2,
@@ -183,6 +260,7 @@ def normalize_focus_writer_batch(
     maximum_current_round_joint_history: int | None = None,
     maximum_parent_child: int | None = None,
     maximum_general: int | None = None,
+    require_option_contract: bool = False,
 ) -> dict[str, Any]:
     """Validate the Writer's four coverage roles and flatten them locally.
 
@@ -211,7 +289,9 @@ def normalize_focus_writer_batch(
         questions = []
     pools: list[tuple[str, dict[str, Any]]] = []
     for index, row in enumerate(questions, 1):
-        expected_keys = _QUESTION_KEYS | {"coverage_role"}
+        expected_keys = (
+            _QUESTION_KEYS_EXTENDED if require_option_contract else _QUESTION_KEYS
+        ) | {"coverage_role"}
         if not isinstance(row, Mapping) or set(row) != expected_keys:
             errors.append(f"question_{index:02d}:mcq_focus_writer_schema")
             continue
@@ -219,7 +299,10 @@ def normalize_focus_writer_batch(
         if role not in _COVERAGE_ROLES:
             errors.append(f"question_{index:02d}:coverage_role")
             continue
-        pools.append((role, {key: row[key] for key in _QUESTION_KEYS}))
+        row_value = {key: row[key] for key in _QUESTION_KEYS}
+        if require_option_contract:
+            row_value.update({key: row[key] for key in _OPTION_CONTRACT_KEYS})
+        pools.append((role, row_value))
     current_only = [row for role, row in pools
                     if role == "current_round_only"]
     current_joint = [row for role, row in pools
@@ -271,25 +354,30 @@ def normalize_focus_writer_batch(
 def retain_focus_writer_overflow(
     value: Any, *, target_count: int = 8, maximum_count: int = 12,
 ) -> dict[str, Any]:
-    """Audit surplus Writer candidates without discarding paid output."""
+    """Audit surplus Writer candidates and expose a bounded downstream view."""
     if not isinstance(value, Mapping) or not isinstance(value.get("questions"), list):
         return {"applied": False, "reason": "writer_output_schema_invalid",
-                "value": value, "overflow_questions": []}
+                "value": value, "solver_value": value,
+                "overflow_questions": []}
     questions = list(value["questions"])
     if len(questions) <= maximum_count:
         return {"applied": False, "reason": "within_maximum",
-                "value": value, "overflow_questions": []}
+                "value": value, "solver_value": value,
+                "overflow_questions": []}
+    solver_value = dict(value)
+    solver_value["questions"] = questions[:maximum_count]
     return {
         "applied": False,
         "reason": "surplus_retained_for_solver",
         "value": value,
+        "solver_value": solver_value,
         "original_question_count": len(questions),
         "retained_question_count": len(questions),
         "preferred_maximum_count": maximum_count,
         "target_count": target_count,
         "overflow_question_count": len(questions) - maximum_count,
         "overflow_questions": questions[maximum_count:],
-        "selection_policy": "retain_all_writer_candidates_for_solver",
+        "selection_policy": "retain_all_raw_solver_view_capped",
     }
 
 
@@ -337,7 +425,8 @@ def validate_mcq_batch(
     seen_questions: dict[str, int] = {}
     for index, row in enumerate(questions, 1):
         prefix = f"question_{index:02d}"
-        if not isinstance(row, Mapping) or set(row) != _QUESTION_KEYS:
+        if (not isinstance(row, Mapping) or
+            set(row) not in (_QUESTION_KEYS, _QUESTION_KEYS_EXTENDED)):
             errors.append(f"{prefix}:schema")
             continue
         normalized_question = _normalized_question(row.get("question"))
@@ -365,6 +454,11 @@ def validate_mcq_batch(
                 errors.append(f"{prefix}:duplicate_options")
         if row.get("correct_option") not in _OPTION_KEYS:
             errors.append(f"{prefix}:correct_option")
+        if set(row) == _QUESTION_KEYS_EXTENDED:
+            option_contract = validate_option_contract(
+                row, expanded_dialogue=expanded_dialogue)
+            errors.extend(
+                f"{prefix}:{error}" for error in option_contract["errors"])
         evidence = row.get("evidence_turn_refs")
         resolution = resolve_evidence_turn_refs(
             evidence, expanded_dialogue=expanded_dialogue)
@@ -454,8 +548,10 @@ def partition_mcq_candidates(
     for index, row in enumerate(questions, 1):
         structural_errors: list[str] = []
         evidence_issues: list[str] = []
+        option_contract: dict[str, Any] | None = None
         candidate_id = f"Q{index:02d}"
-        if not isinstance(row, Mapping) or set(row) != _QUESTION_KEYS:
+        if (not isinstance(row, Mapping) or
+                set(row) not in (_QUESTION_KEYS, _QUESTION_KEYS_EXTENDED)):
             structural_errors.append("candidate_schema")
             row = row if isinstance(row, Mapping) else {}
         else:
@@ -483,6 +579,12 @@ def partition_mcq_candidates(
                     structural_errors.append("duplicate_options")
             if row.get("correct_option") not in _OPTION_KEYS:
                 structural_errors.append("correct_option")
+            if set(row) == _QUESTION_KEYS_EXTENDED:
+                option_contract = validate_option_contract(
+                    row, expanded_dialogue=expanded_dialogue)
+                structural_errors.extend(option_contract["errors"])
+            else:
+                option_contract = None
 
         evidence = row.get("evidence_turn_refs")
         resolution = resolve_evidence_turn_refs(
@@ -529,6 +631,7 @@ def partition_mcq_candidates(
             "solver_ready": solver_ready,
             "evidence_ready": evidence_ready,
             "option_surface_diagnostics": option_surface,
+            "option_contract": option_contract,
         })
 
     child_supported = sum(
@@ -723,6 +826,10 @@ def materialize_solver_candidate(
         "evidence_issues": list(candidate_status.get("evidence_issues") or []),
         "option_surface_diagnostics": dict(
             candidate_status.get("option_surface_diagnostics") or {}),
+        "answer_dimension": str(row.get("answer_dimension") or ""),
+        "distractor_sources": dict(
+            (candidate_status.get("option_contract") or {}).get(
+                "resolved_distractor_sources") or {}),
         "evidence_ready": bool(candidate_status.get("evidence_ready")),
         "difficulty_level": "unclassified",
         "admission_mode": SPELL_STYLE_MINIMAL_MODE,
@@ -778,6 +885,10 @@ def materialize_solver_batch(
             frozenset({"source_grounded", "generated_extension"}):
                 "parent_child",
         }[frozenset(origins)]
+        option_contract = None
+        if set(row) == _QUESTION_KEYS_EXTENDED:
+            option_contract = validate_option_contract(
+                row, expanded_dialogue=expanded_dialogue)
         materialized.append({
             "qa_id": f"{expanded_dialogue['root_id']}-simple-append-mcq-{index:02d}",
             "question_type": str(row["question_type"]),
@@ -789,6 +900,9 @@ def materialize_solver_batch(
             "canonical_answer_text": correct_text,
             "evidence_span_ids": [f"{ref}#S0001" for ref in evidence_turn_ids],
             "evidence_turn_ids": evidence_turn_ids,
+            "answer_dimension": str(row.get("answer_dimension") or ""),
+            "distractor_sources": dict(
+                (option_contract or {}).get("resolved_distractor_sources") or {}),
             "difficulty_level": "unclassified",
             "admission_mode": SPELL_STYLE_MINIMAL_MODE,
             "span_catalog_sha256": span_catalog_sha256(dict(span_catalog)),

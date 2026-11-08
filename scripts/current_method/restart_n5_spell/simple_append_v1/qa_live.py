@@ -385,7 +385,7 @@ def _evaluate_grounding(
 
 def _writer_call(
     *, run_root: Path, ledger: RequestLedger, prompt: Mapping[str, Any],
-    api_config_path: Path,
+    api_config_path: Path, max_tokens: int = WRITER_MAX_TOKENS,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     api = replace(load_challenger_config(api_config_path), timeout_seconds=600,
                   temperature=0.25, enable_thinking=False)
@@ -396,11 +396,12 @@ def _writer_call(
         request_id=request_id, intent="mcq_writer", attempt=1,
         prompt_sha256=prompt["prompt_sha256"],
         call=lambda: client.complete(
-            prompt=prompt["prompt"], max_tokens=WRITER_MAX_TOKENS,
+            prompt=prompt["prompt"], max_tokens=int(max_tokens),
             json_object=True),
         budget_class="mcq_writer", budget_limit=1, total_budget_limit=265,
         request_metadata={"role": "simple_append_joint_mcq_writer_v13",
-            "question_count": QUESTION_COUNT, "retry_allowed": False},
+            "question_count": QUESTION_COUNT, "max_tokens": int(max_tokens),
+            "retry_allowed": False},
         backend_identity={"transport": "openai_compatible", "model": api.model,
             "base_url": api.base_url, "temperature": api.temperature})
     try:

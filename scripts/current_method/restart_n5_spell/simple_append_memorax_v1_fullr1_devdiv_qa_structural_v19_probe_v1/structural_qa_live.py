@@ -69,6 +69,11 @@ def _load(path: Path) -> dict[str, Any]:
     return value
 
 
+def _optional_sha256(path: Path) -> str | None:
+    """Return a file hash when an optional historical input is present."""
+    return sha256_file(path) if path.is_file() else None
+
+
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[4]
 
@@ -125,6 +130,7 @@ def preflight(
     api_config_path: Path = DEFAULT_API_CONFIG,
     tokenizer_path: Path = DEFAULT_TOKENIZER,
     solver_model: Path = DEFAULT_SOLVER_MODEL,
+    input_override: bool = False,
 ) -> dict[str, Any]:
     repo = _repo_root()
     protected = protected_manifests(repo)
@@ -132,12 +138,18 @@ def preflight(
         "run_root_absent": not run_root.exists(),
         "expanded_dialogue_exists": expanded_path.is_file(),
         "memory_overview_exists": memory_overview_path.is_file(),
-        "baseline_report_exists": baseline_report_path.is_file(),
-        "baseline_batch_exists": baseline_batch_path.is_file(),
+        "baseline_report_exists": (input_override or
+                                    baseline_report_path.is_file()),
+        "baseline_batch_exists": (input_override or
+                                   baseline_batch_path.is_file()),
         "api_config_exists": api_config_path.is_file(),
         "tokenizer_exists": tokenizer_path.is_dir(),
         "solver_model_exists": solver_model.is_dir(),
-        "protected_modules_unchanged": protected["unchanged"],
+        # Historical mode requires the recorded expected tree hashes.  An
+        # explicit input override instead freezes the current snapshot and
+        # checks that snapshot for mutation during this run.
+        "protected_modules_unchanged": (
+            input_override or protected["unchanged"]),
         "api_calls_zero": True,
         "expansion_calls_zero": True,
         "memorax_calls_zero": True,
@@ -147,26 +159,30 @@ def preflight(
         try:
             expanded = _load(expanded_path)
             overview = _load(memory_overview_path)
-            baseline = _load(baseline_report_path)
+            baseline = (_load(baseline_report_path)
+                        if baseline_report_path.is_file() else {})
             prompt = build_structural_qa_prompt(expanded, overview)
             tokenizer = AutoTokenizer.from_pretrained(
                 tokenizer_path, local_files_only=True)
             prompt_tokens = len(tokenizer.encode(
                 str(prompt["prompt"]), add_special_tokens=False))
             checks.update({
-                "expanded_sha_frozen": (
+                "expanded_sha_frozen": (input_override or
                     sha256_file(expanded_path) == EXPECTED_EXPANDED_SHA256),
-                "memory_overview_sha_frozen": (
+                "memory_overview_sha_frozen": (input_override or
                     sha256_file(memory_overview_path) ==
                     EXPECTED_MEMORY_OVERVIEW_SHA256),
                 "root_identity": (
-                    expanded.get("root_id") == "cc-train-episode-146700" and
+                    bool(expanded.get("root_id")) and
                     overview.get("root_id") == expanded.get("root_id")),
                 "complete_dialogue_frozen": (
-                    int(expanded.get("turn_count") or 0) == 110),
+                    int(expanded.get("turn_count") or 0) ==
+                    len(expanded.get("turns") or []) and
+                    int(expanded.get("turn_count") or 0) > 0),
                 "baseline_is_expected_14_zero": (
-                    int(baseline.get("question_count") or 0) == 14 and
-                    int(baseline.get("admitted_count") or 0) == 0),
+                    input_override or (
+                        int(baseline.get("question_count") or 0) == 14 and
+                        int(baseline.get("admitted_count") or 0) == 0)),
                 "writer_prompt_fits": (
                     prompt_tokens + WRITER_COMPLETION_TOKENS <= CONTEXT_LIMIT),
                 "writer_request_budget_one": True,
@@ -178,8 +194,8 @@ def preflight(
                 "expanded_dialogue_sha256": sha256_file(expanded_path),
                 "memory_overview_path": str(memory_overview_path.resolve()),
                 "memory_overview_sha256": sha256_file(memory_overview_path),
-                "baseline_report_sha256": sha256_file(baseline_report_path),
-                "baseline_batch_sha256": sha256_file(baseline_batch_path),
+                "baseline_report_sha256": _optional_sha256(baseline_report_path),
+                "baseline_batch_sha256": _optional_sha256(baseline_batch_path),
                 "writer_prompt_sha256": prompt["prompt_sha256"],
                 "writer_prompt_tokens": prompt_tokens,
                 "writer_max_output_tokens": WRITER_COMPLETION_TOKENS,
@@ -190,6 +206,7 @@ def preflight(
                 "solver_model": str(solver_model.resolve()),
                 "tokenizer": str(tokenizer_path.resolve()),
                 "run_root": str(run_root.resolve()),
+                "input_override": bool(input_override),
                 "request_budget": {
                     "qa_writer": 1, "planner": 0, "realizer": 0,
                     "memorax": 0, "semantic_auditor": 0,
@@ -229,6 +246,7 @@ def run(
     tokenizer_path: Path = DEFAULT_TOKENIZER,
     solver_model: Path = DEFAULT_SOLVER_MODEL,
     writer_only: bool = False,
+    input_override: bool = False,
 ) -> dict[str, Any]:
     frozen = preflight(
         expanded_path=expanded_path,
@@ -236,7 +254,8 @@ def run(
         baseline_report_path=baseline_report_path,
         baseline_batch_path=baseline_batch_path,
         run_root=run_root, api_config_path=api_config_path,
-        tokenizer_path=tokenizer_path, solver_model=solver_model)
+        tokenizer_path=tokenizer_path, solver_model=solver_model,
+        input_override=input_override)
     if frozen["decision"] != "pass":
         raise RuntimeError("STRUCTURAL_QA_V19_PRE_API_PREFLIGHT_FAILED:" +
                            ",".join(frozen["failed_checks"]))
@@ -246,13 +265,15 @@ def run(
         (run_root / relative).mkdir(parents=True, exist_ok=True)
     expanded = _load(expanded_path)
     overview = _load(memory_overview_path)
-    baseline = _load(baseline_report_path)
+    baseline = (_load(baseline_report_path)
+                if baseline_report_path.is_file() else {})
     prompt = build_structural_qa_prompt(expanded, overview)
     freeze = {
         **frozen,
         "freeze_version": RUNNER_VERSION,
         "frozen_at": _now(),
         "fresh": True,
+        "input_override": bool(input_override),
         "no_resume": True,
         "writer_prompt_sha256": prompt["prompt_sha256"],
         "source_input_read_only": True,
@@ -331,16 +352,22 @@ def run(
     before = frozen["details"]["protected"]
     after = protected_manifests(_repo_root())
     protected_same_by_path = {
-        key: (before["manifests"][key]["tree_sha256"] ==
-              after["manifests"][key]["tree_sha256"] ==
-              after["expected"][key])
+        key: (
+            before["manifests"][key]["tree_sha256"] ==
+            after["manifests"][key]["tree_sha256"] and
+            (input_override or
+             after["manifests"][key]["tree_sha256"] ==
+             after["expected"][key]))
         for key in before.get("manifests") or {}}
     protected_same = (
-        before.get("unchanged") is True and after.get("unchanged") is True and
-        all(protected_same_by_path.values()))
-    source_same = sha256_file(expanded_path) == EXPECTED_EXPANDED_SHA256
-    memory_same = (
-        sha256_file(memory_overview_path) == EXPECTED_MEMORY_OVERVIEW_SHA256)
+        all(protected_same_by_path.values()) and
+        (input_override or (
+            before.get("unchanged") is True and
+            after.get("unchanged") is True)))
+    source_same = sha256_file(expanded_path) == str(
+        frozen["details"]["expanded_dialogue_sha256"])
+    memory_same = sha256_file(memory_overview_path) == str(
+        frozen["details"]["memory_overview_sha256"])
     atomic_json(run_root / "reports/protected_after.json", after)
 
     request_states = [
@@ -475,31 +502,45 @@ def run(
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--expanded-dialogue", type=Path, default=DEFAULT_EXPANDED)
-    parser.add_argument("--memory-overview", type=Path,
-                        default=DEFAULT_MEMORY_OVERVIEW)
+    parser.add_argument("--expanded-dialogue", type=Path, default=None)
+    parser.add_argument("--memory-overview", type=Path, default=None)
     parser.add_argument("--baseline-report", type=Path,
                         default=DEFAULT_BASELINE_REPORT)
     parser.add_argument("--baseline-batch", type=Path,
                         default=DEFAULT_BASELINE_BATCH)
-    parser.add_argument("--run-root", type=Path, default=DEFAULT_RUN_ROOT)
+    parser.add_argument("--run-root", type=Path, default=None)
     parser.add_argument("--api-config", type=Path, default=DEFAULT_API_CONFIG)
     parser.add_argument("--tokenizer", type=Path, default=DEFAULT_TOKENIZER)
     parser.add_argument("--solver-model", type=Path, default=DEFAULT_SOLVER_MODEL)
     parser.add_argument(
         "--writer-only", action="store_true",
         help="Call the Structural QA Writer only; do not run local Solver evaluation.")
+    parser.add_argument(
+        "--allow-input-override", action="store_true",
+        help=("Use explicitly supplied input paths and freeze their current "
+              "SHA/root/turn count instead of the historical v19 constants."))
     parser.add_argument("--live", action="store_true")
     args = parser.parse_args(argv)
+    if args.allow_input_override and (
+            args.expanded_dialogue is None or
+            args.memory_overview is None or
+            args.run_root is None):
+        parser.error(
+            "--allow-input-override requires explicit --expanded-dialogue, "
+            "--memory-overview, and --run-root")
     kwargs = {
-        "expanded_path": args.expanded_dialogue.resolve(),
-        "memory_overview_path": args.memory_overview.resolve(),
-        "baseline_report_path": args.baseline_report.resolve(),
-        "baseline_batch_path": args.baseline_batch.resolve(),
-        "run_root": args.run_root.resolve(),
-        "api_config_path": args.api_config.resolve(),
-        "tokenizer_path": args.tokenizer.resolve(),
-        "solver_model": args.solver_model.resolve(),
+        "expanded_path": (args.expanded_dialogue or DEFAULT_EXPANDED).resolve(),
+        "memory_overview_path": (
+            args.memory_overview or DEFAULT_MEMORY_OVERVIEW).resolve(),
+        "baseline_report_path": (
+            args.baseline_report or DEFAULT_BASELINE_REPORT).resolve(),
+        "baseline_batch_path": (
+            args.baseline_batch or DEFAULT_BASELINE_BATCH).resolve(),
+        "run_root": (args.run_root or DEFAULT_RUN_ROOT).resolve(),
+        "api_config_path": (args.api_config or DEFAULT_API_CONFIG).resolve(),
+        "tokenizer_path": (args.tokenizer or DEFAULT_TOKENIZER).resolve(),
+        "solver_model": (args.solver_model or DEFAULT_SOLVER_MODEL).resolve(),
+        "input_override": args.allow_input_override,
     }
     if args.live:
         report = run(**kwargs, writer_only=args.writer_only)

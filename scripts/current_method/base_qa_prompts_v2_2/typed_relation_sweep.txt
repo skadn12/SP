@@ -1,0 +1,26 @@
+ROLE AND INPUT
+You are the Codex Challenger. This is stage 2, after inventory and before relation composition or ranking. Read the complete source, material scope, actual-visible scope, frozen inventory, and its uncertainties. Discover relations before writing any question, options, or option-position answer. No quota requires a relation or a question.
+
+BOUNDED TYPED SEARCH
+Inspect each of the following ten relation types. Do not treat this checklist as evidence that all possible natural-language relations have been discovered:
+1. cross_scene_event_identity: supported links or distinctions between event mentions across scenes.
+2. actor_action_binding: who did/requested/confirmed which action, with the applicable event and state.
+3. event_state_update: persistence, modification, cancellation, preparation, completion, or conflict for an identified event.
+4. temporal_plan_revision: supported temporal ordering, changed plans, deadlines, and effective time; not invented chronology from status labels.
+5. multi_actor_roles: source-supported roles and dependencies among different participants, without actor substitution.
+6. object_attribute_binding: attributes, ownership, versions, or changes bound to the correct object/event.
+7. quantity_unit_scope_constraint: quantities, units, ranges, scope, and valid cross-event constraints; arithmetic alone is not complex reasoning.
+8. causal_relation: stated or defensible causal dependence with an explicit warrant; temporal proximity alone is not causation.
+9. joint_event_constraint: two or more related events jointly constrain a natural decision or state; independent fact collections do not qualify.
+10. composed_state_chain: multiple supported links can potentially combine into a current-state or constrained-outcome inference; check this again during composition.
+
+For each type, record what scenes/events/turn ranges were actually inspected, the candidate IDs found, exclusions with reasons, and any not-checked scope. "Checked, none supported" and "not checked" are different. Preserve all candidates, including low-difficulty, rejected, uncertain, and scope-blocked relations. Do not keep only selected relations. A single event may participate in several separately justified relation types. Do not enumerate a meaningless Cartesian product of all scenes or invent links to populate the checklist.
+
+RELATION CARD
+For each candidate record stable relation_id, relation_type, endpoints/event IDs, natural information_need, evidence and distribution, identity/relation warrant, dependency operations, state changes or persistence, uncertainties and alternative explanations, and the scope/admission status. Quote real evidence. Distinguish facts already stated in one turn from conclusions requiring a relation. Record a local or final-turn summary that could bypass the proposed chain, even if that makes the relation unsuitable as a hard target. If a genuine hypothesis cannot be faithfully represented by this version's supported evaluator, preserve its original relation/evidence fields with representation_status:UNSUPPORTED, decision:HOLD or REJECT, and a nonempty representation_reason. Do not drop it or fabricate an executable rule. Its original dependency_graph/path_audit may be absent or preserved unsupported; it cannot enter the hard pool. Supported cards use MODELED or omit representation_status.
+
+SEARCH PRIORITY AND LIMITS
+Seek natural current-status, plan-conflict, actor/object-binding, and coupled-constraint information needs. A relation must be useful before it is difficult. Do not start from convenient numeric endpoints and then invent an information need. A valid local relation is worth recording as a supply diagnostic but cannot be promoted to L3 by calling it cross-scene. Do not reject a true relation merely because it is easy; retain it with an appropriate class for ranking.
+
+OUTPUT
+Accumulate the compatible Discovery artifact: events, relations, source_scan, and coverage. The final envelope binds schema_version: base_qa_generation_v2_2:discovery, root_id, source_sha256, and source_scope_sha256; the operator computes these hashes over the exact supplied inputs, never invents them. Each relation retains endpoints, relation_type, derivation_basis, information_need, natural_value, uncertainties, decision, and evidence; add dependency_graph and path_audit during composition before final Discovery freeze. Each coverage.checks row has family, status (checked/no_candidate/not_checked), scene_ids, event_ids, relation_ids, turn_refs, and rationale. coverage.passes records the actually completed stages in the exact order [inventory, typed_sweep, composition_counterpath]; final freeze requires all three. coverage.uncovered_ranges records remaining limitations and coverage.claims_exhaustive must remain false. Report examined and unexamined scope, search limits, and unresolved hypotheses. Do not claim exhaustive discovery. The next stage receives these cards, inventory, and complete source to search supported compositions and counterpaths. Do not freeze Gold, select a question type, or produce a final QA here.

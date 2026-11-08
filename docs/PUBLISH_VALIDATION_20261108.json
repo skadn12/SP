@@ -1,0 +1,73 @@
+{
+  "checked_at_utc": "2026-11-08T10:00:34.739434+00:00",
+  "repository": "https://github.com/skadn12/SP",
+  "branch": "publish/current-method-r2-20261108",
+  "scope": "Source publication only. No model/API/training work.",
+  "source_tree_before_validation_record": "92e12339c66a8f2214a8f086426822a400ccebc9",
+  "isolated_test_checkout_source_tree": "aaf2fc3bd0f32ccc25f1146d498d5054ea3ea187",
+  "isolated_checkout_difference": "One additional historical train_smoke_runner.py dependency was added after the test checkout. It is provenance-verified and syntax-checked; the tested modules are identical.",
+  "syntax_check": {
+    "changed_python_files": 232,
+    "status": "PASS",
+    "execution": false
+  },
+  "json_parse_check": {
+    "changed_json_files": 11,
+    "status": "PASS"
+  },
+  "self_contained_tests_in_index_checkout": [
+    {
+      "suite": "Codex source and evidence gates",
+      "tests": 45,
+      "status": "PASS"
+    },
+    {
+      "suite": "Codex batch scripts",
+      "tests": 10,
+      "status": "PASS"
+    },
+    {
+      "suite": "QA production/presentation/feedback/transport/budget",
+      "tests": 80,
+      "status": "PASS"
+    },
+    {
+      "suite": "Self-contained base-QA pipeline/schema/freeze/mock transport",
+      "tests": 199,
+      "status": "PASS"
+    }
+  ],
+  "passed_self_contained_test_count": 334,
+  "expansion_import_smoke": {
+    "modules": 8,
+    "status": "PASS",
+    "network_and_subprocess_blocked": true,
+    "evidence": "EXPANSION_SOURCE_PROVENANCE_20261108.json"
+  },
+  "source_provenance_check": {
+    "records": 93,
+    "status": "PASS",
+    "hash_and_size_match_index": true
+  },
+  "credential_scan": {
+    "scope": "Final 289 staged file changes; prior full index review also performed",
+    "real_keys_private_keys_or_fixed_bearer_tokens_found": false
+  },
+  "forbidden_new_artifact_check": {
+    "status": "PASS",
+    "new_dataset_model_log_or_credential_files": []
+  },
+  "historical_integration_tests": {
+    "status": "NOT_ALL_PASS",
+    "reason": "Historical source/candidate/review fixtures and canonical SQLite budget ledgers are intentionally excluded. Gates and historical inputs were not changed to bypass failures."
+  },
+  "whitespace_check": {
+    "status": "PASS_EXCEPT_PRESERVED_EOF_BLANK_LINES",
+    "configuration": "core.whitespace=-blank-at-eof",
+    "known_files": [
+      "scripts/current_method/restart_n5_spell/h4_round1_r03_qa_output_contract_v1_1_revision_1/__init__.py",
+      "scripts/current_method/restart_n5_spell/h4_round1_r03_qa_output_contract_v1_1_revision_1/prompts.py"
+    ]
+  },
+  "runtime_limitations": "Historical paths, frozen manifests/data, model/tokenizer/adapter artifacts and runtime credentials are still required. This source snapshot is not a complete runnable experiment environment."
+}

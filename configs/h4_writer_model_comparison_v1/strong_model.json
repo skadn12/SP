@@ -1,0 +1,63 @@
+{
+  "config_version": "h4_writer_model_comparison_v1",
+  "arm_id": "STRONG_TEMPORAL",
+  "status": "READY_WITH_USER_SERVICE_EXCEPTION",
+  "api": {
+    "provider": "tju",
+    "interface_format": "openai_compatible_chat_completions",
+    "endpoint": "https://ai.tju.edu.cn/api/v3/chat/completions",
+    "base_url": "https://ai.tju.edu.cn/api/v3",
+    "request_path": "/chat/completions",
+    "model": "tju-llm",
+    "authentication_scheme": "bearer",
+    "api_key_env": "H4_STRONG_MODEL_API_KEY",
+    "timeout_seconds": 180,
+    "credential_file": "/root/.config/gxy-selfplay/h4_writer_model_comparison_v1.key",
+    "credential_format": "raw"
+  },
+  "generation": {
+    "temperature": 0.1,
+    "max_output_tokens": 8192,
+    "seed_policy": "not_sent",
+    "reasoning_settings": null,
+    "response_format": {
+      "type": "json_object"
+    },
+    "stop": null,
+    "output_parameter": "max_tokens",
+    "reasoning_policy": "service_default_UNKNOWN"
+  },
+  "service_limits": {
+    "context_window_tokens": null,
+    "max_output_tokens": null,
+    "reasoning_budget_tokens": null,
+    "reasoning_in_output_budget": null
+  },
+  "pricing": null,
+  "user_reported_backend_model": "qwen3.6-35b-a3b",
+  "backend_model_identity_status": "USER_REPORTED_NOT_SERVICE_VERIFIED",
+  "client_policy_notes": {
+    "timeout_seconds": "Client-side limit aligned with the frozen Qwen Writer request; not a claim about the TJU service limit.",
+    "seed_policy": "No seed parameter is sent, matching the Qwen baseline.",
+    "stop": "No stop parameter is sent, matching the Qwen baseline.",
+    "reasoning": "Use service default; no thinking/reasoning parameter sent, actual reasoning mode remains UNKNOWN.",
+    "requested_parameters": "The user explicitly authorized these exact requested settings despite unverified support. Rejection stops the run; no parameter changes or resend."
+  },
+  "service_evidence": [
+    {
+      "path": "/root/autodl-tmp/gxy-selfplay/current_method_github/configs/h4_writer_model_comparison_v1/service_evidence/tju_public_frontend.md",
+      "kind": "public_frontend_minimal_v3_sample_only_not_service_limits"
+    }
+  ],
+  "user_exception_record": "user_authorized_service_exception.json",
+  "parameter_support": {
+    "supported": [],
+    "unsupported": [],
+    "requested_but_unverified": [
+      "temperature",
+      "max_tokens",
+      "response_format"
+    ],
+    "service_adoption": "UNKNOWN"
+  }
+}

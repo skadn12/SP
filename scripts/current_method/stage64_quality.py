@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from typing import Any
 
@@ -112,7 +114,7 @@ OPERATION_SUBTYPE_SIGNALS = {
     "comparison": re.compile(r"compar|contrast|difference|shared|before_after", re.IGNORECASE),
     "visibility": re.compile(r"visib|permission|scope|access|who_knows|scope_yesno", re.IGNORECASE),
     "count": re.compile(r"count|number|quant", re.IGNORECASE),
-    "cause_consequence": re.compile(r"cause|consequence|result|effect|why", re.IGNORECASE),
+    "cause_consequence": re.compile(r"caus|consequence|result|effect|why", re.IGNORECASE),
     "relation_lookup": re.compile(r"relation|lookup|entity_to_event|fact|attribute|object|location", re.IGNORECASE),
 }
 RESERVED_SUBTYPE_SIGNALS = {
@@ -121,7 +123,7 @@ RESERVED_SUBTYPE_SIGNALS = {
     "comparison": re.compile(r"compar|contrast|difference|shared", re.IGNORECASE),
     "visibility": re.compile(r"visib|permission|scope|access|who_knows", re.IGNORECASE),
     "count": re.compile(r"count|number|quant", re.IGNORECASE),
-    "cause_consequence": re.compile(r"cause|consequence|result|effect|why", re.IGNORECASE),
+    "cause_consequence": re.compile(r"caus|consequence|result|effect|why", re.IGNORECASE),
     "relation_lookup": re.compile(r"relation|entity_to_event|fact_lookup|attribute_lookup|object_location", re.IGNORECASE),
 }
 SHORT_ANSWER_MAX_WORDS = {
@@ -1373,6 +1375,13 @@ def _bridge_derivation_issues(
 ) -> list[dict[str, Any]]:
     if str(qa.get("qa_operation") or "") != "bridge":
         return []
+    graph = sample.get("graph_update") if isinstance(sample.get("graph_update"), dict) else {}
+    graph_metadata = graph.get("metadata") if isinstance(graph.get("metadata"), dict) else {}
+    truth_first = bool(
+        qa.get("truth_first_generate_by_construction") is True
+        or sample.get("truth_first_generate_by_construction") is True
+        or graph_metadata.get("truth_first_generate_by_construction") is True
+    )
     events, by_id, aliases = _compiled_event_index(sample)
     option_by_label, option_events = _option_events(qa, by_id, aliases)
     gold_label = _single_gold_label(qa)
@@ -1380,6 +1389,73 @@ def _bridge_derivation_issues(
     if gold_event is None:
         return [_issue("bridge_gold_endpoint_unresolved", gold=gold_label)]
     endpoint = _event_primary_id(gold_event)
+    if truth_first:
+        event_one = by_id.get(aliases.get("E1", "E1"))
+        event_two = by_id.get(aliases.get("E2", "E2"))
+        issues: list[dict[str, Any]] = []
+        if event_one is None or event_two is None:
+            return [_issue("truth_first_bridge_support_events_missing")]
+        if normalized_option_text(event_one.get("value")) != normalized_option_text(
+            event_two.get("entity")
+        ):
+            issues.append(_issue("truth_first_bridge_binder_join_mismatch"))
+        if endpoint != _event_primary_id(event_two):
+            issues.append(
+                _issue(
+                    "truth_first_bridge_gold_source_mismatch",
+                    gold_endpoint=endpoint,
+                    expected_event_id=_event_primary_id(event_two),
+                )
+            )
+        reasoning_ids = set(_reasoning_event_ids(qa, aliases))
+        expected_reasoning_ids = {
+            _event_primary_id(event_one),
+            _event_primary_id(event_two),
+        }
+        if reasoning_ids != expected_reasoning_ids:
+            issues.append(
+                _issue(
+                    "truth_first_bridge_reasoning_path_mismatch",
+                    reasoning_event_ids=sorted(reasoning_ids),
+                    expected_reasoning_event_ids=sorted(expected_reasoning_ids),
+                )
+            )
+        question = normalized_option_text(
+            qa.get("question") or qa.get("question_text")
+        )
+        intermediate = normalized_option_text(event_one.get("value"))
+        answer = normalized_option_text(event_two.get("value"))
+        if (intermediate and intermediate in question) or (
+            answer and answer in question
+        ):
+            issues.append(_issue("truth_first_bridge_question_exposes_intermediate_or_gold"))
+        required_dimensions = {
+            "binder_entity": event_one.get("entity"),
+            "binder_slot": event_one.get("slot"),
+            "answer_slot": event_two.get("slot"),
+        }
+        question_tokens = _question_dimension_tokens(question)
+        missing_dimensions = [
+            name
+            for name, value in required_dimensions.items()
+            if not _question_names_dimension(question_tokens, value)
+        ]
+        if missing_dimensions:
+            issues.append(
+                _issue(
+                    "truth_first_bridge_question_missing_dimensions",
+                    missing_dimensions=missing_dimensions,
+                )
+            )
+        proof = qa.get("proof") if isinstance(qa.get("proof"), dict) else {}
+        projection = proof.get("gold_projection")
+        if not (
+            isinstance(projection, dict)
+            and projection.get("kind") == "event_value"
+            and str(projection.get("event_id") or "") == "E2"
+        ):
+            issues.append(_issue("truth_first_bridge_gold_projection_mismatch"))
+        return issues
     dependencies = _dependency_map(events, aliases)
     closure = _dependency_closure(endpoint, dependencies)
     reasoning_ids = set(_reasoning_event_ids(qa, aliases))
@@ -1634,12 +1710,94 @@ def _relation_derivation_issues(
 ) -> list[dict[str, Any]]:
     if str(qa.get("qa_operation") or "") != "relation_lookup":
         return []
+    graph = sample.get("graph_update") if isinstance(sample.get("graph_update"), dict) else {}
+    graph_metadata = graph.get("metadata") if isinstance(graph.get("metadata"), dict) else {}
+    truth_first = bool(
+        qa.get("truth_first_generate_by_construction") is True
+        or sample.get("truth_first_generate_by_construction") is True
+        or graph_metadata.get("truth_first_generate_by_construction") is True
+    )
     _, by_id, aliases = _compiled_event_index(sample)
     _, option_events = _option_events(qa, by_id, aliases)
     gold_label = _single_gold_label(qa)
     gold_event = option_events.get(gold_label)
     if gold_event is None:
         return [_issue("relation_gold_event_unresolved", gold=gold_label)]
+    if truth_first:
+        binder = by_id.get(aliases.get("E1", "E1"))
+        answer = by_id.get(aliases.get("E2", "E2"))
+        if binder is None or answer is None:
+            return [_issue("truth_first_relation_support_events_missing")]
+        issues: list[dict[str, Any]] = []
+        if normalized_option_text(binder.get("value")) != normalized_option_text(
+            answer.get("entity")
+        ):
+            issues.append(_issue("truth_first_relation_binder_join_mismatch"))
+        if _event_primary_id(gold_event) != _event_primary_id(answer):
+            issues.append(_issue("truth_first_relation_gold_source_mismatch"))
+        reasoning_ids = set(_reasoning_event_ids(qa, aliases))
+        expected_ids = {_event_primary_id(binder), _event_primary_id(answer)}
+        if reasoning_ids != expected_ids:
+            issues.append(
+                _issue(
+                    "truth_first_relation_reasoning_path_mismatch",
+                    reasoning_event_ids=sorted(reasoning_ids),
+                    expected_reasoning_event_ids=sorted(expected_ids),
+                )
+            )
+        question = normalized_option_text(
+            qa.get("question") or qa.get("question_text")
+        )
+        question_tokens = _question_dimension_tokens(question)
+        dimensions = {
+            "binder_entity": binder.get("entity"),
+            "binder_slot": binder.get("slot"),
+            "answer_slot": answer.get("slot"),
+        }
+        missing = [
+            name
+            for name, value in dimensions.items()
+            if not _question_names_dimension(question_tokens, value)
+        ]
+        if missing:
+            issues.append(
+                _issue(
+                    "truth_first_relation_question_missing_dimensions",
+                    missing_dimensions=missing,
+                )
+            )
+        intermediate = normalized_option_text(binder.get("value"))
+        gold_surface = normalized_option_text(answer.get("value"))
+        if (intermediate and intermediate in question) or (
+            gold_surface and gold_surface in question
+        ):
+            issues.append(
+                _issue("truth_first_relation_question_exposes_intermediate_or_gold")
+            )
+        same_entity_competitor = any(
+            event_id != _event_primary_id(answer)
+            and normalized_option_text(event.get("entity"))
+            == normalized_option_text(answer.get("entity"))
+            and normalized_option_text(event.get("slot"))
+            == normalized_option_text(answer.get("slot"))
+            for event_id, event in by_id.items()
+        )
+        wrong_entity_competitor = any(
+            normalized_option_text(event.get("entity"))
+            != normalized_option_text(answer.get("entity"))
+            and normalized_option_text(event.get("slot"))
+            == normalized_option_text(answer.get("slot"))
+            for event in by_id.values()
+        )
+        if not same_entity_competitor or not wrong_entity_competitor:
+            issues.append(
+                _issue(
+                    "truth_first_relation_hard_negative_structure_missing",
+                    same_entity_competitor=same_entity_competitor,
+                    wrong_entity_competitor=wrong_entity_competitor,
+                )
+            )
+        return issues
     gold_id = _event_primary_id(gold_event)
     gold_entity = normalized_option_text(gold_event.get("entity"))
     gold_slot = normalized_option_text(gold_event.get("slot"))
@@ -1803,6 +1961,21 @@ def _graph_hardness_issues(sample: dict[str, Any], qa: dict[str, Any]) -> list[d
         )
         event = by_id.get(ref)
         if event is None:
+            # Only the gold answer needs direct graph support.  A non-gold
+            # entity/location/value may be an API-authored, same-type
+            # distractor when the frozen graph has too few distinct values.
+            # Such a distractor is deliberately marked rather than silently
+            # pretending to have evidence.  Operation-specific checks below
+            # still require graph competitors where they are essential (for
+            # example temporal update chains and derived numeric questions).
+            if (
+                label not in gold
+                and str(option.get("distractor_origin") or "")
+                == "synthetic_same_type"
+                and str(option.get("anchor_kind") or "")
+                == "synthetic_distractor"
+            ):
+                continue
             unresolved.append(label)
         else:
             option_events[label] = event
@@ -2031,12 +2204,344 @@ def _graph_hardness_issues(sample: dict[str, Any], qa: dict[str, Any]) -> list[d
     return issues
 
 
+TRUTH_FIRST_SIBLING_EVENT_FIELDS = (
+    "entity",
+    "slot",
+    "value",
+    "status",
+    "event_type",
+    "time_index",
+    "local_time_index",
+    "global_time_index",
+    "session_index",
+    "depends_on",
+    "set_membership",
+    "scope",
+    "owner",
+    "observer",
+    "resource",
+    "action",
+    "condition",
+    "access_class",
+)
+
+
+def _truth_first_json_sha256(value: Any) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _truth_first_event_id(event: dict[str, Any]) -> str:
+    return str(
+        event.get("event_id")
+        or event.get("event_instance_id")
+        or event.get("node_id")
+        or ""
+    ).strip()
+
+
+def _truth_first_projection_value(
+    projection: dict[str, Any],
+    events: dict[str, dict[str, Any]],
+) -> tuple[Any, list[dict[str, Any]]]:
+    issues: list[dict[str, Any]] = []
+    kind = str(projection.get("kind") or "")
+    if kind in {"event_value", "event_field", "event_entity"}:
+        event_id = str(projection.get("event_id") or "")
+        event = events.get(event_id)
+        if event is None:
+            return None, [_issue("truth_first_sibling_projection_event_missing", event_id=event_id)]
+        field = (
+            "value"
+            if kind == "event_value"
+            else "entity"
+            if kind == "event_entity"
+            else str(projection.get("field") or "")
+        )
+        if not field or field not in event:
+            return None, [
+                _issue(
+                    "truth_first_sibling_projection_field_missing",
+                    event_id=event_id,
+                    field=field,
+                )
+            ]
+        return event[field], issues
+    if kind == "absolute_difference":
+        event_ids = projection.get("event_ids")
+        if not isinstance(event_ids, list) or len(event_ids) != 2:
+            return None, [_issue("truth_first_sibling_difference_arity_invalid")]
+        rows = [events.get(str(event_id)) for event_id in event_ids]
+        if any(row is None for row in rows):
+            return None, [_issue("truth_first_sibling_difference_event_missing")]
+        values = [row.get("value") for row in rows if isinstance(row, dict)]
+        if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in values):
+            return None, [_issue("truth_first_sibling_difference_operand_not_numeric")]
+        if rows[0].get("slot") != rows[1].get("slot"):
+            issues.append(_issue("truth_first_sibling_difference_slot_mismatch"))
+        return abs(values[0] - values[1]), issues
+    if kind == "count_membership":
+        included = projection.get("included")
+        if not isinstance(included, bool):
+            return None, [_issue("truth_first_sibling_count_included_not_boolean")]
+        set_id = projection.get("set_id")
+        memberships = [
+            event.get("set_membership")
+            for event in events.values()
+            if isinstance(event.get("set_membership"), dict)
+            and (set_id is None or event["set_membership"].get("set_id") == set_id)
+        ]
+        if not memberships:
+            return None, [_issue("truth_first_sibling_count_memberships_missing")]
+        return sum(row.get("included") is included for row in memberships), issues
+    if kind == "membership_boolean":
+        event_id = str(projection.get("event_id") or "")
+        event = events.get(event_id)
+        membership = event.get("set_membership") if isinstance(event, dict) else None
+        if not isinstance(membership, dict) or not isinstance(
+            membership.get("included"), bool
+        ):
+            return None, [_issue("truth_first_sibling_membership_claim_missing")]
+        return membership["included"], issues
+    return None, [_issue("truth_first_sibling_projection_kind_unsupported", kind=kind)]
+
+
+def _truth_first_sibling_projection_issues(
+    sample: dict[str, Any], qa: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Independently re-derive a sibling gold from frozen Claim IR truth."""
+
+    issues: list[dict[str, Any]] = []
+    bundle = (
+        sample.get("claim_first_multiqa_bundle")
+        if isinstance(sample.get("claim_first_multiqa_bundle"), dict)
+        else {}
+    )
+    claim_ir = bundle.get("claim_ir") if isinstance(bundle.get("claim_ir"), dict) else {}
+    frozen_graph = (
+        claim_ir.get("current_event_plan")
+        if isinstance(claim_ir.get("current_event_plan"), dict)
+        else {}
+    )
+    frozen_events = {
+        _truth_first_event_id(event): event
+        for event in frozen_graph.get("events") or []
+        if isinstance(event, dict) and _truth_first_event_id(event)
+    }
+    if not frozen_events:
+        return [_issue("truth_first_sibling_frozen_graph_missing")]
+    proof = qa.get("proof") if isinstance(qa.get("proof"), dict) else {}
+    if proof.get("truth_graph_sha256") != _truth_first_json_sha256(frozen_graph):
+        issues.append(_issue("truth_first_sibling_truth_graph_hash_mismatch"))
+    if proof.get("claim_bundle_hash") != claim_ir.get("claim_bundle_hash"):
+        issues.append(_issue("truth_first_sibling_claim_bundle_hash_mismatch"))
+
+    compiled_events = (
+        (sample.get("graph_update") or {}).get("events")
+        if isinstance(sample.get("graph_update"), dict)
+        else []
+    )
+    compiled_by_id = {
+        _truth_first_event_id(event): event
+        for event in compiled_events or []
+        if isinstance(event, dict) and _truth_first_event_id(event)
+    }
+    for event_id, frozen_event in frozen_events.items():
+        compiled_event = compiled_by_id.get(event_id)
+        if compiled_event is None:
+            issues.append(
+                _issue("truth_first_sibling_compiled_event_missing", event_id=event_id)
+            )
+            continue
+        frozen_projection = {
+            field: frozen_event.get(field)
+            for field in TRUTH_FIRST_SIBLING_EVENT_FIELDS
+            if field in frozen_event
+        }
+        compiled_projection = {
+            field: compiled_event.get(field)
+            for field in TRUTH_FIRST_SIBLING_EVENT_FIELDS
+            if field in frozen_event
+        }
+        if frozen_projection != compiled_projection:
+            issues.append(
+                _issue("truth_first_sibling_compiled_truth_drift", event_id=event_id)
+            )
+
+    claims = {
+        str(claim.get("claim_id") or ""): claim
+        for claim in claim_ir.get("claims") or []
+        if isinstance(claim, dict) and str(claim.get("claim_id") or "")
+    }
+    required_claim_ids = proof.get("required_claim_ids")
+    if not isinstance(required_claim_ids, list) or not required_claim_ids:
+        issues.append(_issue("truth_first_sibling_required_claims_missing"))
+        required_claim_ids = []
+    elif len(required_claim_ids) != len(set(required_claim_ids)):
+        issues.append(_issue("truth_first_sibling_required_claims_duplicate"))
+    expected_reasoning_ids: list[str] = []
+    for claim_id in required_claim_ids:
+        claim = claims.get(str(claim_id))
+        if claim is None:
+            issues.append(
+                _issue("truth_first_sibling_required_claim_unknown", claim_id=claim_id)
+            )
+            continue
+        for event_id in [
+            claim.get("subject_event_id"),
+            *(claim.get("object_event_ids") or []),
+        ]:
+            normalized = str(event_id or "")
+            if normalized in frozen_events and normalized not in expected_reasoning_ids:
+                expected_reasoning_ids.append(normalized)
+    if proof.get("reasoning_event_ids") != expected_reasoning_ids:
+        issues.append(_issue("truth_first_sibling_reasoning_path_mismatch"))
+    query_plan = qa.get("query_plan") if isinstance(qa.get("query_plan"), dict) else {}
+    if query_plan.get("required_claim_ids") != required_claim_ids:
+        issues.append(_issue("truth_first_sibling_query_claim_path_mismatch"))
+    if query_plan.get("reasoning_event_ids") != expected_reasoning_ids:
+        issues.append(_issue("truth_first_sibling_query_event_path_mismatch"))
+    if query_plan.get("gold_projection") != proof.get("gold_projection"):
+        issues.append(_issue("truth_first_sibling_query_projection_mismatch"))
+
+    projection = proof.get("gold_projection")
+    if not isinstance(projection, dict):
+        issues.append(_issue("truth_first_sibling_gold_projection_missing"))
+        derived = None
+    else:
+        derived, projection_issues = _truth_first_projection_value(
+            projection, frozen_events
+        )
+        issues.extend(projection_issues)
+    if (
+        type(derived) is not type(proof.get("compiled_gold"))
+        or derived != proof.get("compiled_gold")
+        or type(derived) is not type(qa.get("gold_answer"))
+        or derived != qa.get("gold_answer")
+    ):
+        issues.append(_issue("truth_first_sibling_gold_projection_mismatch"))
+    expected_gold_text = "" if derived is None else str(derived).strip()
+    if normalized_option_text(qa.get("gold_answer_text")) != normalized_option_text(
+        expected_gold_text
+    ):
+        issues.append(_issue("truth_first_sibling_gold_text_mismatch"))
+
+    options = qa.get("options") if isinstance(qa.get("options"), list) else []
+    option_ids = [str(option.get("id") or option.get("option_id") or "") for option in options if isinstance(option, dict)]
+    option_texts = [str(option.get("text") or "").strip() for option in options if isinstance(option, dict)]
+    gold_ids = [str(item) for item in qa.get("gold") or []]
+    if (
+        len(options) < 2
+        or len(option_ids) != len(options)
+        or any(not item for item in option_ids)
+        or len(set(option_ids)) != len(option_ids)
+        or any(not item for item in option_texts)
+        or len({normalized_option_text(item) for item in option_texts}) != len(option_texts)
+    ):
+        issues.append(_issue("truth_first_sibling_options_invalid"))
+    if len(gold_ids) != 1 or gold_ids[0] not in option_ids:
+        issues.append(_issue("truth_first_sibling_gold_label_invalid"))
+    else:
+        gold_option = options[option_ids.index(gold_ids[0])]
+        if (
+            type(gold_option.get("value")) is not type(derived)
+            or gold_option.get("value") != derived
+            or normalized_option_text(gold_option.get("text"))
+            != normalized_option_text(expected_gold_text)
+        ):
+            issues.append(_issue("truth_first_sibling_gold_option_mismatch"))
+
+    question = normalized_option_text(
+        qa.get("question") or qa.get("question_text")
+    )
+    if not question:
+        issues.append(_issue("truth_first_sibling_question_missing"))
+    if isinstance(projection, dict):
+        kind = str(projection.get("kind") or "")
+        projection_event_ids = (
+            projection.get("event_ids")
+            if isinstance(projection.get("event_ids"), list)
+            else [projection.get("event_id")]
+        )
+        projection_events = [
+            frozen_events.get(str(event_id or ""))
+            for event_id in projection_event_ids
+            if frozen_events.get(str(event_id or "")) is not None
+        ]
+        if kind == "count_membership":
+            set_id = normalized_option_text(projection.get("set_id"))
+            conditions = {
+                normalized_option_text(event["set_membership"].get("condition"))
+                for event in frozen_events.values()
+                if isinstance(event.get("set_membership"), dict)
+                and event["set_membership"].get("set_id") == projection.get("set_id")
+            } - {""}
+            if set_id not in question or not any(
+                condition in question for condition in conditions
+            ):
+                issues.append(_issue("truth_first_sibling_count_question_underbound"))
+            if projection.get("included") is False and not re.search(
+                r"\b(?:not|do not|does not|exclude|excluded|fail|fails)\b", question
+            ):
+                issues.append(_issue("truth_first_sibling_exclusion_question_unqualified"))
+        elif kind == "membership_boolean" and projection_events:
+            event = projection_events[0]
+            membership = event.get("set_membership") or {}
+            if normalized_option_text(event.get("value")) not in question or normalized_option_text(
+                membership.get("set_id")
+            ) not in question:
+                issues.append(_issue("truth_first_sibling_membership_question_underbound"))
+        elif kind == "absolute_difference" and len(projection_events) == 2:
+            required_terms = [
+                normalized_option_text(projection_events[0].get("entity")),
+                normalized_option_text(projection_events[1].get("entity")),
+                normalized_option_text(projection_events[0].get("slot")),
+            ]
+            if any(term and term not in question for term in required_terms):
+                issues.append(_issue("truth_first_sibling_comparison_question_underbound"))
+        elif projection_events:
+            event = projection_events[0]
+            semantic_terms = {
+                normalized_option_text(event.get("entity")),
+                normalized_option_text(event.get("resource")),
+                normalized_option_text(event.get("observer")),
+                normalized_option_text(event.get("condition")),
+            } - {"", normalized_option_text(derived)}
+            if semantic_terms and not any(term in question for term in semantic_terms):
+                issues.append(_issue("truth_first_sibling_question_underbound"))
+            status = normalized_option_text(event.get("status"))
+            if status in {"belief", "report", "reported", "outdated", "canceled", "expired"} and status not in question:
+                issues.append(_issue("truth_first_sibling_status_qualifier_missing", status=status))
+    return issues
+
+
 def semantic_quality_issues(sample: dict[str, Any]) -> list[dict[str, Any]]:
     """Return blocking semantic issues for an otherwise valid Stage64 sample."""
 
     qa = sample.get("qa") if isinstance(sample.get("qa"), dict) else {}
     if not qa.get("qa_operation") and not qa.get("answer_type"):
         return []
+    if (
+        qa.get("qa_role") == "sibling"
+        and qa.get("truth_first_generate_by_construction") is True
+        and qa.get("semantic_contract_frozen") is True
+    ):
+        issues = [
+            *_answer_surface_issues(qa),
+            *_question_answer_type_issues(qa),
+            *_truth_first_sibling_projection_issues(sample, qa),
+            *_dialogue_graph_fact_repetition_issues(sample),
+        ]
+        deduplicated: dict[str, dict[str, Any]] = {}
+        for issue in issues:
+            deduplicated.setdefault(str(issue.get("reason") or "unknown"), issue)
+        return list(deduplicated.values())
     issues = [
         *_answer_surface_issues(qa),
         *_question_answer_type_issues(qa),

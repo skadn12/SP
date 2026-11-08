@@ -1,0 +1,1373 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:gxy-selfplay:base-qa-v2-2:discovery",
+  "title": "Base QA Generation V2.2 Discovery artifact",
+  "description": "Offline structural contract, not a semantic proof, source authorization, exhaustive Discovery claim, empirical difficulty assessment, or model executor. The complete actual-visible source is audited separately from formal-evidence admission.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "root_id",
+    "source_sha256",
+    "source_scope_sha256",
+    "events",
+    "relations",
+    "source_scan",
+    "coverage"
+  ],
+  "properties": {
+    "events": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/event"
+      },
+      "minItems": 1
+    },
+    "relations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/relation"
+      }
+    },
+    "source_scan": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/source_scan_row"
+      },
+      "minItems": 1
+    },
+    "coverage": {
+      "$ref": "#/$defs/coverage"
+    },
+    "status": {
+      "enum": [
+        "READY",
+        "NO_SAFE_L3_L4"
+      ]
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_scope_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "source_binding": {
+      "type": "object"
+    },
+    "schema_version": {
+      "const": "base_qa_generation_v2_2:discovery"
+    },
+    "root_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "evidence": {
+      "type": "object",
+      "required": [
+        "turn_ref",
+        "speaker",
+        "quote"
+      ],
+      "properties": {
+        "turn_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "speaker": {
+          "type": "string",
+          "minLength": 1
+        },
+        "quote": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scene_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "turn_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_file_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": true,
+      "description": "Exact quoted evidence bound to original source through turn_ref. Provenance and source/scene mapping are resolved against the supplied immutable source, not inferred from this object."
+    },
+    "support": {
+      "type": "object",
+      "required": [
+        "turn_refs",
+        "evidence",
+        "entailment_rationale"
+      ],
+      "properties": {
+        "turn_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true,
+          "minItems": 1
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidence"
+          },
+          "minItems": 1
+        },
+        "entailment_rationale": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": true
+    },
+    "source_scan_row": {
+      "type": "object",
+      "required": [
+        "turn_refs",
+        "rationale"
+      ],
+      "properties": {
+        "turn_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true,
+          "minItems": 1
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": true,
+      "description": "All visible source turns must occur exactly once across the scan. Cross-row completeness is checked by code, not by this schema."
+    },
+    "event": {
+      "type": "object",
+      "required": [
+        "event_id",
+        "actors",
+        "action",
+        "objects",
+        "time",
+        "quantities",
+        "status_history",
+        "mentions"
+      ],
+      "properties": {
+        "event_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "actors": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "action": {
+          "type": "string",
+          "minLength": 1
+        },
+        "objects": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "time": {},
+        "quantities": {
+          "type": "array"
+        },
+        "status_history": {
+          "type": "array"
+        },
+        "mentions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "evidence",
+              "identity_basis",
+              "identity_rationale"
+            ],
+            "properties": {
+              "evidence": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/evidence"
+                },
+                "minItems": 1
+              },
+              "identity_basis": {
+                "enum": [
+                  "introduction",
+                  "explicit_reference",
+                  "local_continuation"
+                ]
+              },
+              "identity_rationale": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": true
+          },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": true,
+      "description": "Legacy-compatible event ledger. Identity, temporal, quantity, and state claims require semantic source review; matching labels do not establish same-event identity."
+    },
+    "bridge": {
+      "type": "object",
+      "required": [
+        "identity_basis",
+        "event_ids",
+        "identity_evidence",
+        "rationale",
+        "change_or_constraint"
+      ],
+      "properties": {
+        "identity_basis": {
+          "enum": [
+            "explicit_reference",
+            "explicit_constraint"
+          ]
+        },
+        "event_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true,
+          "minItems": 1
+        },
+        "identity_evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidence"
+          },
+          "minItems": 1
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        },
+        "change_or_constraint": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": true,
+      "description": "A proposed source-supported identity or constraint bridge. Cross-scene support and indispensability are separately checked; the presence of these fields proves neither."
+    },
+    "fact_node": {
+      "type": "object",
+      "required": [
+        "node_id",
+        "type",
+        "event_id",
+        "claim",
+        "supports"
+      ],
+      "properties": {
+        "node_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "const": "fact"
+        },
+        "event_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "claim": {
+          "type": "string",
+          "minLength": 1
+        },
+        "supports": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/support"
+          },
+          "minItems": 1
+        },
+        "symbolic_value": {
+          "$ref": "#/$defs/symbolic_value"
+        }
+      },
+      "additionalProperties": true
+    },
+    "operation_node": {
+      "type": "object",
+      "required": [
+        "node_id",
+        "type",
+        "kind",
+        "inputs",
+        "claim",
+        "rationale"
+      ],
+      "properties": {
+        "node_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "const": "operation"
+        },
+        "kind": {
+          "enum": [
+            "extract",
+            "retrieve_bind",
+            "compare",
+            "arithmetic",
+            "explicit_order",
+            "state_update",
+            "plan_revision",
+            "constraint_apply",
+            "constraint_chain",
+            "role_resolution",
+            "object_resolution",
+            "causal_chain",
+            "composition"
+          ]
+        },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true,
+          "minItems": 1
+        },
+        "input_alternatives": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "uniqueItems": true,
+            "minItems": 1
+          },
+          "minItems": 1
+        },
+        "claim": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bridge": {
+          "$ref": "#/$defs/bridge"
+        },
+        "rule": {
+          "$ref": "#/$defs/executable_rule"
+        }
+      },
+      "additionalProperties": true,
+      "description": "Operation kinds are diagnostic labels, not difficulty evidence. High-order operations require a source-supported bridge and a supported executable rule with matching computed result; unsupported forms remain UNRESOLVED. Even successful execution does not establish source entailment or semantic difficulty.",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "state_update",
+                  "plan_revision",
+                  "constraint_apply",
+                  "constraint_chain",
+                  "role_resolution",
+                  "object_resolution",
+                  "causal_chain",
+                  "composition"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "bridge",
+              "rule"
+            ],
+            "properties": {
+              "inputs": {
+                "minItems": 2
+              },
+              "input_alternatives": {
+                "items": {
+                  "type": "array",
+                  "minItems": 2
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "dependency_graph": {
+      "type": "object",
+      "required": [
+        "nodes",
+        "answer_node"
+      ],
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/fact_node"
+              },
+              {
+                "$ref": "#/$defs/operation_node"
+              }
+            ]
+          },
+          "minItems": 1
+        },
+        "answer_node": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": true,
+      "description": "Proposed AND/OR dependency graph. Node identity, acyclicity, source quotation, all known alternatives, and answer binding are checked separately. Exact path enumeration is only relative to this graph."
+    },
+    "counterpath": {
+      "type": "object",
+      "required": [
+        "status",
+        "turn_refs",
+        "rationale"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "sufficient",
+            "excluded",
+            "unresolved"
+          ]
+        },
+        "level": {
+          "enum": [
+            "L0",
+            "L1",
+            "L2",
+            "L3",
+            "L4"
+          ]
+        },
+        "turn_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true,
+          "minItems": 1
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        },
+        "exclusion_evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidence"
+          },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": true,
+      "description": "A credible actual-visible route or competing interpretation. Context-only source may lower answerability difficulty without gaining formal-evidence permission. An unresolved route blocks an optimistic hard-target decision.",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "sufficient"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "required": [
+              "level"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "excluded"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "required": [
+              "exclusion_evidence"
+            ]
+          }
+        }
+      ]
+    },
+    "path_audit": {
+      "type": "object",
+      "required": [
+        "source_scan",
+        "counterpaths",
+        "natural_value_rationale",
+        "semantic_completeness_proved"
+      ],
+      "properties": {
+        "source_scan": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/source_scan_row"
+          },
+          "minItems": 1
+        },
+        "counterpaths": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/counterpath"
+          }
+        },
+        "natural_value_rationale": {
+          "type": "string",
+          "minLength": 1
+        },
+        "semantic_completeness_proved": {
+          "const": false
+        }
+      },
+      "additionalProperties": true,
+      "description": "Bounded full-visible-source search record, not a certificate of exhaustive semantic entailment."
+    },
+    "query_path_audit": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/path_audit"
+        },
+        {
+          "type": "object",
+          "required": [
+            "question_sha256",
+            "options_sha256",
+            "critical_bridges_preserved",
+            "supplied_bridge_ids",
+            "minimum_route_level"
+          ],
+          "properties": {
+            "question_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "options_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "critical_bridges_preserved": {
+              "const": true
+            },
+            "supplied_bridge_ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "maxItems": 0
+            },
+            "minimum_route_level": {
+              "enum": [
+                "L3",
+                "L4"
+              ]
+            }
+          },
+          "additionalProperties": true
+        }
+      ],
+      "description": "Accepted hard-candidate query-conditioned audit. Uses all actual-visible source + exact question/stipulations + displayed options; the SHA fields bind the submitted canonical question/options values. Failed audits must remain in an external preserved HOLD artifact rather than being forced through this accepted-candidate definition. Structural acceptance is not semantic proof."
+    },
+    "coverage_check": {
+      "type": "object",
+      "required": [
+        "family",
+        "status",
+        "scene_ids",
+        "event_ids",
+        "relation_ids",
+        "turn_refs",
+        "rationale"
+      ],
+      "properties": {
+        "family": {
+          "enum": [
+            "cross_scene_event_identity",
+            "actor_action_binding",
+            "event_state_update",
+            "temporal_plan_revision",
+            "multi_actor_roles",
+            "object_attribute_binding",
+            "quantity_unit_scope_constraint",
+            "causal_relation",
+            "joint_event_constraint",
+            "composed_state_chain"
+          ]
+        },
+        "status": {
+          "enum": [
+            "checked",
+            "no_candidate",
+            "not_checked"
+          ]
+        },
+        "scene_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "event_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "relation_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "turn_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": true,
+      "description": "A bounded checked range for one relation family. no_candidate and not_checked are distinct; this record does not establish exhaustive discovery."
+    },
+    "coverage": {
+      "type": "object",
+      "required": [
+        "passes",
+        "checks",
+        "uncovered_ranges",
+        "claims_exhaustive"
+      ],
+      "properties": {
+        "passes": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "const": "inventory"
+            },
+            {
+              "const": "typed_sweep"
+            },
+            {
+              "const": "composition_counterpath"
+            }
+          ],
+          "items": false,
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/coverage_check"
+          },
+          "minItems": 10
+        },
+        "uncovered_ranges": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "claims_exhaustive": {
+          "const": false
+        }
+      },
+      "additionalProperties": true,
+      "allOf": [
+        {
+          "properties": {
+            "checks": {
+              "contains": {
+                "type": "object",
+                "properties": {
+                  "family": {
+                    "const": "cross_scene_event_identity"
+                  }
+                },
+                "required": [
+                  "family"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "checks": {
+              "contains": {
+                "type": "object",
+                "properties": {
+                  "family": {
+                    "const": "actor_action_binding"
+                  }
+                },
+                "required": [
+                  "family"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "checks": {
+              "contains": {
+                "type": "object",
+                "properties": {
+                  "family": {
+                    "const": "event_state_update"
+                  }
+                },
+                "required": [
+                  "family"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "checks": {
+              "contains": {
+                "type": "object",
+                "properties": {
+                  "family": {
+                    "const": "temporal_plan_revision"
+                  }
+                },
+                "required": [
+                  "family"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "checks": {
+              "contains": {
+                "type": "object",
+                "properties": {
+                  "family": {
+                    "const": "multi_actor_roles"
+                  }
+                },
+                "required": [
+                  "family"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "checks": {
+              "contains": {
+                "type": "object",
+                "properties": {
+                  "family": {
+                    "const": "object_attribute_binding"
+                  }
+                },
+                "required": [
+                  "family"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "checks": {
+              "contains": {
+                "type": "object",
+                "properties": {
+                  "family": {
+                    "const": "quantity_unit_scope_constraint"
+                  }
+                },
+                "required": [
+                  "family"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "checks": {
+              "contains": {
+                "type": "object",
+                "properties": {
+                  "family": {
+                    "const": "causal_relation"
+                  }
+                },
+                "required": [
+                  "family"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "checks": {
+              "contains": {
+                "type": "object",
+                "properties": {
+                  "family": {
+                    "const": "joint_event_constraint"
+                  }
+                },
+                "required": [
+                  "family"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "checks": {
+              "contains": {
+                "type": "object",
+                "properties": {
+                  "family": {
+                    "const": "composed_state_chain"
+                  }
+                },
+                "required": [
+                  "family"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "relation": {
+      "type": "object",
+      "required": [
+        "relation_id",
+        "endpoints",
+        "relation_type",
+        "derivation_basis",
+        "information_need",
+        "natural_value",
+        "uncertainties",
+        "decision",
+        "evidence"
+      ],
+      "properties": {
+        "relation_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "endpoints": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true,
+          "minItems": 1
+        },
+        "relation_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "derivation_basis": {
+          "type": "string",
+          "minLength": 1
+        },
+        "information_need": {
+          "type": "string",
+          "minLength": 1
+        },
+        "natural_value": {
+          "enum": [
+            "PASS",
+            "FAIL"
+          ]
+        },
+        "uncertainties": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "decision": {
+          "enum": [
+            "SELECT",
+            "REJECT",
+            "HOLD"
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidence"
+          },
+          "minItems": 1
+        },
+        "dependency_graph": {},
+        "path_audit": {},
+        "rejection_reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "representation_status": {
+          "enum": [
+            "MODELED",
+            "UNSUPPORTED"
+          ]
+        },
+        "representation_reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": true,
+      "description": "All original relation hypotheses remain in Discovery. MODELED (or omitted representation_status) requires the supported dependency/path representation. UNSUPPORTED retains legacy identity/evidence fields and the original unsupported graph/audit if present, requires HOLD/REJECT plus a nonempty reason, and is never a hard-target proposal. It is diagnostic rather than a whole-run representation failure.",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "representation_status": {
+                "const": "UNSUPPORTED"
+              }
+            },
+            "required": [
+              "representation_status"
+            ]
+          },
+          "then": {
+            "required": [
+              "representation_reason"
+            ],
+            "properties": {
+              "decision": {
+                "enum": [
+                  "HOLD",
+                  "REJECT"
+                ]
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "dependency_graph",
+              "path_audit"
+            ],
+            "properties": {
+              "dependency_graph": {
+                "$ref": "#/$defs/dependency_graph"
+              },
+              "path_audit": {
+                "$ref": "#/$defs/path_audit"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "target": {
+      "type": "object",
+      "required": [
+        "relation_id",
+        "author_id",
+        "target",
+        "relation_type",
+        "why_ask",
+        "information_need",
+        "expected_answer",
+        "requires_deterministic_check",
+        "discovery_sha256",
+        "uncertainties",
+        "identity_requirement",
+        "identity_links",
+        "facts",
+        "inference_steps",
+        "necessity_groups",
+        "evidence_certificate",
+        "dependency_graph",
+        "path_audit",
+        "selection_sha256",
+        "answer_projection"
+      ],
+      "properties": {
+        "relation_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "author_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "target": {
+          "type": "string",
+          "minLength": 1
+        },
+        "relation_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "why_ask": {
+          "type": "string",
+          "minLength": 1
+        },
+        "information_need": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expected_answer": {
+          "type": "array",
+          "minItems": 1
+        },
+        "requires_deterministic_check": {
+          "type": "boolean"
+        },
+        "discovery_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "source_scope_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "uncertainties": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "identity_requirement": {
+          "enum": [
+            "same_event",
+            "explicit_cross_event_relation"
+          ]
+        },
+        "identity_links": {
+          "type": "array"
+        },
+        "facts": {
+          "type": "array",
+          "minItems": 2
+        },
+        "inference_steps": {
+          "type": "array",
+          "minItems": 1
+        },
+        "necessity_groups": {
+          "type": "array",
+          "minItems": 2
+        },
+        "evidence_certificate": {
+          "type": "object"
+        },
+        "dependency_graph": {
+          "$ref": "#/$defs/dependency_graph"
+        },
+        "selection_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "path_audit": {
+          "$ref": "#/$defs/path_audit"
+        },
+        "answer_projection": {
+          "$ref": "#/$defs/answer_projection"
+        }
+      },
+      "additionalProperties": true,
+      "allOf": [
+        {
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "question"
+                ]
+              },
+              {
+                "required": [
+                  "question_type"
+                ]
+              },
+              {
+                "required": [
+                  "options"
+                ]
+              },
+              {
+                "required": [
+                  "gold"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "description": "Reusable structural TARGET definition. V2.2 code additionally checks exact selected graph, source/selection/difficulty bindings, legacy evidence certificates, and freeze-before-construction order. This schema cannot approve a target."
+    },
+    "symbolic_constraint": {
+      "type": "object",
+      "oneOf": [
+        {
+          "required": [
+            "if",
+            "then"
+          ],
+          "properties": {
+            "if": {
+              "type": "object",
+              "minProperties": 1
+            },
+            "then": {
+              "type": "object",
+              "minProperties": 1
+            }
+          },
+          "not": {
+            "required": [
+              "not"
+            ]
+          }
+        },
+        {
+          "required": [
+            "not"
+          ],
+          "properties": {
+            "not": {
+              "type": "object",
+              "minProperties": 1
+            }
+          },
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "if"
+                ]
+              },
+              {
+                "required": [
+                  "then"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "additionalProperties": true,
+      "description": "Source-extracted implication or prohibited assignment. Executable support and exact value types are validated by the core rule evaluator; extraction is still a semantic hypothesis."
+    },
+    "symbolic_value": {
+      "type": "object",
+      "minProperties": 1,
+      "properties": {
+        "precedence_edges": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 2,
+            "maxItems": 2
+          }
+        },
+        "state": {
+          "type": "object",
+          "required": [
+            "event_id",
+            "values"
+          ],
+          "properties": {
+            "event_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "values": {
+              "type": "object"
+            }
+          },
+          "additionalProperties": true
+        },
+        "transition": {
+          "type": "object",
+          "required": [
+            "event_id",
+            "when",
+            "set"
+          ],
+          "properties": {
+            "event_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "when": {
+              "type": "object"
+            },
+            "set": {
+              "type": "object"
+            }
+          },
+          "additionalProperties": true
+        },
+        "domains": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true
+          }
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/symbolic_constraint"
+          }
+        }
+      },
+      "additionalProperties": true,
+      "description": "Optional author-extracted symbolic proposition, bound to the fact quotation. Extra/unsupported semantic forms may be retained diagnostically but cannot be promoted merely because this object is present. Semantic entailment is not verified by JSON Schema."
+    },
+    "executable_rule": {
+      "type": "object",
+      "required": [
+        "type",
+        "expected_result"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "precedence_closure",
+            "guarded_transition",
+            "constraint_filter"
+          ]
+        },
+        "expected_result": {}
+      },
+      "additionalProperties": true,
+      "description": "A supported offline rule over source-extracted symbolic inputs. The implementation must execute the rule and require exact expected_result equality. This validates a symbolic derivation, not source entailment, exhaustive relation discovery, formal authorization, or empirical difficulty."
+    },
+    "answer_projection": {
+      "type": "object",
+      "required": [
+        "path",
+        "expected_answer"
+      ],
+      "properties": {
+        "path": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "integer",
+                "minimum": 0
+              }
+            ]
+          }
+        },
+        "expected_answer": {}
+      },
+      "additionalProperties": true,
+      "description": "Frozen extraction path from the graph evaluator symbolic_answer to the semantic answer. Empty path selects the whole result. The core must resolve keys/indices and require the projected value to equal both TARGET.expected_answer and this expected_answer; JSON Schema alone cannot enforce that equality."
+    }
+  }
+}

@@ -1,4 +1,4 @@
-"""Live JSON runtime restricted to Planner, Gate, and Realizer."""
+"""Live JSON runtime for Verifier, Planner, outline audit, Gate, and Realizer."""
 
 from __future__ import annotations
 
@@ -13,20 +13,74 @@ from ..live_backends import OpenAICompatibleChallengerClient
 
 LIVE_RUNTIME_VERSION = "memory_event_continuation_live_runtime_v1"
 PER_ROLE_REQUEST_BUDGET = 1
-TOTAL_REQUEST_BUDGET = 3
+TOTAL_REQUEST_BUDGET = 12
+ROLE_REQUEST_BUDGETS = {
+    "semantic_continuation_gate": 2,
+    # Initial audit, one failed-scene continuation re-audit, and (if needed)
+    # one replacement-scene audit are all bounded attempts in one round.
+    "realizer_adherence_auditor": 3,
+}
 ALLOWED_LIVE_ROLES = frozenset({
+    "transcript_event_verifier_v1",
     "simple_append_planner_v1",
+    "simple_append_planner_candidate_repair_v1",
+    "planner_outline_semantic_auditor_v1",
     "memory_event_semantic_continuation_gate_v1",
+    "memory_event_realization_aware_semantic_gate_v1",
     "simple_append_round_realizer_v1",
+    "memory_event_realizer_adherence_auditor_v1",
+    "simple_append_scene_continuation_realizer_v1",
+    "simple_append_scene_replacement_realizer_v1",
+    "memory_event_realizer_adherence_reaudit_v1",
 })
 ROLE_METADATA = {
+    "transcript_event_verifier_v1": (
+        "event_verifier", "transcript_event_verifier_v1"),
     "simple_append_planner_v1": ("planner", "simple_append_planner_v1"),
+    "simple_append_planner_candidate_repair_v1": (
+        "planner_repair", "simple_append_planner_candidate_repair_v1"),
+    "planner_outline_semantic_auditor_v1": (
+        "planner_outline_semantic_auditor",
+        "planner_outline_semantic_auditor_v1"),
     "memory_event_semantic_continuation_gate_v1": (
         "semantic_continuation_gate",
         "memory_event_semantic_continuation_gate_v1"),
+    "memory_event_realization_aware_semantic_gate_v1": (
+        "semantic_continuation_gate",
+        "memory_event_realization_aware_semantic_gate_v1"),
     "simple_append_round_realizer_v1": (
         "round_realizer", "simple_append_round_realizer_v1"),
+    "memory_event_realizer_adherence_auditor_v1": (
+        "realizer_adherence_auditor",
+        "memory_event_realizer_adherence_auditor_v1"),
+    "simple_append_scene_continuation_realizer_v1": (
+        "scene_continuation_realizer",
+        "simple_append_scene_continuation_realizer_v1"),
+    "simple_append_scene_replacement_realizer_v1": (
+        "scene_replacement_realizer",
+        "simple_append_scene_replacement_realizer_v1"),
+    "memory_event_realizer_adherence_reaudit_v1": (
+        "realizer_adherence_reaudit",
+        "memory_event_realizer_adherence_reaudit_v1"),
 }
+
+
+def validate_outbound_role_coverage(
+    required_roles: tuple[str, ...] | list[str], *,
+    allowed_roles: frozenset[str] | set[str] = ALLOWED_LIVE_ROLES,
+) -> dict[str, Any]:
+    """Check every configured outbound role before any live request."""
+    required = [str(role) for role in required_roles]
+    allowed = {str(role) for role in allowed_roles}
+    missing = [role for role in required if role not in allowed]
+    metadata_missing = [role for role in required if role not in ROLE_METADATA]
+    return {
+        "required_outbound_roles": required,
+        "allowed_outbound_roles": sorted(allowed),
+        "missing_outbound_roles": missing,
+        "missing_role_metadata": metadata_missing,
+        "valid": not missing and not metadata_missing,
+    }
 
 
 def load_json_object_strict(raw: str) -> dict[str, Any]:
@@ -49,6 +103,8 @@ class SimpleAppendLiveCaller:
         client: OpenAICompatibleChallengerClient,
         token_counter: Callable[[str], int], root_id: str,
         context_limit: int, before_request: Callable[[str, str], None],
+        total_request_budget: int = TOTAL_REQUEST_BUDGET,
+        role_request_budgets: Mapping[str, int] | None = None,
     ):
         self.run_root = Path(run_root)
         self.ledger = ledger
@@ -57,6 +113,8 @@ class SimpleAppendLiveCaller:
         self.root_id = root_id
         self.context_limit = int(context_limit)
         self.before_request = before_request
+        self.total_request_budget = int(total_request_budget)
+        self.role_request_budgets = dict(role_request_budgets or ROLE_REQUEST_BUDGETS)
         self.records: list[dict[str, Any]] = []
 
     def call_json(
@@ -108,8 +166,9 @@ class SimpleAppendLiveCaller:
                 request_id=request_id, intent=logical_role, attempt=1,
                 prompt_sha256=sha256_bytes(prompt.encode()),
                 call=transport_call, budget_class=logical_role,
-                budget_limit=PER_ROLE_REQUEST_BUDGET,
-                total_budget_limit=TOTAL_REQUEST_BUDGET,
+                budget_limit=self.role_request_budgets.get(
+                    logical_role, PER_ROLE_REQUEST_BUDGET),
+                total_budget_limit=self.total_request_budget,
                 request_metadata={
                     "logical_role": logical_role,
                     "role_version": role_version,
@@ -161,7 +220,12 @@ class SimpleAppendLiveCaller:
 
 def aggregate_usage(records: list[Mapping[str, Any]]) -> dict[str, Any]:
     roles: dict[str, dict[str, int]] = {}
-    for role in ("planner", "semantic_continuation_gate", "round_realizer"):
+    for role in ("event_verifier", "planner", "planner_repair",
+                 "planner_outline_semantic_auditor",
+                 "semantic_continuation_gate", "round_realizer",
+                 "scene_continuation_realizer", "realizer_adherence_auditor",
+                 "scene_replacement_realizer",
+                 "realizer_adherence_reaudit"):
         selected = [row for row in records if row.get("logical_role") == role]
 
         def total(provider: str, local: str) -> int:

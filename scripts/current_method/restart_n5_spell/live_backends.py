@@ -15,6 +15,7 @@ from .backends import BackendResponse, QuestionerRequest, RealizerRequest
 RATE_LIMIT_RETRY_LIMIT = 2
 RATE_LIMIT_DEFAULT_BACKOFF_SECONDS = 30.0
 RATE_LIMIT_MAX_BACKOFF_SECONDS = 120.0
+CHALLENGER_DEFAULT_TEMPERATURE = 0.25
 
 
 @dataclass(frozen=True)
@@ -25,7 +26,7 @@ class ChallengerAPIConfig:
     timeout_seconds: int = 180
     realizer_max_tokens: int = 4096
     questioner_max_tokens: int = 4096
-    temperature: float = 0.25
+    temperature: float = CHALLENGER_DEFAULT_TEMPERATURE
     enable_thinking: bool | None = None
 
 
@@ -40,7 +41,8 @@ def load_challenger_config(path: Path) -> ChallengerAPIConfig:
         timeout_seconds=int(api.get("timeout") or 180),
         realizer_max_tokens=int(api.get("realizer_max_tokens") or api.get("max_tokens") or 4096),
         questioner_max_tokens=int(api.get("questioner_max_tokens") or api.get("max_tokens") or 4096),
-        temperature=float(api.get("temperature") if api.get("temperature") is not None else 0.25),
+        temperature=float(api.get("temperature") if api.get("temperature") is not None
+                          else CHALLENGER_DEFAULT_TEMPERATURE),
         enable_thinking=(bool(api["enable_thinking"])
                          if "enable_thinking" in api else None))
 

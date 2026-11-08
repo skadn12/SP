@@ -1,0 +1,742 @@
+{
+  "schema_version": "r2_training_source_provenance_v1",
+  "scope": "R2 source code and local Python dependency closure; copied verbatim without model/API/training execution.",
+  "path_mapping": "Paths under current_method_github/ map to repository root; other workspace source paths retain their workspace-relative location.",
+  "manifest_sources": [
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/FINAL_MANIFEST.json",
+      "sha256": "30beb3aa92b4ded3bbf01087aa5817cb53aefe243a95e3eca25608596546e708",
+      "included": false,
+      "reason": "Frozen run artifact; used only as provenance input for source selection."
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/LAUNCH_CONTRACT.json",
+      "sha256": "a0a42c9a15110505779e2056ba06ac71674132edc348868788bb8ce8902830a1",
+      "included": false,
+      "reason": "Frozen run artifact; used only as provenance input for source selection."
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/VALIDATION_MANIFEST.json",
+      "sha256": "4d73a689a5f9b81b82e60d9f0ec5e0487000b846a351c301dcd7dee3b9d6b8e1",
+      "included": false,
+      "reason": "Frozen run artifact; used only as provenance input for source selection."
+    }
+  ],
+  "manifest_python_seed_count": 28,
+  "python_seed_count_with_final_training_sources": 33,
+  "source_path_count": 57,
+  "unique_package_file_count": 53,
+  "newly_copied_file_count": 46,
+  "byte_identity_check": "All source/package pairs match SHA-256; existing files were never overwritten.",
+  "syntax_check": "compile(source_bytes, package_path, exec), without execution, passed for every Python source.",
+  "excluded": "Training/evaluation records, frozen result/config/manifests, model/tokenizer weights, credentials, generated prompts/schemas/fixture artifacts, plot_env_v1, and package environments.",
+  "static_source_closure_missing": [],
+  "existing_file_conflicts": [],
+  "runtime_limitations": [
+    "Historical source retains original absolute workspace/model/Python environment paths and immutable hash bindings. No portability edits were made.",
+    "Frozen training/validation records, run manifests, endpoint/config files, generated prompts/schemas and model/adapter artifacts are intentionally absent; standalone execution requires providing authorized matching assets.",
+    "Closure follows local imports, statically resolved Path expressions/constants and named dynamic gate loaders. Runtime data/config driven references cannot be validated without the excluded artifacts.",
+    "No Python module import, model load, API call, training, or evaluation was run for this source packaging task."
+  ],
+  "files": [
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/current_method_github/scripts/current_method/base_qa_answers_v2_2_1.py",
+      "package_path": "scripts/current_method/base_qa_answers_v2_2_1.py",
+      "sha256": "cc23b39099233c48dc0e5d8c25d8562fa7ca9799ef7001ff0518e8114699f202",
+      "size_bytes": 11232,
+      "action": "existing_identical",
+      "manifest_seed": false,
+      "source_seed": false
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/current_method_github/scripts/current_method/production_question_gate.py",
+      "package_path": "scripts/current_method/production_question_gate.py",
+      "sha256": "947a7251239f42ab05a23e120bcf4184f294eaceb0f195110bead0308ed55f06",
+      "size_bytes": 20840,
+      "action": "existing_identical",
+      "manifest_seed": false,
+      "source_seed": false
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/current_method_github/scripts/current_method/question_presentation_gate.py",
+      "package_path": "scripts/current_method/question_presentation_gate.py",
+      "sha256": "d28194ea5b73464a81f90fa72e23ba3c3a7a83ba36747d42297a985b3671f72d",
+      "size_bytes": 13859,
+      "action": "existing_identical",
+      "manifest_seed": false,
+      "source_seed": false
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/current_method_github/scripts/current_method/restart_n5_spell/backends.py",
+      "package_path": "scripts/current_method/restart_n5_spell/backends.py",
+      "sha256": "ac69a8fe4ada99a72173186e83858ac07c5991cf91a87404de78fd0eebb0b38c",
+      "size_bytes": 1415,
+      "action": "existing_identical",
+      "manifest_seed": false,
+      "source_seed": false
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/current_method_github/scripts/current_method/restart_n5_spell/h4_round0_b0_training_smoke_v1/train_smoke_runner.py",
+      "package_path": "scripts/current_method/restart_n5_spell/h4_round0_b0_training_smoke_v1/train_smoke_runner.py",
+      "sha256": "4a8e23beab5e0d82c8908c23fb451e7b41d39a540cf7f36ddbe5d3790c360428",
+      "size_bytes": 2702,
+      "action": "existing_identical",
+      "manifest_seed": false,
+      "source_seed": false
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/current_method_github/scripts/current_method/restart_n5_spell/vllm_backends.py",
+      "package_path": "scripts/current_method/restart_n5_spell/vllm_backends.py",
+      "sha256": "6e92d0d2c564d1043959ffcedf2be536520f9299d8e949b4ff82f486b8ad7906",
+      "size_bytes": 3022,
+      "action": "existing_identical",
+      "manifest_seed": false,
+      "source_seed": false
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/current_method_github/train_qwen3_lora_sft.py",
+      "package_path": "train_qwen3_lora_sft.py",
+      "sha256": "918a45232e4287a26f46a5b4eb48175476a82136f5c3e202c94bf0d8cecb87dc",
+      "size_bytes": 17020,
+      "action": "existing_identical",
+      "manifest_seed": true,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/offline-deliveries/h4_codex_remaining_six_repair_v122/evaluations/paired_v1/adapter_protocol.py",
+      "package_path": "offline-deliveries/h4_codex_remaining_six_repair_v122/evaluations/paired_v1/adapter_protocol.py",
+      "sha256": "08ca88188198fe8031e02395cecc3a1d43133cb58da7f49dd91e3dc999ccdaa7",
+      "size_bytes": 11587,
+      "action": "copied",
+      "manifest_seed": true,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/offline-deliveries/h4_codex_train_pool_v125/build_package.py",
+      "package_path": "offline-deliveries/h4_codex_train_pool_v125/build_package.py",
+      "sha256": "5e21c3d3836a6a73bc65e026efb8f6cf5e4b34baa04ee242dbae0ca957c137d3",
+      "size_bytes": 22832,
+      "action": "copied",
+      "manifest_seed": true,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/offline-deliveries/h4_feedback_training_pool_v15_qa/evaluation/protocol.py",
+      "package_path": "offline-deliveries/h4_feedback_training_pool_v15_qa/evaluation/protocol.py",
+      "sha256": "2314e7759ab483e75e28275dfff91f1e50f7b5f00cc13f5b904e18864d0d0e19",
+      "size_bytes": 11464,
+      "action": "copied",
+      "manifest_seed": true,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/offline-deliveries/h4_feedback_training_pool_v15_qa/evaluation/scoring.py",
+      "package_path": "offline-deliveries/h4_feedback_training_pool_v15_qa/evaluation/scoring.py",
+      "sha256": "2d0e7411dcd7b1c520bdbaecfef5259d48f036ce071a98ac3d6e633be2017ad2",
+      "size_bytes": 3994,
+      "action": "copied",
+      "manifest_seed": true,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/offline-deliveries/h4_feedback_training_pool_v15_qa/multiselect_gate.py",
+      "package_path": "offline-deliveries/h4_feedback_training_pool_v15_qa/multiselect_gate.py",
+      "sha256": "27d1678368015b4e0b88540ddf7e3cdd42ba15e934530bd156f3297eeb19effd",
+      "size_bytes": 7365,
+      "action": "copied",
+      "manifest_seed": false,
+      "source_seed": false
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/offline-deliveries/h4_feedback_training_pool_v15_qa/ordering_gate.py",
+      "package_path": "offline-deliveries/h4_feedback_training_pool_v15_qa/ordering_gate.py",
+      "sha256": "699d23ed031f1fd728c3f6ea454492f86fcf4c101a8a75b5553788db819ebc0c",
+      "size_bytes": 24584,
+      "action": "copied",
+      "manifest_seed": false,
+      "source_seed": false
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/offline-deliveries/h4_feedback_training_pool_v15_qa/prompts.py",
+      "package_path": "offline-deliveries/h4_feedback_training_pool_v15_qa/prompts.py",
+      "sha256": "6c719f324e2e93b68f73f4bd6ec9c28cba265b90ffa8dbe57265710ce951a946",
+      "size_bytes": 9278,
+      "action": "copied",
+      "manifest_seed": false,
+      "source_seed": false
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/offline-deliveries/h4_multiselect_partial_admission_v1/scoring.py",
+      "package_path": "offline-deliveries/h4_multiselect_partial_admission_v1/scoring.py",
+      "sha256": "f96f475b3924a4ab6c1c4b58f28d1007e9181ef83488d5347df9ef4280485bca",
+      "size_bytes": 5622,
+      "action": "copied",
+      "manifest_seed": false,
+      "source_seed": false
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/base_qa_free_generation_reason_restore_eval_20261103_run02/run_eval.py",
+      "package_path": "research-protocols/selfplay_week_20261019/base_qa_free_generation_reason_restore_eval_20261103_run02/run_eval.py",
+      "sha256": "246a188808e3cf125729e137aaf9781320e23223d29251e67900f51c5e98bf4e",
+      "size_bytes": 16700,
+      "action": "copied",
+      "manifest_seed": true,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/base_qa_free_generation_solver_eval_20261103_run02/run_eval.py",
+      "package_path": "research-protocols/selfplay_week_20261019/base_qa_free_generation_solver_eval_20261103_run02/run_eval.py",
+      "sha256": "ed436d2dc648c2a2530a9f6ba88c2c3fd47094f1242c39adfcc6a73f7a63271c",
+      "size_bytes": 21241,
+      "action": "copied",
+      "manifest_seed": true,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/base_qa_v2_2_1_cardinality_solver_eval_20261103/run_cardinality_eval.py",
+      "package_path": "research-protocols/selfplay_week_20261019/base_qa_v2_2_1_cardinality_solver_eval_20261103/run_cardinality_eval.py",
+      "sha256": "b8f82db884228ed900f7d1b604600b0647483a5fc4245fd72a005ed6d69101e8",
+      "size_bytes": 25158,
+      "action": "copied",
+      "manifest_seed": true,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/base_qa_v2_2_1_format_restore_solver_eval_20261102/multiselect_permutation_repeat_20261102/run_multiselect_permutation_eval.py",
+      "package_path": "research-protocols/selfplay_week_20261019/base_qa_v2_2_1_format_restore_solver_eval_20261102/multiselect_permutation_repeat_20261102/run_multiselect_permutation_eval.py",
+      "sha256": "92e49ad5457167ff9c52200f900cb9edabe627b4ae6e6fd53b844e3fca695c94",
+      "size_bytes": 22732,
+      "action": "copied",
+      "manifest_seed": true,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/base_qa_v2_2_1_format_restore_solver_eval_20261102/run_solver_eval.py",
+      "package_path": "research-protocols/selfplay_week_20261019/base_qa_v2_2_1_format_restore_solver_eval_20261102/run_solver_eval.py",
+      "sha256": "b6133b596a225a5d363c88c273c54a0c61e0ad6868f8ead2d7ab86c950ae11e3",
+      "size_bytes": 18214,
+      "action": "copied",
+      "manifest_seed": true,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/feedback_closed_loop_20261024_v1/solver_runner.py",
+      "package_path": "research-protocols/selfplay_week_20261019/feedback_closed_loop_20261024_v1/solver_runner.py",
+      "sha256": "d6c64d24df85eac2e8f8779b8de51fdda5d327365a8f79b0b153b22e6c297c92",
+      "size_bytes": 30363,
+      "action": "copied",
+      "manifest_seed": false,
+      "source_seed": false
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/feedback_guided_relation_qa_20261103_run01/solver/run_eval.py",
+      "package_path": "research-protocols/selfplay_week_20261019/feedback_guided_relation_qa_20261103_run01/solver/run_eval.py",
+      "sha256": "974dc98739d7ae528ec151d31d536e2b145a35cc9634757defce054e4ed3be72",
+      "size_bytes": 25159,
+      "action": "copied",
+      "manifest_seed": true,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/natural_question_forms_fg_15root_extension_20261026_v1/runner.py",
+      "package_path": "research-protocols/selfplay_week_20261019/natural_question_forms_fg_15root_extension_20261026_v1/runner.py",
+      "sha256": "23f9a706a9de26c79e3e50013d6b9d3d9bb7666aa5469cc584fcc54398ce7105",
+      "size_bytes": 41988,
+      "action": "copied",
+      "manifest_seed": false,
+      "source_seed": false
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/overnight_endtoend_20261024_v1/followup_repair_v1/evaluation/model_compat.py",
+      "package_path": "research-protocols/selfplay_week_20261019/overnight_endtoend_20261024_v1/followup_repair_v1/evaluation/model_compat.py",
+      "sha256": "ddde5e69be93c0b1f67dd892d75b7fce64c7de87bff48c7511b33e5489a1bcfa",
+      "size_bytes": 9153,
+      "action": "copied",
+      "manifest_seed": false,
+      "source_seed": false
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/postweek_diversity_reason_v1/run.py",
+      "package_path": "research-protocols/selfplay_week_20261019/postweek_diversity_reason_v1/run.py",
+      "sha256": "200aba2106cbe1349f45b84b80492261fe874da39412c2d7373558ddd08579e1",
+      "size_bytes": 26636,
+      "action": "copied",
+      "manifest_seed": true,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/postweek_diversity_reason_v1/selfcheck.py",
+      "package_path": "research-protocols/selfplay_week_20261019/postweek_diversity_reason_v1/selfcheck.py",
+      "sha256": "6acb2b38e9546587fa4708b44912f6e2f876c22eea1c4a972a535f3216503c5b",
+      "size_bytes": 6269,
+      "action": "copied",
+      "manifest_seed": false,
+      "source_seed": false
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/postweek_feedback_mainline_v1/question_batch.py",
+      "package_path": "research-protocols/selfplay_week_20261019/postweek_feedback_mainline_v1/question_batch.py",
+      "sha256": "c77ffa16ee68fce524dea1f6c4be0bd481d5b668675781487b885bc34a9fe428",
+      "size_bytes": 18559,
+      "action": "copied",
+      "manifest_seed": false,
+      "source_seed": false
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/postweek_question_quality_pilot_v1/run.py",
+      "package_path": "research-protocols/selfplay_week_20261019/postweek_question_quality_pilot_v1/run.py",
+      "sha256": "2b489d48f8356ff1342c1a5138b37dfbfc49ced46a24491926df367e0ef9767d",
+      "size_bytes": 34845,
+      "action": "copied",
+      "manifest_seed": false,
+      "source_seed": false
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/postweek_reason_feedback_repair_v1/repair.py",
+      "package_path": "research-protocols/selfplay_week_20261019/postweek_reason_feedback_repair_v1/repair.py",
+      "sha256": "3e3fdb4d1cafcee48d713031b0b9250f108db546c1c4a317bc6460f251c4cd6b",
+      "size_bytes": 22539,
+      "action": "copied",
+      "manifest_seed": true,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/priority_diversity_feedback_20261024_v1/solver_runner.py",
+      "package_path": "research-protocols/selfplay_week_20261019/priority_diversity_feedback_20261024_v1/solver_runner.py",
+      "sha256": "b2e17f27a69f99ebbbad1d21f38801e224927279e073f9973d9f14545b0fba4a",
+      "size_bytes": 29168,
+      "action": "copied",
+      "manifest_seed": false,
+      "source_seed": false
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/root_capacity_feedback_20261104_run01/solver_adapter/adapter.py",
+      "package_path": "research-protocols/selfplay_week_20261019/root_capacity_feedback_20261104_run01/solver_adapter/adapter.py",
+      "sha256": "b4f3d012b5568aec7805588d3148fd306ca75ddb70d498f78094a23a04c4bd1b",
+      "size_bytes": 22311,
+      "action": "copied",
+      "manifest_seed": false,
+      "source_seed": false
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/thinking_switch_20261024_structured_v2/run.py",
+      "package_path": "research-protocols/selfplay_week_20261019/thinking_switch_20261024_structured_v2/run.py",
+      "sha256": "619d19205a4ed02a01584ce80074abc7eb819f64b01e7eec233d8bee26d58ed5",
+      "size_bytes": 31353,
+      "action": "copied",
+      "manifest_seed": false,
+      "source_seed": false
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/thinking_switch_20261024_v1/run.py",
+      "package_path": "research-protocols/selfplay_week_20261019/thinking_switch_20261024_v1/run.py",
+      "sha256": "fbee7dbad87a48d2a63da4526e7cb46042157a04111810e09d36935689948789",
+      "size_bytes": 21266,
+      "action": "copied",
+      "manifest_seed": false,
+      "source_seed": false
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/model_baseline/adapter.py",
+      "package_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/model_baseline/adapter.py",
+      "sha256": "337a13043b94efb7c1d77b3a16592c8b5c1cb006187c26fc950a8a9f51044725",
+      "size_bytes": 27291,
+      "action": "copied",
+      "manifest_seed": false,
+      "source_seed": false
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/model_baseline/adapter_batch_querypairs.py",
+      "package_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/model_baseline/adapter_batch_querypairs.py",
+      "sha256": "f5544fc98f2de3baaf7421b1e35fa8a988d5ceb31689037a0282579bcea29856",
+      "size_bytes": 27653,
+      "action": "copied",
+      "manifest_seed": true,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/packing/export_training.py",
+      "package_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/packing/export_training.py",
+      "sha256": "74536da9a00edcc57603285c95018bdaa2b99587d392cf42bf0c05fb46d24673",
+      "size_bytes": 19333,
+      "action": "copied",
+      "manifest_seed": true,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261105_three_root_G_retry_eval_v1/model_baseline/adapter.py",
+      "package_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261105_three_root_G_retry_eval_v1/model_baseline/adapter.py",
+      "sha256": "807a22856c03ee6a0025208f9f13b7c7041a6636f4ee32b86aafbef28e1e40c2",
+      "size_bytes": 38603,
+      "action": "copied",
+      "manifest_seed": true,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261106_wording_solver_eval_v1/adapter.py",
+      "package_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261106_wording_solver_eval_v1/adapter.py",
+      "sha256": "8b9f9905603fc0bd0ece0cb6e0629d7df316096376025e632d49f3599e44b273",
+      "size_bytes": 13079,
+      "action": "copied",
+      "manifest_seed": true,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/build_final_admission.py",
+      "package_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/build_final_admission.py",
+      "sha256": "acbf40e9ac1b5aaeec7bce2186f3afa5152542d58d66651a6d0f7fd231dc3027",
+      "size_bytes": 6773,
+      "action": "copied",
+      "manifest_seed": false,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/reporting/build_training_outcome_report.py",
+      "package_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/reporting/build_training_outcome_report.py",
+      "sha256": "0cd91903cc92163da4188ad2b37838f250f5f01445da6f7fd1191ea09aa75afd",
+      "size_bytes": 30700,
+      "action": "copied",
+      "manifest_seed": false,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/audited_training_runner.py",
+      "package_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/audited_training_runner.py",
+      "sha256": "287497615f1ba65c024e33ee0894c7fc1fc6ecb161e3ad37d62b160c0f2f1bdd",
+      "size_bytes": 22111,
+      "action": "copied",
+      "manifest_seed": true,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/build_final_training.py",
+      "package_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/build_final_training.py",
+      "sha256": "a0f4cbd238b1a212ff63d1a3a191e4959cca3ddcab49508ce7ff91f8386169dc",
+      "size_bytes": 10062,
+      "action": "copied",
+      "manifest_seed": true,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/build_validation.py",
+      "package_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/build_validation.py",
+      "sha256": "30f0afe2bcc0581255f22abd5f550afe31e9521f60bcb8e5571dba4ea0e62e49",
+      "size_bytes": 16363,
+      "action": "copied",
+      "manifest_seed": true,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/check_controller_interfaces.py",
+      "package_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/check_controller_interfaces.py",
+      "sha256": "0ba5c127a299cc681869672036ee7994815880a63c719649d7c81cd6b167924e",
+      "size_bytes": 6180,
+      "action": "copied",
+      "manifest_seed": false,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/checkpoint_health.py",
+      "package_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/checkpoint_health.py",
+      "sha256": "75f5ec0c1f1cf91bd196729bac4d3dd03c2853e5f2437639271c975200bc98c2",
+      "size_bytes": 2617,
+      "action": "copied",
+      "manifest_seed": true,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/tokenization_preflight.py",
+      "package_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/tokenization_preflight.py",
+      "sha256": "c5dec1b6ff68a4c013d7d7d8e0bae605bcba2a17374f30c74bbb0021edd5d749",
+      "size_bytes": 5510,
+      "action": "copied",
+      "manifest_seed": true,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/train_smoke_runner.py",
+      "package_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/train_smoke_runner.py",
+      "sha256": "4a8e23beab5e0d82c8908c23fb451e7b41d39a540cf7f36ddbe5d3790c360428",
+      "size_bytes": 2702,
+      "action": "copied",
+      "manifest_seed": false,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/training_contract.py",
+      "package_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/training_contract.py",
+      "sha256": "68223f3932c8fbc76024f9aa8ad449d1a135cbf2acd40da56e6bbb3c91d1d715",
+      "size_bytes": 4058,
+      "action": "copied",
+      "manifest_seed": true,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/training_controller.py",
+      "package_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/training_controller.py",
+      "sha256": "4fe8be17c04981088360a6fbb8717dde43c02a623d62c018b72a90de5d3625b3",
+      "size_bytes": 12907,
+      "action": "copied",
+      "manifest_seed": true,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/validation_callback.py",
+      "package_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/validation_callback.py",
+      "sha256": "3a75f4b9d1b1ed1417931927a105e36417979ec0ec9bcc1a88253a6589a7dee6",
+      "size_bytes": 16903,
+      "action": "copied",
+      "manifest_seed": true,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/validation_cpu_selfcheck.py",
+      "package_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/validation_cpu_selfcheck.py",
+      "sha256": "ef14fbf582f5419f913c66e5c7f247f9052be1541eed6055b27b33b1b75191d9",
+      "size_bytes": 7888,
+      "action": "copied",
+      "manifest_seed": false,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_structure_pilot_plan_20261106_v1/execution_20261106_v1/solver/adapter.py",
+      "package_path": "research-protocols/selfplay_week_20261019/training_set_structure_pilot_plan_20261106_v1/execution_20261106_v1/solver/adapter.py",
+      "sha256": "0f60c1868cedb37455d29523e90184165a1e11efafc9d49d88bbbb74afaf51a4",
+      "size_bytes": 45093,
+      "action": "copied",
+      "manifest_seed": true,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_structure_pilot_plan_20261106_v1/execution_20261106_v1/solver/test_adapter.py",
+      "package_path": "research-protocols/selfplay_week_20261019/training_set_structure_pilot_plan_20261106_v1/execution_20261106_v1/solver/test_adapter.py",
+      "sha256": "35e41624ba2cb73516e6e62678a7d56f338cfb2725e796df8c8a104f756b0288",
+      "size_bytes": 23597,
+      "action": "copied",
+      "manifest_seed": true,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/scripts/current_method/base_qa_answers_v2_2_1.py",
+      "package_path": "scripts/current_method/base_qa_answers_v2_2_1.py",
+      "sha256": "cc23b39099233c48dc0e5d8c25d8562fa7ca9799ef7001ff0518e8114699f202",
+      "size_bytes": 11232,
+      "action": "existing_identical",
+      "manifest_seed": true,
+      "source_seed": true
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/scripts/current_method/production_question_gate.py",
+      "package_path": "scripts/current_method/production_question_gate.py",
+      "sha256": "947a7251239f42ab05a23e120bcf4184f294eaceb0f195110bead0308ed55f06",
+      "size_bytes": 20840,
+      "action": "existing_identical",
+      "manifest_seed": false,
+      "source_seed": false
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/scripts/current_method/question_presentation_gate.py",
+      "package_path": "scripts/current_method/question_presentation_gate.py",
+      "sha256": "d28194ea5b73464a81f90fa72e23ba3c3a7a83ba36747d42297a985b3671f72d",
+      "size_bytes": 13859,
+      "action": "existing_identical",
+      "manifest_seed": false,
+      "source_seed": false
+    },
+    {
+      "source_path": "/root/autodl-tmp/gxy-selfplay/train_qwen3_lora_sft.py",
+      "package_path": "train_qwen3_lora_sft.py",
+      "sha256": "918a45232e4287a26f46a5b4eb48175476a82136f5c3e202c94bf0d8cecb87dc",
+      "size_bytes": 17020,
+      "action": "existing_identical",
+      "manifest_seed": false,
+      "source_seed": false
+    }
+  ],
+  "dependency_edges": {
+    "/root/autodl-tmp/gxy-selfplay/current_method_github/train_qwen3_lora_sft.py": [],
+    "/root/autodl-tmp/gxy-selfplay/offline-deliveries/h4_codex_remaining_six_repair_v122/evaluations/paired_v1/adapter_protocol.py": [
+      "/root/autodl-tmp/gxy-selfplay/offline-deliveries/h4_feedback_training_pool_v15_qa/multiselect_gate.py",
+      "/root/autodl-tmp/gxy-selfplay/offline-deliveries/h4_feedback_training_pool_v15_qa/ordering_gate.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/offline-deliveries/h4_codex_train_pool_v125/build_package.py": [
+      "/root/autodl-tmp/gxy-selfplay/current_method_github/scripts/current_method/restart_n5_spell/h4_round0_b0_training_smoke_v1/train_smoke_runner.py",
+      "/root/autodl-tmp/gxy-selfplay/current_method_github/train_qwen3_lora_sft.py",
+      "/root/autodl-tmp/gxy-selfplay/offline-deliveries/h4_codex_remaining_six_repair_v122/evaluations/paired_v1/adapter_protocol.py",
+      "/root/autodl-tmp/gxy-selfplay/train_qwen3_lora_sft.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/offline-deliveries/h4_feedback_training_pool_v15_qa/evaluation/protocol.py": [
+      "/root/autodl-tmp/gxy-selfplay/offline-deliveries/h4_feedback_training_pool_v15_qa/multiselect_gate.py",
+      "/root/autodl-tmp/gxy-selfplay/offline-deliveries/h4_feedback_training_pool_v15_qa/ordering_gate.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/offline-deliveries/h4_feedback_training_pool_v15_qa/evaluation/scoring.py": [],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/base_qa_free_generation_reason_restore_eval_20261103_run02/run_eval.py": [
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/base_qa_free_generation_solver_eval_20261103_run02/run_eval.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/natural_question_forms_fg_15root_extension_20261026_v1/runner.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/postweek_diversity_reason_v1/run.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/postweek_reason_feedback_repair_v1/repair.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/base_qa_free_generation_solver_eval_20261103_run02/run_eval.py": [
+      "/root/autodl-tmp/gxy-selfplay/offline-deliveries/h4_feedback_training_pool_v15_qa/evaluation/scoring.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/base_qa_v2_2_1_cardinality_solver_eval_20261103/run_cardinality_eval.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/base_qa_v2_2_1_format_restore_solver_eval_20261102/run_solver_eval.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/base_qa_v2_2_1_cardinality_solver_eval_20261103/run_cardinality_eval.py": [
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/base_qa_v2_2_1_format_restore_solver_eval_20261102/multiselect_permutation_repeat_20261102/run_multiselect_permutation_eval.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/base_qa_v2_2_1_format_restore_solver_eval_20261102/multiselect_permutation_repeat_20261102/run_multiselect_permutation_eval.py": [],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/base_qa_v2_2_1_format_restore_solver_eval_20261102/run_solver_eval.py": [],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/feedback_guided_relation_qa_20261103_run01/solver/run_eval.py": [
+      "/root/autodl-tmp/gxy-selfplay/offline-deliveries/h4_feedback_training_pool_v15_qa/evaluation/protocol.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/base_qa_free_generation_reason_restore_eval_20261103_run02/run_eval.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/postweek_diversity_reason_v1/run.py": [
+      "/root/autodl-tmp/gxy-selfplay/current_method_github/scripts/current_method/restart_n5_spell/vllm_backends.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/postweek_diversity_reason_v1/selfcheck.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/postweek_reason_feedback_repair_v1/repair.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/postweek_reason_feedback_repair_v1/repair.py": [
+      "/root/autodl-tmp/gxy-selfplay/current_method_github/scripts/current_method/restart_n5_spell/vllm_backends.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/model_baseline/adapter_batch_querypairs.py": [
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/feedback_guided_relation_qa_20261103_run01/solver/run_eval.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/root_capacity_feedback_20261104_run01/solver_adapter/adapter.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/model_baseline/adapter.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/packing/export_training.py": [
+      "/root/autodl-tmp/gxy-selfplay/current_method_github/scripts/current_method/base_qa_answers_v2_2_1.py",
+      "/root/autodl-tmp/gxy-selfplay/offline-deliveries/h4_codex_train_pool_v125/build_package.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/model_baseline/adapter_batch_querypairs.py",
+      "/root/autodl-tmp/gxy-selfplay/scripts/current_method/base_qa_answers_v2_2_1.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261105_three_root_G_retry_eval_v1/model_baseline/adapter.py": [
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/feedback_guided_relation_qa_20261103_run01/solver/run_eval.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/root_capacity_feedback_20261104_run01/solver_adapter/adapter.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261106_wording_solver_eval_v1/adapter.py": [
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261105_three_root_G_retry_eval_v1/model_baseline/adapter.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/build_final_admission.py": [],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/reporting/build_training_outcome_report.py": [],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/audited_training_runner.py": [
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/checkpoint_health.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/training_contract.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/build_final_training.py": [
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/training_contract.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/build_validation.py": [
+      "/root/autodl-tmp/gxy-selfplay/current_method_github/train_qwen3_lora_sft.py",
+      "/root/autodl-tmp/gxy-selfplay/offline-deliveries/h4_codex_train_pool_v125/build_package.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/validation_callback.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_structure_pilot_plan_20261106_v1/execution_20261106_v1/solver/adapter.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/check_controller_interfaces.py": [
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/audited_training_runner.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/build_final_training.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/training_contract.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/checkpoint_health.py": [
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/training_contract.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/tokenization_preflight.py": [
+      "/root/autodl-tmp/gxy-selfplay/current_method_github/train_qwen3_lora_sft.py",
+      "/root/autodl-tmp/gxy-selfplay/train_qwen3_lora_sft.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/train_smoke_runner.py": [
+      "/root/autodl-tmp/gxy-selfplay/current_method_github/train_qwen3_lora_sft.py",
+      "/root/autodl-tmp/gxy-selfplay/train_qwen3_lora_sft.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/training_contract.py": [
+      "/root/autodl-tmp/gxy-selfplay/current_method_github/train_qwen3_lora_sft.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/packing/export_training.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/training_controller.py": [
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/audited_training_runner.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/build_final_training.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/checkpoint_health.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/tokenization_preflight.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/training_contract.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/validation_callback.py": [],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/validation_cpu_selfcheck.py": [
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/tools/validation_callback.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_structure_pilot_plan_20261106_v1/execution_20261106_v1/solver/adapter.py": [
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261105_three_root_G_retry_eval_v1/model_baseline/adapter.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261106_wording_solver_eval_v1/adapter.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_structure_pilot_plan_20261106_v1/execution_20261106_v1/solver/test_adapter.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_structure_pilot_plan_20261106_v1/execution_20261106_v1/solver/test_adapter.py": [
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_structure_pilot_plan_20261106_v1/execution_20261106_v1/solver/adapter.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/scripts/current_method/base_qa_answers_v2_2_1.py": [],
+    "/root/autodl-tmp/gxy-selfplay/offline-deliveries/h4_feedback_training_pool_v15_qa/multiselect_gate.py": [],
+    "/root/autodl-tmp/gxy-selfplay/offline-deliveries/h4_feedback_training_pool_v15_qa/ordering_gate.py": [
+      "/root/autodl-tmp/gxy-selfplay/offline-deliveries/h4_feedback_training_pool_v15_qa/prompts.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/current_method_github/scripts/current_method/restart_n5_spell/h4_round0_b0_training_smoke_v1/train_smoke_runner.py": [
+      "/root/autodl-tmp/gxy-selfplay/current_method_github/train_qwen3_lora_sft.py",
+      "/root/autodl-tmp/gxy-selfplay/train_qwen3_lora_sft.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/train_qwen3_lora_sft.py": [],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/natural_question_forms_fg_15root_extension_20261026_v1/runner.py": [
+      "/root/autodl-tmp/gxy-selfplay/offline-deliveries/h4_multiselect_partial_admission_v1/scoring.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/feedback_closed_loop_20261024_v1/solver_runner.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/thinking_switch_20261024_structured_v2/run.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/current_method_github/scripts/current_method/restart_n5_spell/vllm_backends.py": [
+      "/root/autodl-tmp/gxy-selfplay/current_method_github/scripts/current_method/restart_n5_spell/backends.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/postweek_diversity_reason_v1/selfcheck.py": [
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/postweek_diversity_reason_v1/run.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/root_capacity_feedback_20261104_run01/solver_adapter/adapter.py": [
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/feedback_guided_relation_qa_20261103_run01/solver/run_eval.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/model_baseline/adapter.py": [
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/feedback_guided_relation_qa_20261103_run01/solver/run_eval.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/root_capacity_feedback_20261104_run01/solver_adapter/adapter.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/current_method_github/scripts/current_method/base_qa_answers_v2_2_1.py": [],
+    "/root/autodl-tmp/gxy-selfplay/offline-deliveries/h4_feedback_training_pool_v15_qa/prompts.py": [],
+    "/root/autodl-tmp/gxy-selfplay/offline-deliveries/h4_multiselect_partial_admission_v1/scoring.py": [],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/feedback_closed_loop_20261024_v1/solver_runner.py": [
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/thinking_switch_20261024_structured_v2/run.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/thinking_switch_20261024_structured_v2/run.py": [
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/priority_diversity_feedback_20261024_v1/solver_runner.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/thinking_switch_20261024_v1/run.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/current_method_github/scripts/current_method/restart_n5_spell/backends.py": [],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/priority_diversity_feedback_20261024_v1/solver_runner.py": [
+      "/root/autodl-tmp/gxy-selfplay/current_method_github/scripts/current_method/production_question_gate.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/overnight_endtoend_20261024_v1/followup_repair_v1/evaluation/model_compat.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/postweek_question_quality_pilot_v1/run.py",
+      "/root/autodl-tmp/gxy-selfplay/scripts/current_method/production_question_gate.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/thinking_switch_20261024_v1/run.py": [
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/priority_diversity_feedback_20261024_v1/solver_runner.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/current_method_github/scripts/current_method/production_question_gate.py": [
+      "/root/autodl-tmp/gxy-selfplay/current_method_github/scripts/current_method/question_presentation_gate.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/overnight_endtoend_20261024_v1/followup_repair_v1/evaluation/model_compat.py": [],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/postweek_question_quality_pilot_v1/run.py": [
+      "/root/autodl-tmp/gxy-selfplay/current_method_github/scripts/current_method/question_presentation_gate.py",
+      "/root/autodl-tmp/gxy-selfplay/current_method_github/scripts/current_method/restart_n5_spell/vllm_backends.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/postweek_diversity_reason_v1/run.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/postweek_feedback_mainline_v1/question_batch.py",
+      "/root/autodl-tmp/gxy-selfplay/scripts/current_method/question_presentation_gate.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/scripts/current_method/production_question_gate.py": [
+      "/root/autodl-tmp/gxy-selfplay/scripts/current_method/question_presentation_gate.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/current_method_github/scripts/current_method/question_presentation_gate.py": [],
+    "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/postweek_feedback_mainline_v1/question_batch.py": [
+      "/root/autodl-tmp/gxy-selfplay/current_method_github/scripts/current_method/restart_n5_spell/vllm_backends.py",
+      "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/postweek_diversity_reason_v1/run.py"
+    ],
+    "/root/autodl-tmp/gxy-selfplay/scripts/current_method/question_presentation_gate.py": []
+  }
+}

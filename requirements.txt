@@ -1,6 +1,7 @@
 # Generation / validation
 transformers>=4.40
 requests>=2.31
+jsonschema>=4.18,<5
 
 # Optional solver evaluation
 vllm
@@ -11,4 +12,4 @@ peft
 accelerate
 datasets
 safetensors
-
+wandb

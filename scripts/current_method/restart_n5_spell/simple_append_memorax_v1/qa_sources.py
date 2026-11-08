@@ -35,6 +35,10 @@ def resolve_qa_artifacts(
         memory_artifacts / "reports/MEMORAX_ASYNC_RECOVERY_REPORT.json")
     normal_report = (
         memory_artifacts / "reports/SIMPLE_APPEND_MEMORAX_LIVE_REPORT.json")
+    memory_event_report = (
+        memory_artifacts / "reports/MEMORY_EVENT_CONTINUATION_LIVE_REPORT.json")
+    child_promotion_report = (
+        memory_artifacts / "reports/CHILD_PROMOTION_RECOVERY_REPORT.json")
 
     if not expanded_path.is_file():
         raise FileNotFoundError(f"expanded_dialogue_missing:{expanded_path}")
@@ -47,6 +51,11 @@ def resolve_qa_artifacts(
         # it read-only for recovery, while all new runs write the split .txt
         # plus manifest contract.
         prompt_artifact_path = legacy_prompt_path
+    elif memory_event_report.is_file() or child_promotion_report.is_file():
+        # Memory-only expansion deliberately does not build a QA prompt during
+        # the expansion/recovery run. The downstream QA runner builds it once
+        # from the frozen complete dialogue and overview.
+        prompt_artifact_path = None
     else:
         raise FileNotFoundError(
             f"mcq_prompt_artifact_missing:{prompt_manifest_path}")
@@ -89,6 +98,52 @@ def resolve_qa_artifacts(
             "qa_prompt_ready": bool(report.get("qa_prompt_ready")),
         }
         report_path = normal_report
+    elif memory_event_report.is_file() and memory_artifacts.resolve() == source_run.resolve():
+        report = _load(memory_event_report)
+        validation_path = source_run / "expanded_dialogue_validation.json"
+        validation = _load(validation_path) if validation_path.is_file() else {}
+        generated_turn_count = int(
+            validation.get("new_turn_count") or
+            validation.get("child_turn_count") or 0)
+        source_kind = "memory_event_continuation"
+        verified = all((
+            report.get("status") == "completed",
+            report.get("generation_ready") is True,
+            validation.get("valid") is True,
+            generated_turn_count > 0,
+        ))
+        readiness = {
+            "generation_ready": bool(report.get("generation_ready")),
+            "memory_write_verified": bool(report.get("memory_write_verified")),
+            "memory_context_degraded": bool(report.get("memory_context_degraded", False)),
+            # QA prompt construction belongs to the QA run for this runner.
+            "qa_prompt_ready": True,
+        }
+        report_path = memory_event_report
+    elif child_promotion_report.is_file():
+        # A completed Child promotion is a valid QA handoff even when the
+        # original expansion run was marked failed before its asynchronous
+        # Memory write completed.  The complete dialogue remains the sole QA
+        # fact source; this report only attests to the durable-write recovery.
+        report = _load(child_promotion_report)
+        source_kind = "child_promotion_recovery"
+        verified = all((
+            report.get("status") == "completed",
+            int(report.get("child_add_calls", 0)) == 1,
+            int(report.get("post_search_calls", 0)) == 1,
+            report.get("memory_write_verified") is True,
+            report.get("memory_visibility_verified") is True,
+            bool(report.get("source_artifacts_unchanged")),
+            int(report.get("promoted_scene_count", 0)) > 0,
+        ))
+        readiness = {
+            "generation_ready": True,
+            "memory_write_verified": True,
+            "memory_context_degraded": False,
+            # QA prompt construction belongs to this downstream QA run.
+            "qa_prompt_ready": True,
+        }
+        report_path = child_promotion_report
     else:
         raise FileNotFoundError(
             "verified_memorax_qa_source_report_missing")

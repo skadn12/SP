@@ -32,7 +32,10 @@ from scripts.current_method.restart_n5_spell.simple_append_memorax_v1.preflight 
 from scripts.current_method.restart_n5_spell.simple_append_memorax_v1.qa_live import (
     DEFAULT_MEMORY_RECOVERY as QA_MEMORY_RECOVERY,
     DEFAULT_SOURCE_RUN as QA_SOURCE_RUN,
+    _quarantine_invalid_writer_questions,
+    materialize_position_first_writer_output,
     _writer_request_summary,
+    _highest_round_index,
     preflight as run_qa_preflight,
 )
 from scripts.current_method.restart_n5_spell.ledger import RequestLedger
@@ -41,6 +44,12 @@ from scripts.current_method.restart_n5_spell.simple_append_memorax_v1.qa_admissi
 )
 from scripts.current_method.restart_n5_spell.simple_append_memorax_v1.qa_sources import (
     resolve_qa_artifacts,
+)
+from scripts.current_method.restart_n5_spell.simple_append_v1.qa import (
+    normalize_answer_dimension,
+    normalize_focus_writer_batch,
+    partition_mcq_candidates,
+    validate_option_contract,
 )
 from scripts.current_method.restart_n5_spell.simple_append_memorax_v1.batch_preflight import (
     INPUT_MANIFEST_VERSION,
@@ -190,6 +199,158 @@ class SimpleAppendMemoraxV1Tests(unittest.TestCase):
         self.assertIn("Do not exceed 12 questions", mcq["prompt"])
         self.assertIn("minimal counterfactual", mcq["prompt"])
         self.assertIn("exactly two current_round_only", mcq["prompt"])
+        self.assertIn("TRANSCRIPT-GROUNDED DISTRACTOR CONTRACT", mcq["prompt"])
+        self.assertIn("same local story arc", mcq["prompt"])
+        self.assertIn("omit the candidate instead of inventing them", mcq["prompt"])
+        self.assertEqual("compact_dialogue_rows_v1",
+                         mcq["dialogue_serialization"])
+        self.assertEqual("memorax_qa_topic_index_v1",
+                         mcq["memory_prompt_view"])
+        self.assertFalse(mcq["memory_overview_full_embedded"])
+        self.assertIn("COMPACT DIALOGUE ROW CONTRACT", mcq["prompt"])
+        self.assertNotIn(json.dumps(
+            self.overview, ensure_ascii=False, separators=(",", ":")),
+            mcq["prompt"])
+        self.assertIn("answer_dimension", mcq["prompt"])
+        self.assertIn("distractor_source_positions", mcq["prompt"])
+        self.assertNotIn('"distractor_sources"', mcq["prompt"])
+
+        compact_rows = [
+            json.loads(line) for line in mcq["prompt"].splitlines()
+            if line.startswith('["D')
+        ]
+        self.assertEqual(len(self.expanded["turns"]), len(compact_rows))
+        compact_by_ref = {row[0]: row[3] for row in compact_rows}
+        self.assertEqual(len(compact_rows), len(compact_by_ref))
+        self.assertEqual({
+            f"D{index:03d}": row["text"]
+            for index, row in enumerate(self.expanded["turns"], 1)
+        }, compact_by_ref)
+
+    def _option_contract_question(self):
+        return {
+            "coverage_role": "current_round_only",
+            "question_type": "causal",
+            "question": "Why did Alice change the plan?",
+            "options": {
+                "A": "The meeting was moved.",
+                "B": "The camera was unavailable.",
+                "C": "Bob requested a review.",
+                "D": "The room was already booked.",
+            },
+            "correct_option": "A",
+            "evidence_turn_refs": ["D001"],
+            "answer_dimension": "cause",
+            "distractor_sources": {
+                "B": ["D002"], "C": ["D003"], "D": ["D004"],
+            },
+        }
+
+    def test_option_contract_requires_three_grounded_distractor_sources(self):
+        row = self._option_contract_question()
+        result = validate_option_contract(
+            row, expanded_dialogue=self.expanded)
+        self.assertTrue(result["valid"], result)
+        value = {
+            "mcq_focus_writer_schema_version": "simple_append_mcq_focus_writer_v4",
+            "questions": [row, {**row, "question": "Why did Alice revise the plan?"}],
+        }
+        envelope = normalize_focus_writer_batch(
+            value, minimum_current_round_only=2,
+            minimum_current_round_joint_history=0, minimum_parent_child=0,
+            minimum_general=0, require_option_contract=True)
+        self.assertTrue(envelope["valid"], envelope)
+        partition = partition_mcq_candidates(
+            envelope["batch"], expanded_dialogue=self.expanded,
+            minimum_count=1, min_child_supported=0, min_joint_parent_child=0)
+        self.assertEqual(2, partition["solver_ready_count"])
+        self.assertTrue(all(row["option_contract"]["valid"]
+                            for row in partition["items"]))
+
+    def test_option_contract_rejects_missing_or_invalid_provenance(self):
+        row = self._option_contract_question()
+        del row["distractor_sources"]["C"]
+        result = validate_option_contract(
+            row, expanded_dialogue=self.expanded)
+        self.assertFalse(result["valid"])
+        self.assertIn("distractor_sources_keys", result["errors"])
+        row = self._option_contract_question()
+        row["distractor_sources"]["B"] = ["D999"]
+        result = validate_option_contract(
+            row, expanded_dialogue=self.expanded)
+        self.assertFalse(result["valid"])
+        self.assertIn("distractor_source_invalid:B", result["errors"])
+
+    def test_answer_dimension_reasoning_aliases_are_deterministic(self):
+        self.assertEqual("state", normalize_answer_dimension("revision"))
+        self.assertEqual("constraint", normalize_answer_dimension("dependency"))
+        self.assertEqual("information", normalize_answer_dimension("visibility"))
+        self.assertEqual("order", normalize_answer_dimension("temporal_sequence"))
+        self.assertEqual("comparison", normalize_answer_dimension("synthesis"))
+        self.assertEqual("future_slot", normalize_answer_dimension("future_slot"))
+
+    def test_memory_option_contract_requires_enriched_writer_fields(self):
+        row = self._option_contract_question()
+        row.pop("answer_dimension")
+        row.pop("distractor_sources")
+        value = {
+            "mcq_focus_writer_schema_version": "simple_append_mcq_focus_writer_v4",
+            "questions": [row] * 2,
+        }
+        envelope = normalize_focus_writer_batch(
+            value, minimum_current_round_only=0,
+            minimum_current_round_joint_history=0, minimum_parent_child=0,
+            minimum_general=0, require_option_contract=True)
+        self.assertFalse(envelope["valid"])
+        self.assertIn("question_01:mcq_focus_writer_schema", envelope["errors"])
+
+    def test_position_first_materialization_binds_gold_and_positions(self):
+        raw = {
+            "mcq_focus_writer_schema_version": "simple_append_mcq_focus_writer_v4",
+            "questions": [{
+                "coverage_role": "current_round_only",
+                "question_type": "causal",
+                "question": "Why did Alice change the plan?",
+                "options": {
+                    "A": "The meeting was moved.",
+                    "B": "The camera was unavailable.",
+                    "C": "Bob requested a review.",
+                    "D": "The room was already booked.",
+                },
+                "gold_text": "The meeting was moved.",
+                "answer_dimension": "cause",
+                "evidence_positions": [1, 2],
+                "distractor_source_positions": [[3], [4], [5]],
+            }],
+        }
+        result = materialize_position_first_writer_output(
+            raw, expanded_dialogue=self.expanded)
+        self.assertEqual([], result["quarantined"])
+        row = result["value"]["questions"][0]
+        self.assertEqual("A", row["correct_option"])
+        self.assertEqual(["D001", "D002"], row["evidence_turn_refs"])
+        self.assertEqual({"B": ["D003"], "C": ["D004"], "D": ["D005"]},
+                         row["distractor_sources"])
+
+    def test_position_first_materialization_rejects_overlong_or_invalid_positions(self):
+        raw = {
+            "mcq_focus_writer_schema_version": "simple_append_mcq_focus_writer_v4",
+            "questions": [{
+                "coverage_role": "current_round_only",
+                "question_type": "causal",
+                "question": "Why?",
+                "options": {"A": "a", "B": "b", "C": "c", "D": "d"},
+                "gold_text": "a",
+                "answer_dimension": "cause",
+                "evidence_positions": list(range(1, 10)),
+                "distractor_source_positions": [[0], [2], [3]],
+            }],
+        }
+        result = materialize_position_first_writer_output(
+            raw, expanded_dialogue=self.expanded)
+        errors = result["quarantined"][0]["errors"]
+        self.assertIn("evidence_positions_count_or_duplicate", errors)
+        self.assertIn("distractor_source_position_out_of_bounds:1", errors)
 
     def test_prompt_rejects_cross_root_memory(self):
         bad = dict(self.overview)
@@ -330,6 +491,17 @@ class SimpleAppendMemoraxV1Tests(unittest.TestCase):
         self.assertEqual(["run_root_absent"], report["failed_checks"])
         self.assertEqual(0, report["api_calls"])
 
+    def test_qa_focus_round_uses_latest_round_in_dialogue(self):
+        expanded = {
+            "turns": [
+                {"scene_ref": "R01:S01"},
+                {"scene_ref": "R02:S03"},
+                {"scene_ref": "R02:S01"},
+            ]
+        }
+        self.assertEqual(2, _highest_round_index(expanded))
+        self.assertEqual(1, max(1, _highest_round_index({"turns": []})))
+
     def test_solver_frontier_without_semantic_audit_is_training_candidate(self):
         result = classify_qa_admission_tier({
             "admitted": True,
@@ -415,6 +587,62 @@ class SimpleAppendMemoraxV1Tests(unittest.TestCase):
                 source_run=root, memory_artifacts=root)
         self.assertEqual("normal_single_root", result["source_kind"])
         self.assertTrue(result["readiness"]["memory_write_verified"])
+
+    def test_qa_source_adapter_accepts_incremental_new_turn_count(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "memory").mkdir()
+            (root / "reports").mkdir()
+            (root / "expanded_dialogue.json").write_text(
+                json.dumps({"root_id": "fixture-root"}), encoding="utf-8")
+            (root / "expanded_dialogue_validation.json").write_text(
+                json.dumps({
+                    "valid": True,
+                    "prior_turn_count": 150,
+                    "new_turn_count": 42,
+                    "turn_count": 192,
+                }), encoding="utf-8")
+            (root / "memory/post_generation_overview.json").write_text(
+                json.dumps({"root_id": "fixture-root"}), encoding="utf-8")
+            (root / "reports/MEMORY_EVENT_CONTINUATION_LIVE_REPORT.json").write_text(
+                json.dumps({
+                    "status": "completed",
+                    "generation_ready": True,
+                    "memory_write_verified": True,
+                }), encoding="utf-8")
+            result = resolve_qa_artifacts(
+                source_run=root, memory_artifacts=root)
+        self.assertEqual("memory_event_continuation", result["source_kind"])
+        self.assertTrue(result["readiness"]["qa_prompt_ready"])
+
+    def test_qa_writer_quarantines_one_malformed_question(self):
+        valid = {
+            "coverage_role": "general",
+            "question_type": "causal",
+            "question": "Why did A call B?",
+            "options": {"A": "One", "B": "Two", "C": "Three", "D": "Four"},
+            "correct_option": "A",
+            "evidence_turn_refs": ["D001"],
+        }
+        malformed = {
+            key: item for key, item in valid.items()
+            if key not in {"correct_option", "evidence_turn_refs"}
+        }
+        malformed["options"] = {
+            **valid["options"],
+            "correct_option": "A",
+            "evidence_turn_refs": ["D001"],
+        }
+        value = {
+            "mcq_focus_writer_schema_version":
+                "simple_append_mcq_focus_writer_v4",
+            "questions": [valid, malformed, {**valid, "question": "Second?"}],
+        }
+        result = _quarantine_invalid_writer_questions(value)
+        self.assertTrue(result["applied"])
+        self.assertEqual(2, result["retained_question_count"])
+        self.assertEqual(1, result["quarantined_question_count"])
+        self.assertEqual(2, result["quarantined"][0]["writer_index"])
 
     def test_qa_source_adapter_accepts_generation_with_pending_memory_write(self):
         with tempfile.TemporaryDirectory() as directory:

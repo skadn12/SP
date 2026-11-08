@@ -26,10 +26,32 @@ if str(ROOT) not in sys.path:
 try:
     from scripts.current_method import api_challenger_generation as adapter
     from scripts.current_method import semantic_graph_v2
+    from scripts.current_method import stage3_claim_ir
+    from scripts.current_method import stage3_claim_proof_compiler
+    from scripts.current_method import stage3_claim_semantic_validator
+    from scripts.current_method import stage3_claim_validator
+    from scripts.current_method import stage3_dialogue_context_guard
+    from scripts.current_method import stage3_parent_continuity
+    from scripts.current_method import stage3_truth_constructors
+    from scripts.current_method import stage3_truth_first_discourse
+    from scripts.current_method import stage3_truth_qa_compiler
+    from scripts.current_method import stage3_truth_support
+    from scripts.current_method import stage3_multiqa_rows
     from scripts.current_method import stage64_quality
 except ModuleNotFoundError:
     from current_method import api_challenger_generation as adapter
     from current_method import semantic_graph_v2
+    from current_method import stage3_claim_ir
+    from current_method import stage3_claim_proof_compiler
+    from current_method import stage3_claim_semantic_validator
+    from current_method import stage3_claim_validator
+    from current_method import stage3_dialogue_context_guard
+    from current_method import stage3_parent_continuity
+    from current_method import stage3_truth_constructors
+    from current_method import stage3_truth_first_discourse
+    from current_method import stage3_truth_qa_compiler
+    from current_method import stage3_truth_support
+    from current_method import stage3_multiqa_rows
     from current_method import stage64_quality
 
 
@@ -53,10 +75,10 @@ STAGE64_EVIDENCE_MIN_DISTINCT_TURN_PERCENT = 75
 STAGE64_EVIDENCE_MAX_REQUIRED_EVENTS_PER_TURN = 2
 FORMAL_DIALOGUE_SEGMENT_TARGET_TOKENS = 1400
 FORMAL_DIALOGUE_SEGMENT_MAX_OUTPUT_TOKENS = 4096
-FORMAL_DIALOGUE_MAX_SEGMENTS = 12
+FORMAL_DIALOGUE_MAX_SEGMENTS = 8
 FORMAL_DIALOGUE_SEGMENT_MIN_TURNS = 12
-FORMAL_DIALOGUE_SEGMENT_MAX_TURNS = 16
-FORMAL_DIALOGUE_SEGMENT_TARGET_TOKENS_PER_TURN = 70
+FORMAL_DIALOGUE_SEGMENT_MAX_TURNS = 40
+FORMAL_DIALOGUE_SEGMENT_TARGET_TOKENS_PER_TURN = 35
 FORMAL_DIALOGUE_MAX_MARKERS_PER_SEGMENT = 2
 FORMAL_DIALOGUE_TOKEN_MARGIN = 384
 FORMAL_DIALOGUE_PREFIX_TAIL_TURNS = 4
@@ -70,6 +92,8 @@ FORMAL_DIALOGUE_LATER_START_PERCENT = 52
 FORMAL_SEGMENT_EXACT_CLAIM_PREFLIGHT_VERSION = (
     "formal_segment_exact_claim_preflight_v1"
 )
+FIXED_STAGE3_GRAPH_ARTIFACT_SCHEMA_VERSION = "stage3_canonical_graph_artifact_v1"
+TRUTH_FIRST_GENERATION_CONTRACT = "stage3_truth_first_generate_by_construction_v1"
 FORMAL_SEGMENT_SIDECAR_QUOTE_NORMALIZER_VERSION = (
     "formal_segment_sidecar_exact_turn_quote_v1"
 )
@@ -106,8 +130,55 @@ FORMAL_LOCAL_SPAN_PROVENANCE_VERSION = "formal_local_claim_span_provenance_v1"
 FORMAL_STATUS_MEANING_VERSION = "formal_stage3_status_meaning_v1"
 GRAPH_PARENT_CONTEXT_SCHEMA_VERSION = "stage64_graph_parent_entity_anchor_v3"
 GRAPH_PARENT_PROMPT_AUDIT_VERSION = "stage64_graph_parent_prompt_audit_v3"
-GRAPH_PARENT_NOVELTY_GATE_VERSION = "stage64_graph_parent_novelty_gate_v1"
+GRAPH_PARENT_NOVELTY_GATE_VERSION = "stage64_graph_parent_novelty_gate_v2"
 GRAPH_PARENT_PROMPT_MIN_SUBSTRING_CHARS = 32
+SEMANTIC_RETRY_PROMPT_ISSUE_SCHEMA_VERSION = (
+    "semantic_retry_prompt_issue_compact_v1"
+)
+TEMPORAL_DEPENDENCY_COMPILER_VERSION = (
+    "stage64_temporal_dependency_compiler_v1"
+)
+V4_PARENT_PROMPT_VIEW_SCHEMA_VERSION = "stage3_parent_v4_selected_fact_view_v2"
+V4_PARENT_RETRIEVAL_LEDGER_SCHEMA_VERSION = (
+    "stage3_parent_v4_operation_retrieval_ledger_v1"
+)
+V4_PARENT_RETRIEVAL_MIN_EVENTS = 15
+V4_PARENT_RETRIEVAL_MAX_EVENTS = 40
+V4_PARENT_RETRIEVAL_TARGET_EVENTS = 24
+V4_PARENT_PROMPT_EVENT_FIELDS = (
+    "event_id",
+    "node_type",
+    "event_type",
+    "entity",
+    "slot",
+    "value",
+    "status",
+    "time_index",
+    "local_time_index",
+    "global_time_index",
+    "session_index",
+    "session_date_time",
+    "evidence_turn_ids",
+    "previous_value",
+    "depends_on",
+    "summarizes_event_ids",
+    "scope",
+    "set_membership",
+    "owner",
+    "resource",
+    "observer",
+    "action",
+    "condition",
+    "access_class",
+)
+V4_PARENT_PROMPT_LEDGER_FIELDS = (
+    "full_parent_event_count",
+    "eligible_parent_event_count",
+    "selected_parent_event_count",
+    "selected_parent_event_ids",
+    "retrieval_operation",
+    "ledger_sha256",
+)
 FORMAL_SEGMENT_OPENING_PREFIX_TOKEN_LENGTHS = (3, 4)
 FORMAL_SEGMENT_OPENING_MIN_PREFIX_TOKENS = min(
     FORMAL_SEGMENT_OPENING_PREFIX_TOKEN_LENGTHS
@@ -330,7 +401,7 @@ STAGE64_REASONING_TARGET_FIELDS = (
 )
 STAGE64_ANSWER_PROJECTION_BY_OPERATION = {
     "temporal_state_update": "current_value",
-    "bridge": "terminal_dependency_value",
+    "bridge": "binder_joined_support_value",
     "comparison": "absolute_difference",
     "visibility": "visible_value_under_scope",
     "count": "included_member_count",
@@ -517,9 +588,12 @@ STAGE64_GRAPH_OBJECTIVE_HINTS = {
         "and all context singletons must omit dependencies."
     ),
     "bridge": (
-        "Create a two-hop dependency whose answer requires combining two distinct graph events. Use a terminal bridge "
-        "event whose dependency path names the complete local support closure; include distractors that preserve one "
-        "hop but change the other."
+        "Create exactly eight events in a fixed two-hop binder layout whose answer requires combining two distinct "
+        "support events. E1.value MUST be one concrete binder atom rather than a sentence and MUST equal "
+        "E2.entity byte-for-byte, and E2.value is the unique answer-bearing value with the requested answer type. "
+        "E3 is a terminal proof connector whose depends_on is exactly [E1,E2]; E3 entity, slot, value, and support "
+        "surface MUST NOT repeat E2.value. E4-E6 must carry three distinct answer-type-compatible hard-negative "
+        "values, with E4 also sharing E3.entity or E3.slot. E7-E8 must be independent context facts."
     ),
     "comparison": (
         "Create exactly eight events in fixed role order. events[0:2] are the only machine-verifiable integer comparison "
@@ -535,7 +609,8 @@ STAGE64_GRAPH_OBJECTIVE_HINTS = {
     ),
     "count": (
         "Create a clearly defined candidate set containing all 6-8 graph events, sharing one exact set_id, concrete "
-        "entity, semantic slot, and non-empty membership condition. Give those events distinct member values and "
+        "entity, semantic slot, and non-empty membership condition. The shared slot MUST describe the candidate universe "
+        "(for example candidate_member), not falsely assert that every event is included. Give those events distinct member values and "
         "explicit boolean included flags so the final answer requires applying the shared condition before counting."
     ),
     "cause_consequence": (
@@ -561,10 +636,14 @@ STAGE3_OPERATION_GRAPH_CONTRACTS = {
         "immediate predecessor event_id; the first primary event and all context singletons omit depends_on."
     ),
     "bridge": (
-        "Return 6-8 events total. E1 and E2 MUST be independent support facts. E3 MUST contain depends_on exactly "
-        "['E1','E2']; this terminal dependency is the complete bridge closure. Do not omit either edge. "
-        "E1 and E2 and every event after E3 MUST omit depends_on. The entire graph MUST contain exactly one sink "
-        "endpoint whose dependency closure contains at least two events; do not create a second bridge chain."
+        "Return exactly 8 events in fixed role order. E1 and E2 MUST be independent support facts. E1.value MUST be "
+        "one concrete named binder atom, not a clause, and MUST equal E2.entity byte-for-byte; E2.value is the unique "
+        "answer-bearing atomic value and MUST match preferred_answer_type. E3 MUST "
+        "contain depends_on exactly [E1,E2] and is only the terminal proof connector. E3 entity, slot, value, and "
+        "materialized support surface MUST NOT repeat or expose E2.value. E1, E2, and every event after E3 MUST omit "
+        "depends_on. E4-E6 MUST carry three pairwise-distinct preferred_answer_type-compatible values that all differ "
+        "from E2.value; E4 MUST also share E3.entity or E3.slot, so the hard negative is structurally related. E7-E8 "
+        "are independent context facts. The graph MUST contain exactly one sink endpoint with this closure."
     ),
     "comparison": (
         "Return exactly 8 events in fixed role order. events[0] and events[1] MUST have different entity strings, the "
@@ -592,7 +671,8 @@ STAGE3_OPERATION_GRAPH_CONTRACTS = {
         "Return exactly 8 candidate-member events in fixed role order. Every event MUST include set_membership with the "
         "same byte-for-byte non-empty set_id, the same byte-for-byte non-empty condition string, the same byte-for-byte "
         "non-empty concrete entity string, and the same "
-        "byte-for-byte non-empty semantic slot string. All eight normalized value fields MUST be pairwise distinct. "
+        "byte-for-byte non-empty semantic slot string that describes candidates rather than asserting inclusion. "
+        "All eight normalized value fields MUST be pairwise distinct. "
         "events[0:4] MUST use included=true and events[4:8] MUST use included=false. Never mix entities, relations, "
         "slots, or duplicate member values inside one set_id. Statuses and any optional fields must remain valid under "
         "semantic_graph_v2."
@@ -600,7 +680,8 @@ STAGE3_OPERATION_GRAPH_CONTRACTS = {
     "cause_consequence": (
         "Return 6-8 events total. E1 MUST be an earlier cause. E2 MUST be a later consequence with integer time_index "
         "greater than E1 and depends_on exactly ['E1']. Every other event MUST omit depends_on, leaving one unique "
-        "directed cause-to-consequence edge."
+        "directed cause-to-consequence edge. At least one independent event after E2 MUST share E2.entity or E2.slot "
+        "with a different value, providing a plausible wrong-effect hard negative."
     ),
     "relation_lookup": (
         "Return exactly 8 events in fixed role order and give every event an integer time_index. E1 is a novel entity "
@@ -769,8 +850,20 @@ APPROVED_EVENT_TYPES = {
     "expire",
     "report",
     "permission_scope",
+    "visibility_permission",
     "conflict",
 }
+VISIBILITY_PERMISSION_EVENT_TYPE = "visibility_permission"
+VISIBILITY_TYPED_FIELDS = (
+    "owner",
+    "resource",
+    "observer",
+    "action",
+    "condition",
+    "access_class",
+    "status",
+)
+VISIBILITY_PRE_DIALOGUE_GATE_VERSION = "typed_visibility_pre_dialogue_gate_v1"
 APPROVED_STATUSES = {
     "active",
     "restored",
@@ -838,6 +931,7 @@ BANNED_SOLVER_VISIBLE_TERMS = (
     "final active state",
     "active current state",
     "current state",
+    "current_state",
     "logged the update",
     "logged the detail",
     "logged timeline",
@@ -873,6 +967,7 @@ META_LEAK_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("graph_slot", re.compile(r"\bgraph\s+slot\b", re.IGNORECASE)),
     ("final_active_state", re.compile(r"\bfinal\s+active\s+state\b", re.IGNORECASE)),
     ("active_current_state", re.compile(r"\bactive\s+current\s+state\b", re.IGNORECASE)),
+    ("current_state_field", re.compile(r"\bcurrent_state\b", re.IGNORECASE)),
     ("current_state", re.compile(r"\bcurrent\s+state\b", re.IGNORECASE)),
     ("logged_the_update", re.compile(r"\blogged\s+the\s+update\b", re.IGNORECASE)),
     ("logged_the_detail", re.compile(r"\blogged\s+the\s+detail\b", re.IGNORECASE)),
@@ -1127,6 +1222,20 @@ def stable_hash(value: Any, *, length: int = 16) -> str:
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:length]
 
 
+def canonical_json_sha256(value: Any) -> str:
+    """Return a stable full-content digest for persisted graph lineage."""
+
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 def turn_sort_key(turn_id: Any) -> tuple[int, int, str]:
     match = re.match(r"^D(\d+):(\d+)$", str(turn_id or ""))
     if match:
@@ -1321,10 +1430,239 @@ def _naturalize_claim_for_status(claim: str, status: str) -> str:
     return sanitize_internal_text(natural)
 
 
+# Semantic graph slots are machine-facing identifiers.  A canonical graph may
+# retain them internally, but its dialogue evidence contract must be ordinary
+# prose; otherwise the challenger copies ``access_scope`` / ``Mark this fact``
+# into sidecars and the solver-facing alignment is neither natural nor stable.
+_DIALOGUE_SLOT_SURFACE_ALIASES = {
+    "access_scope": "access level",
+    "membership_status": "membership status",
+    "office_location": "office location",
+    "appointment_date": "appointment date",
+    "meeting_time": "meeting time",
+    "causal_result": "outcome",
+}
+
+
+def _dialogue_slot_surface(slot: Any) -> str:
+    raw = normalize_space(slot).replace("_", " ").replace("-", " ")
+    key = normalize_text(raw).replace(" ", "_")
+    surface = _DIALOGUE_SLOT_SURFACE_ALIASES.get(key, raw)
+    return sanitize_internal_text(surface) or "detail"
+
+
+_OWNED_RESOURCE_RE = re.compile(
+    r"^\s*(?P<owner>.+?)\s*(?:['\N{RIGHT SINGLE QUOTATION MARK}]s|['\N{RIGHT SINGLE QUOTATION MARK}])\s+(?P<resource>.+?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _split_visibility_owned_resource(entity: Any) -> tuple[str, str]:
+    """Recover an explicitly encoded owner/resource pair without guessing.
+
+    Legacy visibility graphs commonly put a possessive resource in ``entity``
+    (for example, ``Nate's gaming room``).  That surface contains both typed
+    fields and is safe to split.  A bare entity such as ``Archive`` does not
+    identify its owner; callers keep owner empty and the pre-dialogue gate
+    fails closed instead of inventing one.
+    """
+
+    surface = normalize_space(entity)
+    match = _OWNED_RESOURCE_RE.fullmatch(surface)
+    if match is None:
+        return "", surface
+    return normalize_space(match.group("owner")), normalize_space(
+        match.group("resource")
+    )
+
+
+def _visibility_permission_projection(event: dict[str, Any]) -> dict[str, str]:
+    """Project legacy scope fields into the typed visibility representation."""
+
+    scope = event.get("scope") if isinstance(event.get("scope"), dict) else {}
+    parsed_owner, parsed_resource = _split_visibility_owned_resource(
+        event.get("entity")
+    )
+    explicit_owner = normalize_space(event.get("owner") or scope.get("owner"))
+    owner = explicit_owner or parsed_owner
+    explicit_resource = normalize_space(
+        event.get("resource") or scope.get("resource")
+    )
+    resource = explicit_resource or parsed_resource
+    return {
+        "owner": owner,
+        "resource": resource,
+        "observer": normalize_space(
+            event.get("observer") or scope.get("observer")
+        ),
+        "action": normalize_space(
+            event.get("action")
+            or event.get("permission")
+            or scope.get("action")
+            or scope.get("permission")
+        ),
+        "condition": normalize_space(
+            event.get("condition") or scope.get("condition")
+        ),
+        "access_class": normalize_space(
+            event.get("access_class")
+            or scope.get("access_class")
+            or event.get("value")
+        ),
+        "status": normalize_space(event.get("status")),
+    }
+
+
+def _visibility_permission_support_claim(typed: dict[str, Any]) -> str:
+    """Render every typed permission component into one natural claim."""
+
+    owner = sanitize_internal_text(typed.get("owner"))
+    resource = sanitize_internal_text(typed.get("resource"))
+    observer = sanitize_internal_text(typed.get("observer"))
+    action = sanitize_internal_text(typed.get("action"))
+    condition = sanitize_internal_text(typed.get("condition"))
+    access_class = sanitize_internal_text(typed.get("access_class"))
+    status = normalize_text(typed.get("status")).replace(" ", "_")
+    if not all((owner, resource, observer, action, condition, access_class, status)):
+        return ""
+    possessive = f"{owner}'" if owner.casefold().endswith("s") else f"{owner}'s"
+    claim = (
+        f"{observer} may {action} {possessive} {access_class} {resource} "
+        f"under the condition that {condition}."
+    )
+    status_suffix = {
+        "active": "This permission is currently active.",
+        "restored": "This permission is active again after being restored.",
+    }.get(status) or _status_natural_suffix(status)
+    if status_suffix:
+        claim = normalize_space(f"{claim} {status_suffix}")
+    return sanitize_internal_text(claim)
+
+
+def _typed_membership_support_claim(typed: dict[str, Any]) -> str:
+    entity = sanitize_internal_text(typed.get("entity")) or "The group"
+    slot = _dialogue_slot_surface(typed.get("slot"))
+    member = sanitize_internal_text(typed.get("member")) or "the candidate"
+    set_id = sanitize_internal_text(typed.get("set_id")) or "the named set"
+    condition = sanitize_internal_text(typed.get("condition")) or "the stated condition"
+    included = typed.get("included") is True
+    apostrophe = chr(39)
+    possessive = (
+        f"{entity}{apostrophe}"
+        if entity.casefold().endswith("s")
+        else f"{entity}{apostrophe}s"
+    )
+    membership_phrase = "is a member of" if included else "is not a member of"
+    claim = (
+        f"{possessive} {slot} includes the candidate {member}; "
+        f"under the condition {condition}, {member} {membership_phrase} {set_id}."
+    )
+    status_suffix = _status_natural_suffix(
+        normalize_text(typed.get("status")).replace(" ", "_")
+    )
+    if status_suffix:
+        claim = normalize_space(f"{claim} {status_suffix}")
+    return sanitize_internal_text(claim)
+
+
+def _typed_cause_support_claim(typed: dict[str, Any]) -> str:
+    cause_entity = sanitize_internal_text(typed.get("cause_entity")) or "The cause"
+    cause_slot = _dialogue_slot_surface(typed.get("cause_slot"))
+    cause_value = sanitize_internal_text(typed.get("cause_value")) or "the stated trigger"
+    effect_entity = sanitize_internal_text(typed.get("effect_entity")) or "The effect"
+    effect_slot = _dialogue_slot_surface(typed.get("effect_slot"))
+    effect_value = sanitize_internal_text(typed.get("effect_value")) or "the stated outcome"
+    apostrophe = chr(39)
+    cause_possessive = (
+        f"{cause_entity}{apostrophe}"
+        if cause_entity.casefold().endswith("s")
+        else f"{cause_entity}{apostrophe}s"
+    )
+    effect_possessive = (
+        f"{effect_entity}{apostrophe}"
+        if effect_entity.casefold().endswith("s")
+        else f"{effect_entity}{apostrophe}s"
+    )
+    claim = (
+        f"{cause_possessive} {cause_slot} is {cause_value}, and this causes "
+        f"{effect_possessive} {effect_slot} to be {effect_value}."
+    )
+    condition = sanitize_internal_text(typed.get("condition"))
+    if condition:
+        claim = normalize_space(f"{claim} This applies under the condition {condition}.")
+    status_suffix = _status_natural_suffix(
+        normalize_text(typed.get("status")).replace(" ", "_")
+    )
+    if status_suffix:
+        claim = normalize_space(f"{claim} {status_suffix}")
+    return sanitize_internal_text(claim)
+
+
+def semantic_event_dialogue_support_claim(
+    entity: Any,
+    slot: Any,
+    value: Any,
+    status: Any,
+    *,
+    typed_visibility: dict[str, Any] | None = None,
+    typed_membership: dict[str, Any] | None = None,
+    typed_cause: dict[str, Any] | None = None,
+) -> str:
+    """Render a semantic fact as a natural, validator-compatible dialogue claim.
+
+    The result deliberately names the entity, ordinary-language slot, value,
+    and any non-active status.  It is deterministic and uses no API call, so a
+    fixed graph remains fixed while its dialogue-facing evidence surface stops
+    leaking schema syntax.
+    """
+    if isinstance(typed_visibility, dict):
+        visibility_claim = _visibility_permission_support_claim(typed_visibility)
+        if visibility_claim:
+            return visibility_claim
+    if isinstance(typed_membership, dict):
+        membership_claim = _typed_membership_support_claim(typed_membership)
+        if membership_claim:
+            return membership_claim
+    if isinstance(typed_cause, dict):
+        cause_claim = _typed_cause_support_claim(typed_cause)
+        if cause_claim:
+            return cause_claim
+
+    entity_surface = sanitize_internal_text(entity) or "The person"
+    slot_surface = _dialogue_slot_surface(slot)
+    value_surface = sanitize_internal_text(value) or "the stated detail"
+    status_key = normalize_text(status).replace(" ", "_") or "active"
+    possessive = (
+        f"{entity_surface}'" if entity_surface.casefold().endswith("s") else f"{entity_surface}'s"
+    )
+    subject = f"{possessive} {slot_surface}"
+    templates = {
+        "belief": f"{subject} may be {value_surface}, but the team is unsure whether that is true.",
+        "report": f"Someone reported that {subject} is {value_surface}, but nobody has confirmed it.",
+        "outdated": f"{subject} was once {value_surface}, but that information is outdated and no longer applies.",
+        "canceled": f"A proposal listed {subject} as {value_surface}, but it was canceled before taking effect.",
+        "expired": f"{subject} was listed as {value_surface}, but that information has expired.",
+        "delayed_not_active": f"{subject} is set to {value_surface}, but it is delayed and not active yet.",
+        "false": f"People said {subject} was {value_surface}, but that was incorrect.",
+        "scope_limited": f"Only authorized people may know that {subject} is {value_surface}.",
+        "restored": f"{subject} is {value_surface} again after being restored.",
+    }
+    return sanitize_internal_text(templates.get(status_key, f"{subject} is {value_surface}."))
+
+
 def _solver_visible_text_items(row_or_turns: Any) -> list[tuple[str, str]]:
     if isinstance(row_or_turns, dict):
         items: list[tuple[str, str]] = []
-        dialogue = row_or_turns.get("dialogue") if isinstance(row_or_turns.get("dialogue"), dict) else {}
+        if isinstance(row_or_turns.get("dialogue"), dict):
+            dialogue = row_or_turns["dialogue"]
+        elif isinstance(row_or_turns.get("turns"), list):
+            # Pre-QA dialogue validation passes the canonical dialogue object
+            # directly as {"turns": [...]}; clean rows wrap the same object in
+            # {"dialogue": ...}.  Scan both shapes under identical field names
+            # so the early gate cannot silently inspect zero turns.
+            dialogue = row_or_turns
+        else:
+            dialogue = {}
         for index, turn in enumerate(dialogue.get("turns") if isinstance(dialogue.get("turns"), list) else []):
             if isinstance(turn, dict):
                 items.append((f"dialogue.turns[{index}].text", str(turn.get("text") or "")))
@@ -1358,13 +1696,87 @@ def _solver_visible_text_items(row_or_turns: Any) -> list[tuple[str, str]]:
     ]
 
 
+_CURRENT_STATE_DIALOGUE_DETERMINERS = frozenset(
+    {"a", "an", "the", "this", "that", "their", "his", "her", "its", "our"}
+)
+_CURRENT_STATE_INTERNAL_TARGET_TOKENS = frozenset(
+    {
+        "anchor",
+        "dependency",
+        "edge",
+        "event",
+        "event_instance_id",
+        "gate",
+        "graph",
+        "graph_update",
+        "ledger",
+        "marker",
+        "node",
+        "alignment_anchor",
+        "required_for_dialogue",
+        "schema",
+        "slot",
+        "state",
+        "status",
+        "timeline",
+        "update",
+        "version",
+    }
+)
+
+
+def _benign_dialogue_current_state_of(
+    field: str,
+    text: str,
+    match: re.Match[str],
+) -> bool:
+    """Allow ordinary domain prose without weakening QA/internal-artifact gates."""
+
+    if not (
+        field.startswith("dialogue.turns[")
+        or field == "expanded_dialogue_text"
+    ):
+        return False
+    suffix = text[match.end() :]
+    target_match = re.match(r"\s+of\s+([^,.;:!?]+)", suffix, flags=re.IGNORECASE)
+    if target_match is None:
+        return False
+    target_tokens = re.findall(r"[A-Za-z0-9_'-]+", target_match.group(1))
+    while (
+        target_tokens
+        and target_tokens[0].casefold() in _CURRENT_STATE_DIALOGUE_DETERMINERS
+    ):
+        target_tokens.pop(0)
+    if not target_tokens:
+        return False
+    first_target = re.sub(r"(?:'s|’s)$", "", target_tokens[0].casefold())
+    if "_" in first_target:
+        return False
+    if first_target in _CURRENT_STATE_INTERNAL_TARGET_TOKENS:
+        return False
+    if re.fullmatch(
+        r"(?:e\d+|(?:event|anchor|marker|slot|node|edge)-?\d+|r[23](?:-\d+)?|conv-\d+|stage\d+)",
+        first_target,
+        flags=re.IGNORECASE,
+    ):
+        return False
+    return True
+
+
 def meta_leak_details_from_solver_visible_text(row_or_turns: Any) -> dict[str, Any]:
     details: list[dict[str, Any]] = []
     counts: Counter[str] = Counter()
     field_counts: Counter[str] = Counter()
     for field, text in _solver_visible_text_items(row_or_turns):
         for name, pattern in META_LEAK_PATTERNS:
-            matches = [match.group(0) for match in pattern.finditer(text)]
+            matches = [
+                match.group(0)
+                for match in pattern.finditer(text)
+                if not (
+                    name == "current_state"
+                    and _benign_dialogue_current_state_of(field, text, match)
+                )
+            ]
             if not matches:
                 continue
             counts[name] += len(matches)
@@ -1514,6 +1926,11 @@ def _merge_local_summary(global_summary: dict[str, Any], local: dict[str, Any]) 
                 target = {}
                 global_summary[key] = target
             _merge_counter_dict(target, value)
+        elif isinstance(value, bool):
+            # bool is a subclass of int in Python.  Treat worker-owned flags as
+            # logical facts, otherwise three attempts turn True into the bogus
+            # summary value 3 (as observed in the n=1 smoke audit).
+            global_summary[key] = bool(global_summary.get(key)) or value
         elif isinstance(value, (int, float)):
             base_val = global_summary.get(key)
             global_summary[key] = (base_val if isinstance(base_val, (int, float)) else 0) + value
@@ -1559,6 +1976,13 @@ def _api_meta_has_parse_failure(meta: dict[str, Any]) -> bool:
 def _record_api_meta_retry_diagnostics(summary: dict[str, Any], meta: dict[str, Any]) -> None:
     if not isinstance(meta, dict):
         return
+    usage = meta.get("usage") if isinstance(meta.get("usage"), dict) else {}
+    for source_key, summary_key in (
+        ("prompt_tokens", "api_usage_prompt_tokens"),
+        ("completion_tokens", "api_usage_completion_tokens"),
+        ("total_tokens", "api_usage_total_tokens"),
+    ):
+        _bump_summary_counter(summary, summary_key, int(usage.get(source_key) or 0))
     normalizer = meta.get("normalizer_diagnostics") if isinstance(meta.get("normalizer_diagnostics"), dict) else {}
     if meta.get("call_kind") == "api_graph_expansion":
         if normalizer.get("graph_json_normalizer_used"):
@@ -1616,6 +2040,7 @@ def _record_api_meta_retry_diagnostics(summary: dict[str, Any], meta: dict[str, 
                 >= FORMAL_DIALOGUE_LATE_RETRY_START_SEGMENT_INDEX
                 and int(record.get("segment_attempt") or 0)
                 > FORMAL_DIALOGUE_MIN_SEGMENT_VALIDATION_ATTEMPTS
+                and record.get("compiled_payload") is not None
             ):
                 _bump_summary_counter(
                     summary,
@@ -1742,14 +2167,16 @@ def _failure_reason_from_exception(exc: Exception, raw_record: dict[str, Any] | 
         return "dialogue_alignment"
     if "length guard" in message or "too short" in message:
         return "length"
-    if "meta" in message or "internal/project terms" in message:
-        return "meta_leak"
+    if "typed_content_binding_exhausted" in message:
+        return "truth_content_binding"
     if "valid json" in message or "invalid_json" in message or "missing_required_keys" in message:
         return "parse_failure"
     if "timeout" in message or "timed out" in message:
         return "timeout"
     if "api graph expansion failed" in message:
         return "api_graph"
+    if "meta leakage" in message or "internal/project terms" in message:
+        return "meta_leak"
     if "stage64 graph semantic quality failed" in message or "semantic_graph_v2 quality failed" in message:
         return "stage64_graph_quality"
     if "anti_shortcut" in message:
@@ -1766,6 +2193,286 @@ def _is_stage64_qa_repairable_error(exc: Exception) -> bool:
     if STAGE64_NON_REPAIRABLE_GRAPH_QUALITY_RE.search(message):
         return False
     return bool(STAGE64_QA_REPAIRABLE_RE.search(message))
+
+
+def _visibility_gate_text_key(value: Any) -> str:
+    return re.sub(
+        r"[\W_]+",
+        " ",
+        normalize_space(value).casefold(),
+        flags=re.UNICODE,
+    ).strip()
+
+
+def _visibility_typed_signature(event: dict[str, Any]) -> tuple[str, ...]:
+    return tuple(
+        _visibility_gate_text_key(event.get(field))
+        for field in VISIBILITY_TYPED_FIELDS
+    )
+
+
+def normalized_visibility_pre_dialogue_gate(
+    plan: dict[str, Any],
+) -> dict[str, Any]:
+    """Fail closed when typed visibility facts or their claims collapse.
+
+    Only permission events participate.  The first resource event in the
+    Stage64 visibility layout intentionally has no scope, while every scoped
+    required event must expose one complete, flat typed representation.  A
+    dialogue request is safe only when the required cardinality equals both
+    the unique typed-signature cardinality and unique support-claim
+    cardinality.
+    """
+
+    operation = normalize_space(plan.get("operation"))
+    events = [
+        event
+        for event in (plan.get("events") or [])
+        if isinstance(event, dict)
+    ]
+    permission_event_rows = [
+        (index, event)
+        for index, event in enumerate(events)
+        if event.get("required_for_dialogue") is not False
+        and (
+            normalize_space(event.get("event_type"))
+            == VISIBILITY_PERMISSION_EVENT_TYPE
+            or isinstance(event.get("scope"), dict)
+        )
+    ]
+    permission_events = [event for _index, event in permission_event_rows]
+    applicable = operation == "visibility"
+    diagnostics: dict[str, Any] = {
+        "schema_version": VISIBILITY_PRE_DIALOGUE_GATE_VERSION,
+        "applicable": applicable,
+        "pass": True,
+        "required_count": len(permission_events),
+        "unique_typed_signature_count": 0,
+        "unique_support_claim_count": 0,
+        "issues": [],
+    }
+    if not applicable:
+        return diagnostics
+
+    issues: list[dict[str, Any]] = []
+    if operation == "visibility" and not permission_events:
+        issues.append(
+            {
+                "code": "visibility_required_permission_events_missing",
+                "path": "$.events",
+                "message": (
+                    "A visibility plan must contain at least one required typed "
+                    "visibility_permission event before dialogue generation."
+                ),
+            }
+        )
+
+    signature_to_ids: dict[tuple[str, ...], list[str]] = {}
+    claim_to_ids: dict[str, list[str]] = {}
+    canonical_slot_to_access_classes: dict[
+        tuple[str, ...], dict[str, list[str]]
+    ] = {}
+    for index, event in permission_event_rows:
+        event_id = normalize_space(
+            event.get("event_instance_id") or event.get("event_id")
+        ) or f"events[{index}]"
+        path = f"$.events[{index}]"
+        if normalize_space(event.get("event_type")) != VISIBILITY_PERMISSION_EVENT_TYPE:
+            issues.append(
+                {
+                    "code": "visibility_permission_event_type_missing",
+                    "path": f"{path}.event_type",
+                    "message": (
+                        "Every required scoped visibility fact must use "
+                        "event_type='visibility_permission'."
+                    ),
+                    "details": {"event_id": event_id},
+                }
+            )
+
+        missing_fields = [
+            field
+            for field in VISIBILITY_TYPED_FIELDS
+            if not _visibility_gate_text_key(event.get(field))
+        ]
+        if missing_fields:
+            issues.append(
+                {
+                    "code": "visibility_typed_fields_missing",
+                    "path": path,
+                    "message": (
+                        "A required visibility permission must preserve every "
+                        "typed owner/resource/observer/action/condition/"
+                        "access_class/status field."
+                    ),
+                    "details": {
+                        "event_id": event_id,
+                        "missing_fields": missing_fields,
+                    },
+                }
+            )
+
+        scope = event.get("scope") if isinstance(event.get("scope"), dict) else {}
+        legacy_expectations = {
+            "observer": scope.get("observer"),
+            "action": scope.get("action") or scope.get("permission"),
+            "condition": scope.get("condition"),
+            "access_class": event.get("value"),
+            "status": event.get("status"),
+        }
+        mismatched_fields = [
+            field
+            for field, expected in legacy_expectations.items()
+            if _visibility_gate_text_key(expected)
+            != _visibility_gate_text_key(event.get(field))
+        ]
+        parsed_owner, parsed_resource = _split_visibility_owned_resource(
+            event.get("entity")
+        )
+        if parsed_owner and (
+            _visibility_gate_text_key(parsed_owner)
+            != _visibility_gate_text_key(event.get("owner"))
+        ):
+            mismatched_fields.append("owner")
+        if parsed_resource and parsed_owner and (
+            _visibility_gate_text_key(parsed_resource)
+            != _visibility_gate_text_key(event.get("resource"))
+        ):
+            mismatched_fields.append("resource")
+        mismatched_fields = list(dict.fromkeys(mismatched_fields))
+        if mismatched_fields:
+            issues.append(
+                {
+                    "code": "visibility_typed_fields_disagree_with_graph",
+                    "path": path,
+                    "message": (
+                        "Typed visibility fields must preserve, not overwrite, "
+                        "the graph entity/value/status and scope semantics."
+                    ),
+                    "details": {
+                        "event_id": event_id,
+                        "mismatched_fields": mismatched_fields,
+                    },
+                }
+            )
+
+        signature = _visibility_typed_signature(event)
+        signature_to_ids.setdefault(signature, []).append(event_id)
+        canonical_slot = tuple(
+            _visibility_gate_text_key(event.get(field))
+            for field in VISIBILITY_TYPED_FIELDS
+            if field != "access_class"
+        )
+        access_class_key = _visibility_gate_text_key(event.get("access_class"))
+        canonical_slot_to_access_classes.setdefault(canonical_slot, {}).setdefault(
+            access_class_key, []
+        ).append(event_id)
+        claim = normalize_space(
+            event.get("dialogue_support_claim")
+            or (
+                event.get("alignment_hints", {}).get("support_claim")
+                if isinstance(event.get("alignment_hints"), dict)
+                else ""
+            )
+        )
+        claim_key = _visibility_gate_text_key(claim)
+        claim_to_ids.setdefault(claim_key, []).append(event_id)
+        missing_claim_fields = [
+            field
+            for field in VISIBILITY_TYPED_FIELDS
+            if field != "status"
+            and _visibility_gate_text_key(event.get(field))
+            and _visibility_gate_text_key(event.get(field)) not in claim_key
+        ]
+        if not claim_key or missing_claim_fields:
+            issues.append(
+                {
+                    "code": "visibility_support_claim_missing_typed_semantics",
+                    "path": f"{path}.dialogue_support_claim",
+                    "message": (
+                        "The dialogue support claim must verbalize the typed "
+                        "visibility permission without dropping a scope field."
+                    ),
+                    "details": {
+                        "event_id": event_id,
+                        "missing_fields": missing_claim_fields,
+                    },
+                }
+            )
+
+    unique_signature_count = len(signature_to_ids)
+    unique_claim_count = len(claim_to_ids)
+    diagnostics["unique_typed_signature_count"] = unique_signature_count
+    diagnostics["unique_support_claim_count"] = unique_claim_count
+    required_count = len(permission_events)
+    access_class_collisions = [
+        {
+            "event_ids": [
+                event_id
+                for event_ids in access_classes.values()
+                for event_id in event_ids
+            ],
+            "access_classes": sorted(access_classes),
+        }
+        for access_classes in canonical_slot_to_access_classes.values()
+        if len(access_classes) > 1
+    ]
+    if access_class_collisions:
+        issues.append(
+            {
+                "code": "visibility_canonical_slot_access_class_collision",
+                "path": "$.events",
+                "message": (
+                    "One canonical owner/resource/observer/action/condition/status "
+                    "slot cannot carry mutually exclusive access_class values."
+                ),
+                "details": {"collisions": access_class_collisions},
+            }
+        )
+    if not (
+        required_count == unique_signature_count == unique_claim_count
+    ):
+        issues.append(
+            {
+                "code": "normalized_visibility_cardinality_collapse",
+                "path": "$.events",
+                "message": (
+                    "Before a dialogue API call, required visibility count must "
+                    "equal both unique typed-signature count and unique support-"
+                    "claim count."
+                ),
+                "details": {
+                    "required_count": required_count,
+                    "unique_typed_signature_count": unique_signature_count,
+                    "unique_support_claim_count": unique_claim_count,
+                    "typed_signature_collisions": [
+                        event_ids
+                        for event_ids in signature_to_ids.values()
+                        if len(event_ids) > 1
+                    ],
+                    "support_claim_collisions": [
+                        event_ids
+                        for event_ids in claim_to_ids.values()
+                        if len(event_ids) > 1
+                    ],
+                },
+            }
+        )
+    diagnostics["issues"] = issues
+    diagnostics["pass"] = not issues
+    return diagnostics
+
+
+def require_normalized_visibility_pre_dialogue_gate(
+    plan: dict[str, Any],
+) -> dict[str, Any]:
+    diagnostics = normalized_visibility_pre_dialogue_gate(plan)
+    if diagnostics["pass"] is not True:
+        raise NativeGraphDialogueReject(
+            "normalized visibility collision gate failed before dialogue API: "
+            f"{diagnostics['issues'][:6]}"
+        )
+    return diagnostics
 
 
 def semantic_graph_plan_quality_issues(
@@ -1788,6 +2495,14 @@ def semantic_graph_plan_quality_issues(
         )
     )
     issues.extend(_stage64_reasoning_graph_target_issues(plan, stage64_target))
+    visibility_gate = normalized_visibility_pre_dialogue_gate(plan)
+    for issue in visibility_gate["issues"]:
+        issues.append(
+            {
+                "reason": str(issue.get("code") or "visibility_pre_dialogue"),
+                **issue,
+            }
+        )
     deduplicated: dict[tuple[str, str], dict[str, Any]] = {}
     for issue in issues:
         key = (str(issue.get("reason") or "unknown"), str(issue.get("path") or ""))
@@ -1817,6 +2532,179 @@ def _temporal_generation_values_equal(left: Any, right: Any) -> bool:
     if isinstance(left, str) and isinstance(right, str):
         return _temporal_generation_text_key(left) == _temporal_generation_text_key(right)
     return type(left) is type(right) and left == right
+
+
+_STAGE64_DATE_TIME_SLOT_RE = re.compile(
+    r"(?:^|[_\-\s])(date|time|deadline|schedule|appointment|calendar|hour|minute)(?:$|[_\-\s])",
+    re.IGNORECASE,
+)
+_STAGE64_LOCATION_SCOPE_SLOT_RE = re.compile(
+    r"(?:^|[_\-\s])(location|destination|address|scope|office|room|venue|site|region|zone|campus|route)(?:$|[_\-\s])",
+    re.IGNORECASE,
+)
+_STAGE64_DATE_TIME_VALUE_RE = re.compile(
+    r"(?:\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b|\b\d{1,2}:\d{2}\b|\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\b)",
+    re.IGNORECASE,
+)
+
+
+def _stage64_temporal_answer_type_requirement(preferred_answer_type: str) -> str:
+    """Return a graph-level, machine-audited temporal value-type contract."""
+
+    guidance = {
+        "LocationOrScope": (
+            "use a location/scope slot such as destination, office_location, or access_scope "
+            "and concrete place/scope values; do not use dates, deadlines, or times"
+        ),
+        "DateOrTime": (
+            "use a date/time slot such as appointment_date, deadline, or meeting_time "
+            "and four concrete date/time values"
+        ),
+        "Event": "use an event/meeting/activity slot and four concrete event values",
+        "ObjectOrCommonNoun": "use an object/document/item slot and four concrete object values",
+        "AttributeValue": "use one semantic attribute slot and four concrete non-question attribute values",
+    }
+    return guidance.get(
+        preferred_answer_type,
+        "use one semantic slot and four concrete values compatible with the frozen preferred answer type",
+    )
+
+
+_STAGE64_PERSON_NAME_TOKEN_RE = re.compile(
+    r"[^\W\d_]+(?:[-'][^\W\d_]+)*\.?",
+    re.UNICODE,
+)
+_STAGE64_PERSON_NAME_PARTICLES = frozenset(
+    {"al", "bin", "da", "de", "del", "der", "di", "du", "la", "le", "van", "von"}
+)
+_STAGE64_PERSON_SLOT_REQUIRED_TOKENS = frozenset(
+    {
+        "advisor", "adviser", "artist", "assignee", "author", "captain",
+        "child", "coach", "colleague", "companion", "contact", "coordinator",
+        "curator", "delegate", "director", "discoverer", "employee", "founder",
+        "friend", "guest", "host", "leader", "manager", "member", "mentor",
+        "name", "observer", "organizer", "owner", "parent", "participant",
+        "partner", "person", "recipient", "relative", "resident", "sibling",
+        "speaker", "spouse", "teacher", "winner",
+    }
+)
+_STAGE64_PERSON_SLOT_FORBIDDEN_TOKENS = frozenset(
+    {
+        "address", "age", "amount", "appointment", "approval", "condition",
+        "confirmation", "count", "date", "day", "deadline", "destination",
+        "duration", "hour", "level", "location", "minute", "month", "number",
+        "permission", "quantity", "result", "room", "route", "schedule", "scope",
+        "score", "site", "state", "status", "time", "venue", "verification",
+        "week", "year",
+    }
+)
+
+
+def _stage64_person_answer_atom(value: Any) -> bool:
+    """Return whether a Person answer is a short proper-name atom, not a clause."""
+
+    if not isinstance(value, str):
+        return False
+    text = normalize_space(value)
+    tokens = text.split()
+    if not 1 <= len(tokens) <= 5:
+        return False
+    for token in tokens:
+        if _STAGE64_PERSON_NAME_TOKEN_RE.fullmatch(token) is None:
+            return False
+        name_parts = re.split(r"[-']", token.rstrip("."))
+        if any(
+            not part
+            or (
+                not part[0].isupper()
+                and part.casefold() not in _STAGE64_PERSON_NAME_PARTICLES
+            )
+            for part in name_parts
+        ):
+            return False
+    return True
+
+
+def _stage64_person_answer_slot(slot: Any) -> bool:
+    """Return whether a slot denotes a person-valued semantic role."""
+
+    normalized = re.sub(r"[\W]+", "_", normalize_space(slot).casefold()).strip("_")
+    if not normalized:
+        return False
+    tokens = [token for token in normalized.split("_") if token]
+    token_variants = set(tokens)
+    token_variants.update(
+        token[:-1] for token in tokens if len(token) > 3 and token.endswith("s")
+    )
+    if token_variants.intersection(_STAGE64_PERSON_SLOT_FORBIDDEN_TOKENS):
+        return False
+    return bool(
+        token_variants.intersection(_STAGE64_PERSON_SLOT_REQUIRED_TOKENS)
+        or normalized.endswith("_by")
+    )
+
+
+def _stage64_answer_slot_requirement(preferred_answer_type: str) -> str:
+    if preferred_answer_type == "Person":
+        return (
+            "use a person-valued semantic relation slot such as discoverer, assigned_partner, mentor, host, owner, "
+            "member, participant, contact, or *_by; never use a date/time, location, count, status, state, "
+            "confirmation, permission, or condition slot"
+        )
+    return "use a semantic relation slot whose predicate is compatible with the frozen preferred answer type"
+
+
+def _temporal_generation_preferred_answer_type_issue(
+    primary_events: list[dict[str, Any]],
+    stage64_target: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Reject high-confidence temporal date/location type conflicts pre-dialogue."""
+
+    preferred_answer_type = normalize_space(
+        (stage64_target or {}).get("preferred_answer_type")
+        if isinstance(stage64_target, dict)
+        else ""
+    )
+    if preferred_answer_type not in {"LocationOrScope", "DateOrTime"}:
+        return None
+    if not primary_events:
+        return None
+    slot = normalize_space(primary_events[0].get("slot"))
+    values = [normalize_space(event.get("value")) for event in primary_events]
+    is_date_slot = bool(_STAGE64_DATE_TIME_SLOT_RE.search(slot))
+    is_location_slot = bool(_STAGE64_LOCATION_SCOPE_SLOT_RE.search(slot))
+    date_value_count = sum(
+        bool(_STAGE64_DATE_TIME_VALUE_RE.search(value)) for value in values
+    )
+    mismatch = (
+        preferred_answer_type == "LocationOrScope"
+        and (is_date_slot or date_value_count == len(values))
+    ) or (
+        preferred_answer_type == "DateOrTime"
+        and is_location_slot
+        and date_value_count == 0
+    )
+    if not mismatch:
+        return None
+    return {
+        "code": "temporal_generation_layout_primary_answer_type_mismatch",
+        "path": "$.events[0:4]",
+        "message": (
+            "The temporal primary chain is incompatible with the frozen "
+            "preferred_answer_type and must be rebuilt before dialogue generation."
+        ),
+        "details": {
+            "preferred_answer_type": preferred_answer_type,
+            "slot": slot,
+            "date_slot": is_date_slot,
+            "location_scope_slot": is_location_slot,
+            "date_like_value_count": date_value_count,
+            "primary_event_ids": [
+                _temporal_event_ref(event, index)
+                for index, event in enumerate(primary_events)
+            ],
+        },
+    }
 
 
 def _temporal_event_ref(event: Any, index: int) -> str:
@@ -1869,6 +2757,20 @@ def temporal_raw_generation_layout_issues(
         _temporal_event_ref(event, index)
         for index, event in enumerate(context, start=4)
     ]
+    required_event_ids = [f"E{index}" for index in range(1, 9)]
+    actual_event_ids = primary_ids + context_ids
+    if actual_event_ids != required_event_ids:
+        issues.append(
+            {
+                "code": "temporal_generation_layout_event_id_order",
+                "path": "$.events",
+                "message": "Native temporal generation requires event IDs E1 through E8 in exact array order.",
+                "details": {
+                    "expected": required_event_ids,
+                    "actual": actual_event_ids,
+                },
+            }
+        )
 
     if len(set(primary_ids)) != 4:
         issues.append(
@@ -1900,6 +2802,13 @@ def temporal_raw_generation_layout_issues(
                 },
             }
         )
+
+    answer_type_issue = _temporal_generation_preferred_answer_type_issue(
+        primary,
+        stage64_target,
+    )
+    if answer_type_issue is not None:
+        issues.append(answer_type_issue)
 
     value_to_ids: dict[str, list[str]] = {}
     for event_id, event in zip(primary_ids, primary):
@@ -2060,6 +2969,37 @@ def temporal_raw_generation_layout_issues(
                 "path": "$.events[1:4]",
                 "message": "Each primary update after the first must point to the immediately preceding value.",
                 "details": {"broken_links": broken_links},
+            }
+        )
+
+    required_dependency_map = {
+        "E1": [],
+        "E2": ["E1"],
+        "E3": ["E2"],
+        "E4": ["E3"],
+        "E5": [],
+        "E6": [],
+        "E7": [],
+        "E8": [],
+    }
+    actual_dependency_map = {
+        event_id: (
+            [normalize_space(item) for item in event.get("depends_on") or []]
+            if isinstance(event.get("depends_on"), list)
+            else []
+        )
+        for event_id, event in zip(actual_event_ids, events[:8])
+    }
+    if actual_dependency_map != required_dependency_map:
+        issues.append(
+            {
+                "code": "temporal_generation_layout_dependency_map",
+                "path": "$.events",
+                "message": "The temporal chain and context roles must match the exact dependency map.",
+                "details": {
+                    "required_dependency_map": required_dependency_map,
+                    "actual_dependency_map": actual_dependency_map,
+                },
             }
         )
 
@@ -3364,12 +4304,806 @@ def choose_difficulty_subtype(question_type: str, policy: dict[str, Any] | None,
     return "ordinary"
 
 
-def _semantic_parent_events_for_prompt(seed_row: dict[str, Any], *, limit: int = 12) -> list[dict[str, Any]]:
-    semantic_parent = (
-        seed_row.get("semantic_parent_graph")
-        if isinstance(seed_row.get("semantic_parent_graph"), dict)
+_V4_PARENT_GRAPH_SCHEMAS = frozenset(
+    {
+        "semantic_memory_graph_v4_backfilled",
+        "stage3_lineage_graph_v2",
+    }
+)
+_V4_PARENT_ROW_SCHEMAS = frozenset({"stage3_parent_v4_memory_backfilled"})
+_V4_PARENT_QA_LEAK_RE = re.compile(
+    r"raw[_\s-]*qa|adversarial[_\s-]*answer|(?:^|\s)[QA]\s*:\s|\banswer\b",
+    re.IGNORECASE,
+)
+_V4_PARENT_OPERATION_KEYWORDS = {
+    "temporal_state_update": frozenset(
+        {
+            "before", "after", "current", "currently", "former", "historical",
+            "latest", "new", "old", "outdated", "planned", "previous", "recent",
+            "started", "stopped", "used", "will",
+        }
+    ),
+    "bridge": frozenset(
+        {
+            "because", "connected", "friend", "helped", "inspired", "introduced",
+            "mentor", "motivated", "relationship", "support", "together", "volunteer",
+        }
+    ),
+    "comparison": frozenset(
+        {
+            "amount", "count", "distance", "frequency", "height", "hours", "length",
+            "many", "miles", "number", "percent", "price", "score", "times", "years",
+        }
+    ),
+    "visibility": frozenset(
+        {
+            "access", "allowed", "confidential", "knows", "permission", "private",
+            "public", "secret", "share", "shared", "visible",
+        }
+    ),
+    "count": frozenset(
+        {
+            "amount", "count", "each", "every", "few", "many", "members", "number",
+            "several", "times", "total",
+        }
+    ),
+    "cause_consequence": frozenset(
+        {
+            "because", "caused", "consequence", "due", "helped", "impact", "inspired",
+            "led", "motivated", "reason", "result", "so", "therefore",
+        }
+    ),
+    "relation_lookup": frozenset(
+        {
+            "aunt", "brother", "child", "colleague", "daughter", "family", "father",
+            "friend", "husband", "mentor", "mother", "partner", "relationship", "sister",
+            "son", "wife",
+        }
+    ),
+}
+_V4_PARENT_OPERATION_SLOT_KEYWORDS = {
+    "temporal_state_update": frozenset(
+        {"destination", "location", "travel", "trip", "visited", "went"}
+    ),
+    "bridge": frozenset(
+        {"friend", "partner", "person", "relationship", "selected"}
+    ),
+    "comparison": frozenset(
+        {"community", "frequency", "hours", "service", "volunteer"}
+    ),
+    "visibility": frozenset(
+        {
+            "access", "certificate", "gear", "item", "observer", "permission",
+            "possession", "resource",
+        }
+    ),
+    "count": frozenset(
+        {
+            "candidate", "church", "forum", "group", "joined", "member",
+            "membership", "roster", "team",
+        }
+    ),
+    "cause_consequence": frozenset(
+        {"cause", "challenge", "effect", "host", "reason", "relationship", "setback", "trigger"}
+    ),
+    "relation_lookup": frozenset(
+        {"friend", "host", "partner", "person", "relationship", "selected"}
+    ),
+}
+_V4_PARENT_NONCURRENT_STATUSES = frozenset(
+    {
+        "belief", "canceled", "completed", "completed_negative", "delayed_not_active",
+        "expired", "false", "historical", "outdated", "planned", "report",
+    }
+)
+
+
+def _semantic_parent_graph_from_seed(seed_row: dict[str, Any]) -> dict[str, Any]:
+    """Read the native parent graph or the additive durable inherited view.
+
+    ``graph_update`` remains child-only for Stage64 validation.  Clean Stage3
+    rows instead expose the full parent+child lineage under
+    ``semantic_inherited_graph`` so the next round can promote it explicitly
+    without dropping the v4 backfilled memory.
+    """
+
+    semantic_parent = seed_row.get("semantic_parent_graph")
+    if isinstance(semantic_parent, dict):
+        return semantic_parent
+    inherited = seed_row.get("semantic_inherited_graph")
+    if (
+        isinstance(inherited, dict)
+        and normalize_space(inherited.get("schema_version"))
+        == "stage3_lineage_graph_v2"
+    ):
+        return inherited
+    return {}
+
+
+def _is_v4_memory_parent(seed_row: dict[str, Any]) -> bool:
+    graph = _semantic_parent_graph_from_seed(seed_row)
+    return (
+        normalize_space(seed_row.get("schema_version")) in _V4_PARENT_ROW_SCHEMAS
+        or normalize_space(graph.get("schema_version")) in _V4_PARENT_GRAPH_SCHEMAS
+    )
+
+
+def _v4_parent_atom_leak_issues(
+    value: Any,
+    *,
+    path: str = "$.event",
+) -> list[dict[str, Any]]:
+    """Reject legacy question/solution material without reading any raw QA dataset."""
+
+    issues: list[dict[str, Any]] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_path = f"{path}.{key}"
+            normalized_key = normalize_text(key).replace(" ", "_")
+            if normalized_key in {"qa", "raw_qa", "adversarial_answer"} or normalized_key.startswith(
+                "raw_qa_"
+            ):
+                issues.append(
+                    {
+                        "code": "v4_parent_raw_qa_key",
+                        "path": child_path,
+                        "message": "Selected v4 parent atoms must not contain raw QA fields.",
+                    }
+                )
+            if normalized_key == "qa_used" and child is not False:
+                issues.append(
+                    {
+                        "code": "v4_parent_qa_provenance_not_false",
+                        "path": child_path,
+                        "message": "qa_used must be the JSON boolean false when present.",
+                    }
+                )
+            issues.extend(_v4_parent_atom_leak_issues(child, path=child_path))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            issues.extend(
+                _v4_parent_atom_leak_issues(child, path=f"{path}[{index}]")
+            )
+    elif isinstance(value, str) and _V4_PARENT_QA_LEAK_RE.search(value):
+        issues.append(
+            {
+                "code": "v4_parent_qa_text_leak",
+                "path": path,
+                "message": "Selected v4 parent atoms must not contain raw-QA wrappers or solution text.",
+            }
+        )
+    return issues
+
+
+def _v4_parent_event_supporting_spans(event: dict[str, Any]) -> list[str]:
+    spans = [normalize_space(event.get("supporting_span"))]
+    if isinstance(event.get("supporting_spans"), list):
+        spans.extend(
+            normalize_space(item) for item in event.get("supporting_spans") or []
+        )
+    provenance = event.get("provenance") if isinstance(event.get("provenance"), dict) else {}
+    canonical_span = normalize_space(provenance.get("supporting_span"))
+    if canonical_span:
+        spans.append(canonical_span)
+    return list(dict.fromkeys(span for span in spans if span))
+
+
+def v4_parent_event_eligibility_issues(
+    event: Any,
+    turn_text_by_id: dict[str, str],
+    *,
+    path: str = "$.event",
+) -> list[dict[str, Any]]:
+    """Fail-closed admission gate for one v4 fact atom used in a graph prompt."""
+
+    if not isinstance(event, dict):
+        return [
+            {
+                "code": "v4_parent_event_not_object",
+                "path": path,
+                "message": "A v4 parent event must be an object.",
+            }
+        ]
+    issues = _v4_parent_atom_leak_issues(event, path=path)
+    for field in ("event_id", "entity", "slot", "value", "status"):
+        value = event.get(field)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            issues.append(
+                {
+                    "code": f"v4_parent_missing_{field}",
+                    "path": f"{path}.{field}",
+                    "message": f"A selected v4 parent event requires non-empty {field}.",
+                }
+            )
+    if event.get("time_index") is None and event.get("global_time_index") is None:
+        issues.append(
+            {
+                "code": "v4_parent_missing_time_coordinate",
+                "path": path,
+                "message": "A selected v4 parent event requires time_index or global_time_index.",
+            }
+        )
+    if not isinstance(event.get("provenance"), dict):
+        issues.append(
+            {
+                "code": "v4_parent_missing_provenance",
+                "path": f"{path}.provenance",
+                "message": "A selected v4 parent event requires object provenance.",
+            }
+        )
+
+    evidence_turn_ids = normalize_turn_ids(event.get("evidence_turn_ids"))
+    if not evidence_turn_ids:
+        issues.append(
+            {
+                "code": "v4_parent_missing_evidence_turn_ids",
+                "path": f"{path}.evidence_turn_ids",
+                "message": "A selected v4 parent event requires source turn evidence.",
+            }
+        )
+    elif len(evidence_turn_ids) != len(set(evidence_turn_ids)):
+        issues.append(
+            {
+                "code": "v4_parent_duplicate_evidence_turn_ids",
+                "path": f"{path}.evidence_turn_ids",
+                "message": "Evidence turn identifiers must be unique.",
+            }
+        )
+    missing_turn_ids = [
+        turn_id for turn_id in evidence_turn_ids if turn_id not in turn_text_by_id
+    ]
+    if missing_turn_ids:
+        issues.append(
+            {
+                "code": "v4_parent_evidence_turn_missing",
+                "path": f"{path}.evidence_turn_ids",
+                "message": "Every selected event evidence ID must exist in this exact parent dialogue.",
+                "details": {"missing_turn_ids": missing_turn_ids},
+            }
+        )
+
+    supporting_spans = _v4_parent_event_supporting_spans(event)
+    if not supporting_spans:
+        issues.append(
+            {
+                "code": "v4_parent_missing_supporting_span",
+                "path": path,
+                "message": "A selected event requires an exact supporting span.",
+            }
+        )
+    elif not missing_turn_ids:
+        evidence_texts = [turn_text_by_id[turn_id] for turn_id in evidence_turn_ids]
+        unmatched = [
+            span
+            for span in supporting_spans
+            if not any(span in evidence_text for evidence_text in evidence_texts)
+        ]
+        if unmatched:
+            issues.append(
+                {
+                    "code": "v4_parent_supporting_span_mismatch",
+                    "path": path,
+                    "message": "Every supporting span must occur verbatim in a cited turn from this parent.",
+                    "details": {
+                        "unmatched_span_sha256": [
+                            hashlib.sha256(span.encode("utf-8")).hexdigest()
+                            for span in unmatched
+                        ]
+                    },
+                }
+            )
+    provenance = event.get("provenance") if isinstance(event.get("provenance"), dict) else {}
+    if "verified_turn_ids_exist" in provenance and provenance.get(
+        "verified_turn_ids_exist"
+    ) is not True:
+        issues.append(
+            {
+                "code": "v4_parent_evidence_provenance_not_verified",
+                "path": f"{path}.provenance.verified_turn_ids_exist",
+                "message": "Source-memory evidence must retain a positive verification flag.",
+            }
+        )
+    return issues
+
+
+def _v4_parent_retrieval_text(event: dict[str, Any]) -> str:
+    provenance = event.get("provenance") if isinstance(event.get("provenance"), dict) else {}
+    return normalize_text(
+        (
+            event.get("entity"),
+            event.get("slot"),
+            event.get("value"),
+            event.get("memory_text"),
+            event.get("event_type"),
+            provenance.get("supporting_span"),
+        )
+    )
+
+
+def _v4_parent_canonical_operation(operation: str | None) -> str:
+    canonical = semantic_graph_v2.OPERATION_ALIASES.get(normalize_space(operation))
+    if canonical not in _V4_PARENT_OPERATION_KEYWORDS:
+        raise NativeGraphDialogueReject(
+            f"v4 parent retrieval requires one supported Stage64 operation, got {operation!r}"
+        )
+    return canonical
+
+
+def _v4_parent_event_retrieval_score(
+    event: dict[str, Any],
+    *,
+    operation: str,
+    entity_slot_count: Counter[tuple[str, str]],
+    slot_entity_count: dict[str, int],
+    entity_slot_variety: dict[str, int],
+    event_type_count: Counter[str],
+    edge_degree: Counter[str],
+    session_recency_bucket: int,
+    evidence_position_bucket: int,
+) -> tuple[int, list[str]]:
+    score = 10
+    reasons = ["evidence_and_leak_gate_passed"]
+    event_id = normalize_space(event.get("event_id"))
+    entity = normalize_text(event.get("entity"))
+    slot = normalize_text(event.get("slot"))
+    status = normalize_text(event.get("status"))
+    event_type = normalize_text(event.get("event_type"))
+    text = _v4_parent_retrieval_text(event)
+    tokens = set(text.split())
+    slot_tokens = set(slot.split())
+    if event.get("required_for_dialogue") is True:
+        score += 50
+        reasons.append("verified_canonical_parent_anchor")
+    source = normalize_space((event.get("provenance") or {}).get("source")) if isinstance(event.get("provenance"), dict) else ""
+    if source in {"locomo_observation", "locomo_event_summary"}:
+        score += 5
+        reasons.append("raw_memory_backfill_atom")
+    keyword_hits = sorted(tokens.intersection(_V4_PARENT_OPERATION_KEYWORDS[operation]))
+    if keyword_hits:
+        score += min(32, 8 * len(keyword_hits))
+        reasons.extend(f"operation_keyword:{keyword}" for keyword in keyword_hits[:4])
+    slot_family_hits = sorted(
+        slot_tokens.intersection(_V4_PARENT_OPERATION_SLOT_KEYWORDS[operation])
+    )
+    if slot_family_hits:
+        score += min(96, 64 + 8 * len(slot_family_hits))
+        reasons.extend(
+            f"operation_slot_family:{keyword}"
+            for keyword in slot_family_hits[:4]
+        )
+    pair_count = entity_slot_count[(entity, slot)]
+    slot_entities = slot_entity_count.get(slot, 0)
+    entity_slots = entity_slot_variety.get(entity, 0)
+    score += session_recency_bucket
+    reasons.append(f"session_recency:{session_recency_bucket}/10")
+    score += evidence_position_bucket
+    reasons.append(f"evidence_position:{evidence_position_bucket}/10")
+    if pair_count >= 2:
+        score += min(12, 3 * pair_count)
+        reasons.append("topic_continuity:entity_slot_family")
+    if event_type and event_type_count[event_type] >= 2:
+        score += min(10, event_type_count[event_type] // 8 + 3)
+        reasons.append("topic_continuity:event_type_family")
+    if edge_degree[event_id]:
+        score += min(10, 2 * edge_degree[event_id])
+        reasons.append("topic_continuity:graph_topology")
+    numeric_surface = bool(
+        re.search(
+            r"(?:^|\s)(?:\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten)(?:\s|$)",
+            text,
+        )
+    )
+    if operation == "temporal_state_update":
+        if pair_count >= 2:
+            score += min(28, 7 * pair_count)
+            reasons.append("same_entity_slot_temporal_competitor")
+        if status in _V4_PARENT_NONCURRENT_STATUSES:
+            score += 14
+            reasons.append("noncurrent_or_planned_status")
+        if event.get("time_index") is not None or event.get("global_time_index") is not None:
+            score += 4
+            reasons.append("explicit_time_index")
+    elif operation == "comparison":
+        if numeric_surface:
+            score += 30
+            reasons.append("numeric_comparison_surface")
+        if slot_entities >= 2:
+            score += min(24, 6 * slot_entities)
+            reasons.append("same_slot_multiple_entities")
+    elif operation == "count":
+        if numeric_surface:
+            score += 26
+            reasons.append("numeric_or_countable_surface")
+        if pair_count >= 2:
+            score += min(20, 4 * pair_count)
+            reasons.append("repeated_candidate_dimension")
+    elif operation == "bridge":
+        if entity_slots >= 2:
+            score += min(24, 5 * entity_slots)
+            reasons.append("entity_links_multiple_relations")
+        if edge_degree[event_id]:
+            score += min(18, 6 * edge_degree[event_id])
+            reasons.append("source_graph_edge_participant")
+    elif operation == "cause_consequence":
+        if isinstance(event.get("depends_on"), list) and event.get("depends_on"):
+            score += 24
+            reasons.append("explicit_dependency")
+        if edge_degree[event_id]:
+            score += min(12, 4 * edge_degree[event_id])
+            reasons.append("source_graph_edge_participant")
+    elif operation == "relation_lookup":
+        if normalize_text(event.get("event_type")) == "relationship":
+            score += 24
+            reasons.append("relationship_event_type")
+        if entity_slots >= 2:
+            score += min(20, 4 * entity_slots)
+            reasons.append("entity_has_multiple_relations")
+    elif operation == "visibility":
+        if isinstance(event.get("scope"), dict) and event.get("scope"):
+            score += 32
+            reasons.append("explicit_scope")
+        if "share" in slot or "access" in slot or "permission" in slot:
+            score += 18
+            reasons.append("visibility_relation_slot")
+    return score, reasons
+
+
+def _v4_parent_compatibility_event(event: dict[str, Any]) -> dict[str, Any]:
+    """Add prompt-contract aliases without changing any source field or value."""
+
+    compatible = copy.deepcopy(event)
+    compatible.setdefault("node_type", "canonical_event")
+    supporting_span = normalize_space(compatible.get("supporting_span"))
+    if not supporting_span and isinstance(compatible.get("supporting_spans"), list):
+        supporting_span = next(
+            (
+                normalize_space(item)
+                for item in compatible["supporting_spans"]
+                if normalize_space(item)
+            ),
+            "",
+        )
+    provenance = (
+        compatible.get("provenance")
+        if isinstance(compatible.get("provenance"), dict)
         else {}
     )
+    if not supporting_span:
+        supporting_span = normalize_space(provenance.get("supporting_span"))
+    compatible.setdefault("supporting_span", supporting_span)
+    compatible.setdefault("memory_text", None)
+    compatible.setdefault("evidence_turn_ids", [])
+    compatible.setdefault("provenance", provenance)
+    return compatible
+
+
+def _v4_parent_prompt_event_projection(event: dict[str, Any]) -> dict[str, Any]:
+    """Project one selected event to the lean, fact-only API representation.
+
+    Retrieval and persistence continue to use the lossless compatibility event.
+    The API does not need evidence text or backfill diagnostics, so those fields
+    are deliberately absent rather than blanked or summarized.
+    """
+
+    compatible = _v4_parent_compatibility_event(event)
+    projected = {
+        field: copy.deepcopy(compatible[field])
+        for field in V4_PARENT_PROMPT_EVENT_FIELDS
+        if field in compatible and compatible[field] is not None
+    }
+    projected.setdefault("node_type", "canonical_event")
+    if isinstance(projected.get("scope"), dict):
+        projected["scope"] = {
+            field: copy.deepcopy(projected["scope"][field])
+            for field in ("observer", "permission", "condition")
+            if field in projected["scope"]
+        }
+    if isinstance(projected.get("set_membership"), dict):
+        projected["set_membership"] = {
+            field: copy.deepcopy(projected["set_membership"][field])
+            for field in ("set_id", "condition", "included")
+            if field in projected["set_membership"]
+        }
+    return projected
+
+
+def _compact_v4_parent_prompt_ledger(
+    full_ledger: dict[str, Any],
+) -> dict[str, Any]:
+    """Return the sole retrieval ledger copy allowed in an API graph prompt."""
+
+    compact = {
+        field: copy.deepcopy(full_ledger[field])
+        for field in V4_PARENT_PROMPT_LEDGER_FIELDS
+        if field in full_ledger
+    }
+    missing = [field for field in V4_PARENT_PROMPT_LEDGER_FIELDS if field not in compact]
+    if missing:
+        raise NativeGraphDialogueReject(
+            f"v4 parent retrieval ledger missing compact prompt fields: {missing}"
+        )
+    return compact
+
+
+def build_v4_parent_prompt_view(
+    seed_row: dict[str, Any],
+    *,
+    operation: str,
+    target_event_count: int = V4_PARENT_RETRIEVAL_TARGET_EVENTS,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return a selected prompt-only graph view while leaving the v4 row untouched."""
+
+    canonical_operation = _v4_parent_canonical_operation(operation)
+    target_event_count = max(
+        V4_PARENT_RETRIEVAL_MIN_EVENTS,
+        min(V4_PARENT_RETRIEVAL_MAX_EVENTS, int(target_event_count)),
+    )
+    graph = _semantic_parent_graph_from_seed(seed_row)
+    source_events = graph.get("events") if isinstance(graph.get("events"), list) else []
+    turns = dialogue_turns_from_row(seed_row)
+    turn_text_by_id = {
+        normalize_space(turn.get("turn_id") or turn.get("id") or turn.get("dia_id")): normalize_space(
+            turn.get("text") or turn.get("content") or turn.get("utterance")
+        )
+        for turn in turns
+        if isinstance(turn, dict)
+        and normalize_space(turn.get("turn_id") or turn.get("id") or turn.get("dia_id"))
+    }
+    full_event_ids: list[str] = []
+    eligible: list[tuple[int, dict[str, Any]]] = []
+    ineligible: list[dict[str, Any]] = []
+    seen_event_ids: set[str] = set()
+    for index, event in enumerate(source_events):
+        event_id = normalize_space(event.get("event_id")) if isinstance(event, dict) else ""
+        ledger_event_id = event_id or f"<missing:{index}>"
+        full_event_ids.append(ledger_event_id)
+        issues = v4_parent_event_eligibility_issues(
+            event,
+            turn_text_by_id,
+            path=f"$.semantic_parent_graph.events[{index}]",
+        )
+        if event_id in seen_event_ids:
+            issues.append(
+                {
+                    "code": "v4_parent_duplicate_event_id",
+                    "path": f"$.semantic_parent_graph.events[{index}].event_id",
+                    "message": "Full v4 parent event identifiers must be unique.",
+                }
+            )
+        seen_event_ids.add(event_id)
+        if issues:
+            ineligible.append(
+                {
+                    "event_id": ledger_event_id,
+                    "source_event_index": index,
+                    "reason_codes": sorted({str(issue.get("code")) for issue in issues}),
+                    "issues": issues,
+                }
+            )
+        else:
+            eligible.append((index, event))
+    if len(eligible) < V4_PARENT_RETRIEVAL_MIN_EVENTS:
+        raise NativeGraphDialogueReject(
+            "v4 parent retrieval has fewer than "
+            f"{V4_PARENT_RETRIEVAL_MIN_EVENTS} evidence-grounded leak-free events: "
+            f"{len(eligible)}/{len(source_events)}"
+        )
+
+    entity_slot_count: Counter[tuple[str, str]] = Counter()
+    event_type_count: Counter[str] = Counter()
+    slot_entities: dict[str, set[str]] = {}
+    entity_slots: dict[str, set[str]] = {}
+    for _index, event in eligible:
+        entity = normalize_text(event.get("entity"))
+        slot = normalize_text(event.get("slot"))
+        entity_slot_count[(entity, slot)] += 1
+        event_type = normalize_text(event.get("event_type"))
+        if event_type:
+            event_type_count[event_type] += 1
+        slot_entities.setdefault(slot, set()).add(entity)
+        entity_slots.setdefault(entity, set()).add(slot)
+    edge_degree: Counter[str] = Counter()
+    source_edges = graph.get("edges") if isinstance(graph.get("edges"), list) else []
+    for edge in source_edges:
+        if not isinstance(edge, dict):
+            continue
+        for field in ("source_event_id", "target_event_id"):
+            event_id = normalize_space(edge.get(field))
+            if event_id:
+                edge_degree[event_id] += 1
+
+    eligible_time_values: dict[str, int] = {}
+    for _index, event in eligible:
+        event_id = normalize_space(event.get("event_id"))
+        raw_time = event.get("global_time_index")
+        if raw_time is None:
+            raw_time = event.get("session_index")
+        if raw_time is None:
+            raw_time = event.get("time_index")
+        if isinstance(raw_time, bool):
+            continue
+        try:
+            time_value = int(raw_time)
+        except (TypeError, ValueError):
+            continue
+        if time_value >= 0:
+            eligible_time_values[event_id] = time_value
+    max_parent_time = max(eligible_time_values.values(), default=0)
+    turn_position_by_id = {
+        normalize_space(turn.get("turn_id") or turn.get("id") or turn.get("dia_id")): index
+        for index, turn in enumerate(turns, start=1)
+        if isinstance(turn, dict)
+        and normalize_space(turn.get("turn_id") or turn.get("id") or turn.get("dia_id"))
+    }
+    max_turn_position = max(turn_position_by_id.values(), default=0)
+
+    ranked: list[tuple[int, int, str, dict[str, Any], list[str]]] = []
+    for index, event in eligible:
+        event_id = normalize_space(event.get("event_id"))
+        session_recency_bucket = (
+            round(10 * eligible_time_values.get(event_id, 0) / max_parent_time)
+            if max_parent_time
+            else 0
+        )
+        evidence_positions = [
+            turn_position_by_id.get(turn_id, 0)
+            for turn_id in normalize_turn_ids(event.get("evidence_turn_ids"))
+        ]
+        evidence_position_bucket = (
+            round(10 * max(evidence_positions, default=0) / max_turn_position)
+            if max_turn_position
+            else 0
+        )
+        score, reasons = _v4_parent_event_retrieval_score(
+            event,
+            operation=canonical_operation,
+            entity_slot_count=entity_slot_count,
+            slot_entity_count={key: len(value) for key, value in slot_entities.items()},
+            entity_slot_variety={key: len(value) for key, value in entity_slots.items()},
+            event_type_count=event_type_count,
+            edge_degree=edge_degree,
+            session_recency_bucket=session_recency_bucket,
+            evidence_position_bucket=evidence_position_bucket,
+        )
+        ranked.append(
+            (score, index, normalize_space(event.get("event_id")), event, reasons)
+        )
+    ranked.sort(key=lambda item: (-item[0], item[1], item[2]))
+    selected_ranked = ranked[: min(target_event_count, len(ranked))]
+    # Preserve source graph order in the fact view; rank and reasons remain in the ledger.
+    selected_ranked_by_index = sorted(selected_ranked, key=lambda item: item[1])
+    selected_compatibility_events = [
+        _v4_parent_compatibility_event(item[3])
+        for item in selected_ranked_by_index
+    ]
+    selected_event_ids = [
+        normalize_space(event.get("event_id"))
+        for event in selected_compatibility_events
+    ]
+    selected_set = set(selected_event_ids)
+    selected_edges = [
+        copy.deepcopy(edge)
+        for edge in source_edges
+        if isinstance(edge, dict)
+        and normalize_space(edge.get("source_event_id")) in selected_set
+        and normalize_space(edge.get("target_event_id")) in selected_set
+    ]
+    source_event_by_id = {
+        normalize_space(event.get("event_id")): event
+        for _index, event in eligible
+    }
+    compatibility_added_fields_by_event_id = {
+        event_id: sorted(set(event) - set(source_event_by_id[event_id]))
+        for event_id, event in zip(selected_event_ids, selected_compatibility_events)
+    }
+    selection_reasons = [
+        {
+            "event_id": event_id,
+            "source_event_index": index,
+            "score": score,
+            "reason": ";".join(reasons),
+            "reason_codes": reasons,
+        }
+        for score, index, event_id, _event, reasons in selected_ranked
+    ]
+    scoring_factor_hit_counts = {
+        factor: sum(
+            any(str(reason).startswith(prefix) for reason in row["reason_codes"])
+            for row in selection_reasons
+        )
+        for factor, prefix in {
+            "session_recency": "session_recency:",
+            "evidence_position": "evidence_position:",
+            "topic_continuity": "topic_continuity:",
+        }.items()
+    }
+    eligible_event_ids = [normalize_space(event.get("event_id")) for _, event in eligible]
+    ledger_basis = {
+        "operation": canonical_operation,
+        "full_event_ids": full_event_ids,
+        "eligible_event_ids": eligible_event_ids,
+        "selected_event_ids": selected_event_ids,
+        "selection_reasons": selection_reasons,
+    }
+    ledger = {
+        "schema_version": V4_PARENT_RETRIEVAL_LEDGER_SCHEMA_VERSION,
+        "operation": canonical_operation,
+        "retrieval_operation": canonical_operation,
+        "retrieval_reason": (
+            "operation-conditioned deterministic ranking over semantic slot family, "
+            "session recency, evidence position, and entity-slot/event-type/topology "
+            "topic continuity after exact parent-turn evidence and raw-QA leak admission gates"
+        ),
+        "selection_algorithm": "deterministic_operation_slot_keyword_topology_rank_v2",
+        "minimum_selected_event_count": V4_PARENT_RETRIEVAL_MIN_EVENTS,
+        "maximum_selected_event_count": V4_PARENT_RETRIEVAL_MAX_EVENTS,
+        "target_selected_event_count": target_event_count,
+        "full_event_count": len(full_event_ids),
+        "full_event_ids": full_event_ids,
+        "full_parent_event_count": len(full_event_ids),
+        "full_parent_event_ids": full_event_ids,
+        "eligible_event_count": len(eligible_event_ids),
+        "eligible_event_ids": eligible_event_ids,
+        "eligible_parent_event_count": len(eligible_event_ids),
+        "eligible_parent_event_ids": eligible_event_ids,
+        "ineligible_event_count": len(ineligible),
+        "ineligible_events": ineligible,
+        "selected_event_count": len(selected_event_ids),
+        "selected_event_ids": selected_event_ids,
+        "selected_parent_event_count": len(selected_event_ids),
+        "selected_parent_event_ids": selected_event_ids,
+        "unselected_eligible_event_ids": [
+            event_id for event_id in eligible_event_ids if event_id not in selected_set
+        ],
+        "selection_reasons": selection_reasons,
+        "scoring_factor_hit_counts": scoring_factor_hit_counts,
+        "compatibility_added_fields_by_event_id": compatibility_added_fields_by_event_id,
+        "selected_edge_count": len(selected_edges),
+        "evidence_gate": {
+            "all_selected_turn_ids_exist": True,
+            "all_selected_supporting_spans_match_cited_turns": True,
+        },
+        "qa_leak_gate": {
+            "pass": True,
+            "raw_qa_or_wrapper_issue_count": 0,
+            "raw_qa_dataset_read": False,
+        },
+        "ledger_sha256": hashlib.sha256(
+            json.dumps(
+                ledger_basis,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest(),
+    }
+    selected_events = [
+        _v4_parent_prompt_event_projection(event)
+        for event in selected_compatibility_events
+    ]
+    selected_edges = [
+        {
+            field: copy.deepcopy(edge[field])
+            for field in ("edge_type", "source_event_id", "target_event_id")
+            if field in edge
+        }
+        for edge in selected_edges
+    ]
+    view = {
+        "schema_version": V4_PARENT_PROMPT_VIEW_SCHEMA_VERSION,
+        "source_graph_schema_version": normalize_space(graph.get("schema_version")),
+        "graph_id": normalize_space(graph.get("graph_id")),
+        "parent_graph_id": normalize_space(graph.get("parent_graph_id")),
+        "graph_role": "operation_conditioned_selected_parent_fact_view",
+        "source_graph_role": normalize_space(graph.get("graph_role")),
+        "events": selected_events,
+        "edges": selected_edges,
+    }
+    return view, ledger
+
+
+def _semantic_parent_events_for_prompt(seed_row: dict[str, Any], *, limit: int = 12) -> list[dict[str, Any]]:
+    semantic_parent = _semantic_parent_graph_from_seed(seed_row)
     graph_update = seed_row.get("graph_update") if isinstance(seed_row.get("graph_update"), dict) else {}
     source_events = semantic_parent.get("events") if isinstance(semantic_parent.get("events"), list) else None
     if source_events is None:
@@ -3479,24 +5213,60 @@ def compact_seed_for_prompt(
     *,
     max_turns: int = 12,
     semantic_graph_v2: bool = False,
+    parent_operation: str | None = None,
+    full_parent_event_retrieval_out: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     turns = dialogue_turns_from_row(seed_row)
     graph_update = seed_row.get("graph_update") if isinstance(seed_row.get("graph_update"), dict) else {}
-    qa = seed_row.get("qa") if isinstance(seed_row.get("qa"), dict) else {}
     payload = {
         "sample_id": seed_row.get("sample_id") or seed_row.get("source_id"),
         "source_id": seed_row.get("source_id"),
     }
     if semantic_graph_v2:
-        semantic_parent = (
-            seed_row.get("semantic_parent_graph")
-            if isinstance(seed_row.get("semantic_parent_graph"), dict)
-            else {}
-        )
+        semantic_parent = _semantic_parent_graph_from_seed(seed_row)
         parent_graph_id = normalize_space(
             semantic_parent.get("graph_id")
             or f"stage3_parent:{seed_row.get('sample_id') or seed_row.get('source_id') or 'unknown'}"
         )
+        if _is_v4_memory_parent(seed_row):
+            selected_graph, retrieval_ledger = build_v4_parent_prompt_view(
+                seed_row,
+                operation=normalize_space(parent_operation),
+            )
+            if full_parent_event_retrieval_out is not None:
+                full_parent_event_retrieval_out.clear()
+                full_parent_event_retrieval_out.update(
+                    copy.deepcopy(retrieval_ledger)
+                )
+            selected_graph["graph_id"] = parent_graph_id
+            payload.update(
+                {
+                    "schema_version": GRAPH_PARENT_CONTEXT_SCHEMA_VERSION,
+                    "parent_dialogue_content": {
+                        "algorithm": "sha256",
+                        "content_sha256": _graph_parent_dialogue_content_sha256(turns),
+                        "turn_count": len(turns),
+                        "parent_turn_text_included": False,
+                    },
+                    "dialogue_structure": _graph_parent_dialogue_structure(turns),
+                    "semantic_parent_graph": selected_graph,
+                    "parent_event_retrieval": _compact_v4_parent_prompt_ledger(
+                        retrieval_ledger
+                    ),
+                    "semantic_parent_event_text_fields_omitted": [
+                        "all unselected parent event atoms",
+                        "full parent dialogue turn text",
+                    ],
+                    "semantic_parent_event_atoms_readable": True,
+                    "semantic_parent_selected_event_atoms_readable": True,
+                    "semantic_parent_unselected_event_atoms_omitted": True,
+                    "semantic_parent_entity_anchors_readable": True,
+                    "parent_dialogue_text_omitted": True,
+                    "legacy_graph_omitted": True,
+                    "legacy_qa_omitted": True,
+                }
+            )
+            return payload
         payload.update(
             {
                 "schema_version": GRAPH_PARENT_CONTEXT_SCHEMA_VERSION,
@@ -3536,6 +5306,7 @@ def compact_seed_for_prompt(
             }
         )
     else:
+        qa = seed_row.get("qa") if isinstance(seed_row.get("qa"), dict) else {}
         if len(turns) > max_turns:
             head = turns[: max_turns // 2]
             tail = turns[-(max_turns - len(head)) :]
@@ -3603,9 +5374,29 @@ def _graph_seed_forbidden_parent_text_paths(
     return paths
 
 
-def _graph_prompt_atomic_parent_path(path: str) -> bool:
+def _graph_prompt_atomic_parent_path(
+    path: str,
+    *,
+    v4_selected_event_view: bool = False,
+) -> bool:
     """Identify explicitly scoped structural/atomic parent fields exempt from text audit."""
 
+    if v4_selected_event_view and re.match(
+        r"^\$\.seed\.semantic_parent_graph\.events\[\d+\]\."
+        r"(?:event_id|node_type|entity|event_type|slot|value|status|time_index|"
+        r"local_time_index|global_time_index|session_index|session_date_time|"
+        r"evidence_turn_ids|summarizes_event_ids|previous_value|depends_on|scope|"
+        r"set_membership|owner|resource|observer|action|condition|access_class)"
+        r"(?:\.|\[|$)",
+        path,
+    ):
+        return True
+    if v4_selected_event_view and re.match(
+        r"^\$\.seed\.semantic_parent_graph\.edges\[\d+\]\."
+        r"(?:edge_type|source_event_id|target_event_id|similarity)(?:\.|\[|$)",
+        path,
+    ):
+        return True
     if re.match(
         r"^\$\.seed\.semantic_parent_graph\.events\[\d+\]\."
         r"(?:event_id|entity_anchor|status|time_index|depends_on_event_ids|"
@@ -3615,7 +5406,7 @@ def _graph_prompt_atomic_parent_path(path: str) -> bool:
         return True
     if re.match(
         r"^\$\.invalid_graph_to_correct\.events\[\d+\]\."
-        r"(?:event_id|round_id|time_index|event_type|entity|slot|value|previous_value|"
+        r"(?:event_id|round_id|time_index|local_time_index|global_time_index|event_type|entity|slot|value|previous_value|"
         r"status|depends_on|scope|set_membership|required_for_dialogue|source)(?:\.|\[|$)",
         path,
     ):
@@ -3637,6 +5428,110 @@ def _graph_prompt_atomic_parent_path(path: str) -> bool:
     )
 
 
+def _v4_selected_parent_view_issues(seed: dict[str, Any]) -> list[dict[str, Any]]:
+    graph = seed.get("semantic_parent_graph") if isinstance(seed.get("semantic_parent_graph"), dict) else {}
+    if graph.get("schema_version") != V4_PARENT_PROMPT_VIEW_SCHEMA_VERSION:
+        return []
+    issues: list[dict[str, Any]] = []
+    events = graph.get("events") if isinstance(graph.get("events"), list) else []
+    if "retrieval_ledger" in graph:
+        issues.append(
+            {
+                "code": "v4_parent_retrieval_ledger_duplicated_in_graph_view",
+                "path": "$.seed.semantic_parent_graph.retrieval_ledger",
+                "message": "The compact prompt retrieval ledger must appear exactly once at seed level.",
+            }
+        )
+    ledger = (
+        seed.get("parent_event_retrieval")
+        if isinstance(seed.get("parent_event_retrieval"), dict)
+        else {}
+    )
+    unexpected_ledger_fields = sorted(
+        set(ledger) - set(V4_PARENT_PROMPT_LEDGER_FIELDS)
+    )
+    missing_ledger_fields = sorted(
+        set(V4_PARENT_PROMPT_LEDGER_FIELDS) - set(ledger)
+    )
+    if unexpected_ledger_fields or missing_ledger_fields:
+        issues.append(
+            {
+                "code": "v4_parent_prompt_ledger_not_compact",
+                "path": "$.seed.parent_event_retrieval",
+                "message": "The API prompt ledger must contain only compact counts, operation, selected IDs, and hash.",
+                "details": {
+                    "unexpected_fields": unexpected_ledger_fields,
+                    "missing_fields": missing_ledger_fields,
+                },
+            }
+        )
+    selected_ids = [
+        normalize_space(event.get("event_id"))
+        for event in events
+        if isinstance(event, dict)
+    ]
+    ledger_ids = (
+        ledger.get("selected_parent_event_ids")
+        if isinstance(ledger.get("selected_parent_event_ids"), list)
+        else []
+    )
+    if selected_ids != ledger_ids:
+        issues.append(
+            {
+                "code": "v4_parent_selected_ledger_mismatch",
+                "path": "$.seed.semantic_parent_graph.events",
+                "message": "Selected event atoms must exactly match the retrieval ledger order.",
+            }
+        )
+    if not V4_PARENT_RETRIEVAL_MIN_EVENTS <= len(events) <= V4_PARENT_RETRIEVAL_MAX_EVENTS:
+        issues.append(
+            {
+                "code": "v4_parent_selected_count_out_of_range",
+                "path": "$.seed.semantic_parent_graph.events",
+                "message": "The v4 selected parent view must contain 15-40 events.",
+                "details": {"event_count": len(events)},
+            }
+        )
+    if int(ledger.get("selected_parent_event_count") or -1) != len(events):
+        issues.append(
+            {
+                "code": "v4_parent_selected_count_ledger_mismatch",
+                "path": "$.seed.parent_event_retrieval.selected_parent_event_count",
+                "message": "Selected event count must match the prompt view.",
+            }
+        )
+    if int(ledger.get("eligible_parent_event_count") or -1) < len(events):
+        issues.append(
+            {
+                "code": "v4_parent_eligible_count_below_selected_count",
+                "path": "$.seed.parent_event_retrieval.eligible_parent_event_count",
+                "message": "Eligible parent event count cannot be below the selected count.",
+            }
+        )
+    for index, event in enumerate(events):
+        if not isinstance(event, dict):
+            continue
+        unexpected_event_fields = sorted(
+            set(event) - set(V4_PARENT_PROMPT_EVENT_FIELDS)
+        )
+        if unexpected_event_fields:
+            issues.append(
+                {
+                    "code": "v4_parent_prompt_event_not_lean",
+                    "path": f"$.seed.semantic_parent_graph.events[{index}]",
+                    "message": "Selected parent prompt events may contain only the lean fact projection.",
+                    "details": {"unexpected_fields": unexpected_event_fields},
+                }
+            )
+        issues.extend(
+            _v4_parent_atom_leak_issues(
+                event,
+                path=f"$.seed.semantic_parent_graph.events[{index}]",
+            )
+        )
+    return issues
+
+
 def audit_graph_parent_prompt_verbatim_exposure(
     prompt: dict[str, Any],
     seed_row: dict[str, Any],
@@ -3655,13 +5550,24 @@ def audit_graph_parent_prompt_verbatim_exposure(
             if ngram.strip():
                 parent_ngrams.setdefault(ngram, set()).add(turn_index)
 
-    forbidden_seed_paths = _graph_seed_forbidden_parent_text_paths(
-        prompt.get("seed") if isinstance(prompt.get("seed"), dict) else {}
+    prompt_seed = prompt.get("seed") if isinstance(prompt.get("seed"), dict) else {}
+    prompt_seed_graph = (
+        prompt_seed.get("semantic_parent_graph")
+        if isinstance(prompt_seed.get("semantic_parent_graph"), dict)
+        else {}
     )
+    v4_selected_event_view = (
+        prompt_seed_graph.get("schema_version") == V4_PARENT_PROMPT_VIEW_SCHEMA_VERSION
+    )
+    selected_view_issues = _v4_selected_parent_view_issues(prompt_seed)
+    forbidden_seed_paths = _graph_seed_forbidden_parent_text_paths(prompt_seed)
     exposure_keys: set[tuple[int, str, str]] = set()
     exempt_atomic_paths: set[str] = set()
     for path, prompt_text in _graph_prompt_string_values(prompt):
-        if _graph_prompt_atomic_parent_path(path):
+        if _graph_prompt_atomic_parent_path(
+            path,
+            v4_selected_event_view=v4_selected_event_view,
+        ):
             exempt_atomic_paths.add(path)
             continue
         prompt_ngrams = {
@@ -3677,7 +5583,7 @@ def audit_graph_parent_prompt_verbatim_exposure(
     core = {
         "schema_version": GRAPH_PARENT_PROMPT_AUDIT_VERSION,
         "parent_context_schema_version": GRAPH_PARENT_CONTEXT_SCHEMA_VERSION,
-        "pass": not forbidden_seed_paths and not exposure_keys,
+        "pass": not forbidden_seed_paths and not exposure_keys and not selected_view_issues,
         "minimum_substring_chars": width,
         "parent_turn_count": len(parent_turns),
         "parent_dialogue_sha256": _graph_parent_dialogue_content_sha256(parent_turns),
@@ -3689,8 +5595,15 @@ def audit_graph_parent_prompt_verbatim_exposure(
         "exposed_substring_sha256": sorted({item[2] for item in exposure_keys}),
         "atomic_structured_exemption_count": len(exempt_atomic_paths),
         "atomic_structured_exemption_paths": sorted(exempt_atomic_paths),
+        "v4_selected_parent_fact_view": v4_selected_event_view,
+        "v4_selected_parent_fact_count": len(prompt_seed_graph.get("events") or [])
+        if v4_selected_event_view
+        else 0,
+        "v4_selected_parent_view_issue_count": len(selected_view_issues),
+        "v4_selected_parent_view_issues": selected_view_issues,
         "speaker_labels_explicitly_scoped": True,
         "raw_parent_text_recorded": False,
+        "selected_parent_fact_atoms_recorded": v4_selected_event_view,
         "prompt_sha256": hashlib.sha256(
             json.dumps(
                 prompt,
@@ -3712,11 +5625,7 @@ def audit_graph_parent_prompt_verbatim_exposure(
 
 
 def _graph_parent_source_events(seed_row: dict[str, Any]) -> list[dict[str, Any]]:
-    semantic_parent = (
-        seed_row.get("semantic_parent_graph")
-        if isinstance(seed_row.get("semantic_parent_graph"), dict)
-        else {}
-    )
+    semantic_parent = _semantic_parent_graph_from_seed(seed_row)
     graph_update = (
         seed_row.get("graph_update")
         if isinstance(seed_row.get("graph_update"), dict)
@@ -3779,12 +5688,20 @@ def graph_parent_novelty_issues(
 
     width = GRAPH_PARENT_PROMPT_MIN_SUBSTRING_CHARS
     parent_text_sources: list[str] = []
-    for turn in dialogue_turns_from_row(seed_row):
-        text = normalize_space(
+    parent_dialogue_fact_surfaces: list[tuple[str, str]] = []
+    for turn_index, turn in enumerate(dialogue_turns_from_row(seed_row)):
+        raw_text = normalize_space(
             turn.get("text") or turn.get("content") or turn.get("utterance")
-        ).casefold()
-        if text:
-            parent_text_sources.append(text)
+        )
+        if raw_text:
+            parent_text_sources.append(raw_text.casefold())
+            parent_dialogue_fact_surfaces.append(
+                (
+                    normalize_space(turn.get("turn_id") or turn.get("id"))
+                    or f"parent_turn_{turn_index}",
+                    f" {normalize_text(raw_text)} ",
+                )
+            )
     for event in parent_events:
         parent_text_sources.extend(claim.casefold() for claim in _graph_event_support_claims(event))
     parent_ngrams: set[str] = set()
@@ -3820,6 +5737,48 @@ def graph_parent_novelty_issues(
                         "temporal_parent_slot_reuse_allowed_only_with_new_value_status_transition": (
                             operation == "temporal_state_update"
                         ),
+                    },
+                }
+            )
+        entity_key = normalize_text(event.get("entity"))
+        raw_value = event.get("value")
+        if raw_value is None:
+            raw_value = event.get("to")
+        value_key = normalize_text(raw_value)
+        parent_turn_ids = [
+            turn_id
+            for turn_id, normalized_parent_text in parent_dialogue_fact_surfaces
+            if entity_key
+            and value_key
+            and value_key != entity_key
+            and f" {entity_key} " in normalized_parent_text
+            and f" {value_key} " in normalized_parent_text
+        ]
+        # Visibility permissions deliberately extend an existing resource and
+        # often share owner/resource/access-class surfaces across typed scope
+        # variants.  Their novelty is governed by the dedicated typed
+        # observer/action/resource/condition/status signature gate below, not
+        # by the generic entity-value rule used for ordinary graph facts.
+        if parent_turn_ids and operation != "visibility":
+            issues.append(
+                {
+                    "code": "parent_dialogue_entity_value_semantic_reuse",
+                    "path": f"$.events[{event_index}]",
+                    "message": (
+                        "A child graph event repeats an entity-value fact already "
+                        "stated in the parent dialogue, even though its slot label differs."
+                    ),
+                    "details": {
+                        "operation": operation,
+                        "child_event_id": normalize_space(event.get("event_id")),
+                        "parent_turn_ids": list(dict.fromkeys(parent_turn_ids)),
+                        "semantic_entity_value_sha256": hashlib.sha256(
+                            json.dumps(
+                                [entity_key, value_key],
+                                separators=(",", ":"),
+                            ).encode("utf-8")
+                        ).hexdigest(),
+                        "raw_parent_text_recorded": False,
                     },
                 }
             )
@@ -3903,6 +5862,8 @@ def sanitize_invalid_graph_for_semantic_retry(candidate: dict[str, Any]) -> dict
         "event_id",
         "round_id",
         "time_index",
+        "local_time_index",
+        "global_time_index",
         "entity",
         "slot",
         "value",
@@ -3937,6 +5898,226 @@ def sanitize_invalid_graph_for_semantic_retry(candidate: dict[str, Any]) -> dict
         if isinstance(event, dict)
     ]
     return sanitized
+
+
+_SEMANTIC_RETRY_SAFE_DETAIL_KEYS = frozenset(
+    {
+        "actual_dependency_map",
+        "allowed",
+        "allowed_status_literals",
+        "forbidden_category_labels_as_status",
+        "hard_negative_strategy",
+        "machine_failures",
+        "operation",
+        "required_dependency_map",
+        "required_later_statuses",
+        "supported",
+        "supported_status_literals",
+    }
+)
+
+
+def _semantic_retry_safe_detail_key(key: Any) -> bool:
+    """Allow only identifiers/enums/counts in prompt-facing validator details."""
+
+    normalized = str(key).casefold()
+    if normalized in _SEMANTIC_RETRY_SAFE_DETAIL_KEYS:
+        return True
+    return normalized.endswith(
+        (
+            "_id",
+            "_ids",
+            "_index",
+            "_indexes",
+            "_count",
+            "_counts",
+            "_sha256",
+            "_status",
+            "_statuses",
+        )
+    )
+
+
+def _sanitize_semantic_retry_prompt_detail(value: Any, *, key: Any = "") -> Any:
+    """Recursively remove generated/parent prose while retaining machine coordinates."""
+
+    if isinstance(value, dict):
+        sanitized: dict[str, Any] = {}
+        for child_key, child_value in value.items():
+            compact = _sanitize_semantic_retry_prompt_detail(
+                child_value,
+                key=child_key,
+            )
+            if compact not in (None, [], {}):
+                sanitized[str(child_key)] = compact
+        return sanitized or None
+    if isinstance(value, list):
+        if all(isinstance(item, dict) for item in value):
+            sanitized_items = [
+                _sanitize_semantic_retry_prompt_detail(item, key=key)
+                for item in value
+            ]
+            return [item for item in sanitized_items if item not in (None, [], {})]
+        if _semantic_retry_safe_detail_key(key):
+            return copy.deepcopy(value)
+        return None
+    if isinstance(value, (bool, int, float)) and _semantic_retry_safe_detail_key(key):
+        return value
+    if isinstance(value, str) and _semantic_retry_safe_detail_key(key):
+        return value
+    return None
+
+
+def sanitize_semantic_retry_prompt_issues(issues: Any) -> list[dict[str, Any]]:
+    """Build compact prompt-only issue rows; full issues remain in attempt history."""
+
+    compact_issues: list[dict[str, Any]] = []
+    for issue in issues if isinstance(issues, list) else []:
+        if not isinstance(issue, dict):
+            continue
+        compact: dict[str, Any] = {
+            "schema_version": SEMANTIC_RETRY_PROMPT_ISSUE_SCHEMA_VERSION,
+            "code": normalize_space(issue.get("code") or issue.get("reason"))
+            or "semantic_validation_failed",
+            "path": normalize_space(issue.get("path")) or "$",
+        }
+        details = _sanitize_semantic_retry_prompt_detail(
+            issue.get("details") if isinstance(issue.get("details"), dict) else {}
+        )
+        if isinstance(details, dict) and details:
+            compact["details"] = details
+        compact_issues.append(compact)
+    return compact_issues
+
+
+def sanitize_semantic_retry_prompt_diagnostics(value: Any) -> Any:
+    """Compact non-issue diagnostics used only inside a semantic retry prompt."""
+
+    compact = _sanitize_semantic_retry_prompt_detail(value)
+    return compact if compact not in (None, {}, []) else []
+
+
+def materialize_temporal_dependency_contract(
+    candidate: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Compile only omitted deterministic temporal edges, never semantic facts.
+
+    The Stage64 temporal layout freezes E1..E8 and its dependency map before the
+    API call.  A missing/empty successor edge is therefore representation, not
+    model-authored meaning.  Compilation is allowed only after the surrounding
+    role shape and previous-value chain already prove which four events form the
+    sole update chain.  Any explicit non-empty conflicting edge remains untouched
+    so the normal validators reject it.
+    """
+
+    source = copy.deepcopy(candidate)
+    expected_event_ids = [f"E{index}" for index in range(1, 9)]
+    expected_dependency_map = {
+        "E1": [],
+        "E2": ["E1"],
+        "E3": ["E2"],
+        "E4": ["E3"],
+        "E5": [],
+        "E6": [],
+        "E7": [],
+        "E8": [],
+    }
+    audit: dict[str, Any] = {
+        "schema_version": TEMPORAL_DEPENDENCY_COMPILER_VERSION,
+        "applicable": normalize_space(source.get("operation"))
+        == "temporal_state_update",
+        "pass": False,
+        "applied": False,
+        "expected_dependency_map": copy.deepcopy(expected_dependency_map),
+        "provider_dependency_map": {},
+        "materialized_event_ids": [],
+        "explicit_conflict_event_ids": [],
+        "prerequisite_failures": [],
+        "provider_payload_sha256": canonical_json_sha256(source),
+        "compiled_payload_sha256": canonical_json_sha256(source),
+    }
+    if not audit["applicable"]:
+        audit["pass"] = True
+        return source, audit
+
+    events = source.get("events") if isinstance(source.get("events"), list) else []
+    if len(events) != 8 or not all(isinstance(event, dict) for event in events):
+        audit["prerequisite_failures"].append("exactly_eight_event_objects_required")
+        return source, audit
+
+    actual_event_ids = [normalize_space(event.get("event_id")) for event in events]
+    if actual_event_ids != expected_event_ids:
+        audit["prerequisite_failures"].append("event_id_order_mismatch")
+
+    actual_time_indexes = [event.get("time_index") for event in events]
+    if any(
+        isinstance(value, bool) or not isinstance(value, int)
+        for value in actual_time_indexes
+    ) or actual_time_indexes != list(range(1, 9)):
+        audit["prerequisite_failures"].append("time_index_order_mismatch")
+
+    primary_entities = [event.get("entity") for event in events[:4]]
+    primary_slots = [event.get("slot") for event in events[:4]]
+    if (
+        not normalize_space(primary_entities[0])
+        or any(value != primary_entities[0] for value in primary_entities[1:])
+    ):
+        audit["prerequisite_failures"].append("primary_entity_mismatch")
+    if (
+        not normalize_space(primary_slots[0])
+        or any(value != primary_slots[0] for value in primary_slots[1:])
+    ):
+        audit["prerequisite_failures"].append("primary_slot_mismatch")
+
+    if "previous_value" in events[0]:
+        audit["prerequisite_failures"].append("E1_previous_value_must_be_omitted")
+    for index in range(1, 4):
+        if (
+            "previous_value" not in events[index]
+            or events[index].get("previous_value") != events[index - 1].get("value")
+        ):
+            audit["prerequisite_failures"].append(
+                f"E{index + 1}_previous_value_chain_mismatch"
+            )
+
+    dependency_values: dict[str, list[str] | None] = {}
+    for event_id, event in zip(expected_event_ids, events):
+        if "depends_on" not in event:
+            dependency_values[event_id] = []
+            audit["provider_dependency_map"][event_id] = "OMITTED"
+            continue
+        raw_dependencies = event.get("depends_on")
+        if not isinstance(raw_dependencies, list) or not all(
+            isinstance(item, str) and normalize_space(item)
+            for item in raw_dependencies
+        ):
+            dependency_values[event_id] = None
+            audit["provider_dependency_map"][event_id] = copy.deepcopy(
+                raw_dependencies
+            )
+            audit["explicit_conflict_event_ids"].append(event_id)
+            continue
+        dependency_values[event_id] = list(raw_dependencies)
+        audit["provider_dependency_map"][event_id] = list(raw_dependencies)
+        if raw_dependencies and raw_dependencies != expected_dependency_map[event_id]:
+            audit["explicit_conflict_event_ids"].append(event_id)
+
+    if audit["explicit_conflict_event_ids"]:
+        audit["prerequisite_failures"].append("explicit_dependency_conflict")
+    if audit["prerequisite_failures"]:
+        return source, audit
+
+    compiled = copy.deepcopy(source)
+    for event_id, event in zip(expected_event_ids, compiled["events"]):
+        expected = expected_dependency_map[event_id]
+        observed = dependency_values[event_id]
+        if expected and observed == []:
+            event["depends_on"] = copy.deepcopy(expected)
+            audit["materialized_event_ids"].append(event_id)
+    audit["pass"] = True
+    audit["applied"] = bool(audit["materialized_event_ids"])
+    audit["compiled_payload_sha256"] = canonical_json_sha256(compiled)
+    return compiled, audit
 
 
 def legacy_alignment_for_graph_prompt(
@@ -4312,6 +6493,66 @@ def normalize_api_dialogue_payload(candidate: dict[str, Any]) -> tuple[dict[str,
 FORMAL_DIALOGUE_SEGMENT_BARE_LIST_NORMALIZER_SCHEMA_VERSION = (
     "formal_dialogue_segment_bare_list_wrapper_v1"
 )
+TRUTH_DISCOURSE_SEGMENT_BARE_LIST_NORMALIZER_SCHEMA_VERSION = (
+    "truth_discourse_segment_bare_list_wrapper_v1"
+)
+
+
+def normalize_truth_discourse_segment_bare_list_payload(
+    candidate: Any,
+) -> tuple[Any, dict[str, Any]]:
+    """Wrap a valid bare Truth-first turn list without editing its content."""
+
+    diagnostics: dict[str, Any] = {
+        "truth_discourse_segment_bare_list_normalizer_schema_version": (
+            TRUTH_DISCOURSE_SEGMENT_BARE_LIST_NORMALIZER_SCHEMA_VERSION
+        ),
+        "truth_discourse_segment_bare_list_normalizer_used": False,
+        "truth_discourse_segment_bare_list_normalizer_failure": False,
+        "truth_discourse_segment_bare_list_item_count": (
+            len(candidate) if isinstance(candidate, list) else None
+        ),
+        "truth_discourse_segment_bare_list_original_sha256": None,
+        "truth_discourse_segment_bare_list_wrapped_sha256": None,
+        "truth_discourse_segment_bare_list_content_preserved": False,
+        "truth_discourse_segment_bare_list_reject_reason": None,
+    }
+
+    def reject(reason: str) -> tuple[Any, dict[str, Any]]:
+        diagnostics["truth_discourse_segment_bare_list_normalizer_failure"] = True
+        diagnostics["truth_discourse_segment_bare_list_reject_reason"] = reason
+        return candidate, diagnostics
+
+    if not isinstance(candidate, list) or not candidate:
+        return reject("payload_not_nonempty_bare_list")
+    for index, turn in enumerate(candidate):
+        if not isinstance(turn, dict) or set(turn) != {
+            "turn_slot_id",
+            "context_sentences",
+        }:
+            return reject(f"turn_{index}_schema_mismatch")
+        if not normalize_space(turn.get("turn_slot_id")):
+            return reject(f"turn_{index}_missing_slot_id")
+        context = turn.get("context_sentences")
+        if not isinstance(context, list) or not context or not all(
+            isinstance(item, str) and normalize_space(item) for item in context
+        ):
+            return reject(f"turn_{index}_invalid_context_sentences")
+    original_sha = canonical_json_sha256(candidate)
+    wrapped = {"turns": copy.deepcopy(candidate)}
+    diagnostics.update(
+        {
+            "truth_discourse_segment_bare_list_normalizer_used": True,
+            "truth_discourse_segment_bare_list_original_sha256": original_sha,
+            "truth_discourse_segment_bare_list_wrapped_sha256": (
+                canonical_json_sha256(wrapped["turns"])
+            ),
+            "truth_discourse_segment_bare_list_content_preserved": (
+                canonical_json_sha256(wrapped["turns"]) == original_sha
+            ),
+        }
+    )
+    return wrapped, diagnostics
 
 
 def normalize_formal_dialogue_segment_bare_list_payload(
@@ -4441,11 +6682,7 @@ def graph_cache_key_for_attempt(
         ],
         length=24,
     )
-    semantic_parent_graph = (
-        seed_row.get("semantic_parent_graph")
-        if isinstance(seed_row.get("semantic_parent_graph"), dict)
-        else {}
-    )
+    semantic_parent_graph = _semantic_parent_graph_from_seed(seed_row)
     payload = {
         "parent_sample_id": seed_row.get("sample_id") or seed_row.get("source_id"),
         "parent_dialogue_fingerprint": parent_dialogue_fingerprint,
@@ -4462,7 +6699,11 @@ def graph_cache_key_for_attempt(
         "planner_profile_version": "boundary_calibrated_item_planner_v1",
         "query_conditioned_graph_expansion": bool(getattr(api_args, "query_conditioned_graph_expansion", False)),
         "stage64_qa_operation": stage64_target.get("qa_operation"),
-        "stage64_answer_type": stage64_target.get("answer_type"),
+        # ``preferred_answer_type`` is the immutable formal Stage3 target.
+        # The older ``answer_type`` spelling is not populated by the target
+        # ledger, so using it here allowed a graph cached for one answer type
+        # to be reused for another.
+        "stage64_answer_type": stage64_target.get("preferred_answer_type"),
         "stage64_reasoning_target": {
             field: copy.deepcopy(stage64_target.get(field))
             for field in (
@@ -4863,6 +7104,727 @@ def write_graph_cache_entry(
     write_json_atomic(cache_dir / f"{cache_key}.json", payload)
 
 
+def load_stage3_graph_artifact(path: str | Path) -> dict[str, Any]:
+    """Load one externally materialized, immutable Stage3 graph artifact.
+
+    A successful graph proposal is independent of later dialogue realization.
+    Keeping it as a first-class artifact prevents a dialogue retry from silently
+    replacing the child graph or its anchors with a fresh API proposal.
+    """
+
+    path = Path(path)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"Could not read --fixed-stage3-graph-artifact {path}: {exc}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise ValueError("fixed Stage3 graph artifact must be one JSON object")
+    if payload.get("schema_version") != FIXED_STAGE3_GRAPH_ARTIFACT_SCHEMA_VERSION:
+        raise ValueError(
+            "fixed Stage3 graph artifact schema mismatch: "
+            f"expected {FIXED_STAGE3_GRAPH_ARTIFACT_SCHEMA_VERSION!r}"
+        )
+    required_dicts = (
+        "parent_graph",
+        "child_graph_delta",
+        "current_event_plan",
+        "anchor_ledger",
+    )
+    missing = [key for key in required_dicts if not isinstance(payload.get(key), dict)]
+    if missing:
+        raise ValueError(
+            "fixed Stage3 graph artifact is missing required object fields: "
+            + ", ".join(missing)
+        )
+    return payload
+
+
+def load_fixed_stage3_graph_artifact(api_args: argparse.Namespace) -> dict[str, Any] | None:
+    """Load the optional single-artifact smoke-test override.
+
+    Production Stage3 batches materialize one immutable artifact per target under
+    the run directory.  This legacy flag remains deliberately single-artifact:
+    it is useful for replaying one audited graph, but must never be silently
+    stretched across different parent/target pairs.
+    """
+
+    configured = normalize_space(
+        getattr(api_args, "fixed_stage3_graph_artifact", None)
+    )
+    if not configured:
+        return None
+    return load_stage3_graph_artifact(configured)
+
+
+def stage3_graph_artifact_path(
+    artifact_dir: str | Path,
+    *,
+    target_identity: str,
+) -> Path:
+    """Return the deterministic, safe per-target artifact path for a run."""
+
+    identity = normalize_space(target_identity)
+    if not re.fullmatch(r"[0-9a-f]{16,128}", identity):
+        # Target identities are hashes.  Keep a defensive fallback in case an
+        # older caller supplies another stable string.
+        identity = stable_hash(identity, length=64)
+    return Path(artifact_dir) / f"{identity}.json"
+
+
+def build_stage3_graph_artifact(
+    *,
+    seed_row: dict[str, Any],
+    current_event_plan: dict[str, Any],
+    child_graph_delta: dict[str, Any],
+    stage64_target: dict[str, Any],
+    stage64_target_identity: str,
+    source_graph_meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Materialize the immutable G3 boundary between graph and dialogue.
+
+    The artifact is written immediately after a child graph has passed its
+    semantic checks and received stable anchors, *before* any dialogue request.
+    Therefore dialogue retries can reuse the exact inherited graph rather than
+    paying for, or drifting to, a new graph proposal.
+    """
+
+    parent_graph = copy.deepcopy(_semantic_parent_graph_from_seed(seed_row))
+    plan = copy.deepcopy(current_event_plan)
+    delta = copy.deepcopy(child_graph_delta)
+    # Native graph API payloads predate the explicit artifact schema and often
+    # expose only ``graph_snapshot_id``.  Normalize the lineage identifiers at
+    # materialization time so a retry can validate the saved graph without
+    # relying on an accidental raw-payload field.
+    parent_graph_id = normalize_space(parent_graph.get("graph_id"))
+    if not normalize_space(delta.get("parent_graph_id")):
+        delta["parent_graph_id"] = parent_graph_id
+    if not normalize_space(delta.get("graph_id")):
+        delta["graph_id"] = normalize_space(
+            plan.get("graph_id") or delta.get("graph_snapshot_id")
+        )
+    target = copy.deepcopy(stage64_target)
+    target_identity = normalize_space(stage64_target_identity)
+    child_events = [
+        copy.deepcopy(event)
+        for event in (plan.get("events") or [])
+        if isinstance(event, dict)
+    ]
+    parent_events = [
+        copy.deepcopy(event)
+        for event in (parent_graph.get("events") or [])
+        if isinstance(event, dict)
+    ]
+    parent_event_evidence_turn_ids = {
+        normalize_space(event.get("event_id")): list(event.get("evidence_turn_ids") or [])
+        for event in parent_events
+        if normalize_space(event.get("event_id"))
+    }
+    event_to_anchor = copy.deepcopy(
+        plan.get("current_event_instance_to_anchor") or {}
+    )
+    anchor_to_event = copy.deepcopy(
+        plan.get("current_anchor_to_event_instance_id") or {}
+    )
+    plan_metadata = (
+        plan.get("metadata") if isinstance(plan.get("metadata"), dict) else {}
+    )
+    parent_graph_sha256 = canonical_json_sha256(parent_graph)
+    child_graph_delta_sha256 = canonical_json_sha256(delta)
+    current_event_plan_sha256 = canonical_json_sha256(plan)
+    combined_events = copy.deepcopy(parent_events) + copy.deepcopy(child_events)
+    combined_lineage_basis = {
+        "parent_graph_id": parent_graph_id,
+        "child_graph_id": normalize_space(plan.get("graph_id") or delta.get("graph_id")),
+        "parent_graph_sha256": parent_graph_sha256,
+        "child_graph_delta_sha256": child_graph_delta_sha256,
+        "current_event_plan_sha256": current_event_plan_sha256,
+        "parent_event_count": len(parent_events),
+        "child_event_count": len(child_events),
+    }
+    combined_lineage_sha256 = canonical_json_sha256(combined_lineage_basis)
+    combined_lineage_graph = {
+        "schema_version": "stage3_lineage_graph_v2",
+        "graph_id": f"stage3_lineage:{combined_lineage_sha256[:24]}",
+        "parent_graph_id": parent_graph_id,
+        "child_graph_id": normalize_space(plan.get("graph_id") or delta.get("graph_id")),
+        "parent_graph_schema_version": normalize_space(
+            parent_graph.get("schema_version")
+        ),
+        "parent_event_count": len(parent_events),
+        "child_event_count": len(child_events),
+        "event_count": len(combined_events),
+        "parent_graph_sha256": parent_graph_sha256,
+        "child_graph_delta_sha256": child_graph_delta_sha256,
+        "current_event_plan_sha256": current_event_plan_sha256,
+        "combined_lineage_sha256": combined_lineage_sha256,
+        "parent_max_global_time_index": (
+            stage3_parent_continuity.parent_max_global_time_index(parent_events)
+        ),
+        "parent_events": parent_events,
+        "child_events": child_events,
+        # Canonical reader field for promotion into the next Stage3 round.
+        "events": combined_events,
+        "edges": copy.deepcopy(parent_graph.get("edges") or []),
+        "parent_continuity": copy.deepcopy(
+            plan_metadata.get("parent_continuity") or {}
+        ),
+        "parent_event_retrieval": copy.deepcopy(
+            plan_metadata.get("parent_event_retrieval") or {}
+        ),
+    }
+    lineage_hashes = {
+        "parent_graph_sha256": parent_graph_sha256,
+        "child_graph_delta_sha256": child_graph_delta_sha256,
+        "current_event_plan_sha256": current_event_plan_sha256,
+        "combined_lineage_sha256": combined_lineage_sha256,
+    }
+    artifact_core = {
+        "generation_contract": (
+            TRUTH_FIRST_GENERATION_CONTRACT
+            if isinstance(plan.get("_truth_first_skeleton"), dict)
+            and isinstance(plan.get("_truth_first_materialized"), dict)
+            else "stage3_legacy_graph_first_v1"
+        ),
+        "seed_sample_id": normalize_space(
+            seed_row.get("sample_id") or seed_row.get("source_id")
+        ),
+        "parent_graph": parent_graph,
+        "child_graph_delta": delta,
+        "current_event_plan": plan,
+        "stage64_target": target,
+        "stage64_target_identity": target_identity,
+        "lineage_hashes": lineage_hashes,
+    }
+    return {
+        "schema_version": FIXED_STAGE3_GRAPH_ARTIFACT_SCHEMA_VERSION,
+        "artifact_id": "stage3_materialized_" + stable_hash(artifact_core, length=24),
+        **artifact_core,
+        "anchor_ledger": {
+            "child_event_instance_to_marker": event_to_anchor,
+            "child_marker_to_event_instance": anchor_to_event,
+            "parent_event_evidence_turn_ids": parent_event_evidence_turn_ids,
+        },
+        "combined_lineage_graph": combined_lineage_graph,
+        "source_graph_meta": copy.deepcopy(source_graph_meta or {}),
+    }
+
+
+FIXED_STAGE3_GRAPH_REUSE_AUDIT_META_FIELDS = (
+    "semantic_graph_v2_quality",
+    "temporal_dependency_compiler",
+    "parent_child_continuity_audit",
+    "parent_continuity",
+    "parent_event_retrieval",
+    "graph_parent_novelty_gate",
+    "graph_parent_prompt_audit",
+    "normalized_visibility_pre_dialogue_gate",
+    "normalized_graph_snapshot_hash",
+    "truth_first_generate_by_construction",
+    "binding_validation",
+    "materialization_admission",
+    "truth_skeleton_sha256",
+    "truth_manifest_sha256",
+    "truth_graph_sha256",
+)
+
+
+TRUTH_FIRST_EVENT_FIELDS = (
+    "event_id",
+    "entity",
+    "slot",
+    "value",
+    "status",
+    "event_type",
+    "node_type",
+    "constructor_role",
+    "claim_edge_role",
+    "qa_eligible",
+    "answer_bearing",
+    "answer_role",
+    "dependency_edge_role",
+    "time_index",
+    "local_time_index",
+    "global_time_index",
+    "session_index",
+    "depends_on",
+    "set_membership",
+    "scope",
+    "depends_on_parent_event_ids",
+    "parent_topic_anchor_event_ids",
+    "parent_relation",
+)
+
+
+def truth_first_stage3_graph_artifact_issues(
+    artifact: dict[str, Any],
+    *,
+    stage64_target: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Re-admit a run-local Truth-first artifact without a legacy fallback."""
+
+    issues: list[dict[str, Any]] = []
+    if artifact.get("generation_contract") != TRUTH_FIRST_GENERATION_CONTRACT:
+        issues.append({"code": "truth_first_artifact_generation_contract_mismatch"})
+    plan = artifact.get("current_event_plan")
+    plan = plan if isinstance(plan, dict) else {}
+    skeleton = plan.get("_truth_first_skeleton")
+    materialized = plan.get("_truth_first_materialized")
+    if not isinstance(skeleton, dict):
+        issues.append({"code": "truth_first_artifact_skeleton_missing"})
+    if not isinstance(materialized, dict):
+        issues.append({"code": "truth_first_artifact_materialization_missing"})
+    if isinstance(skeleton, dict) and isinstance(materialized, dict):
+        admission = stage3_truth_constructors.validate_materialized_truth(
+            skeleton, materialized
+        )
+        if admission.get("pass") is not True:
+            issues.append(
+                {
+                    "code": "truth_first_artifact_manifest_admission_failed",
+                    "issues": copy.deepcopy(admission.get("issues") or []),
+                }
+            )
+        manifest = (
+            materialized.get("truth_manifest")
+            if isinstance(materialized.get("truth_manifest"), dict)
+            else {}
+        )
+        if isinstance(stage64_target, dict) and stable_hash(
+            skeleton.get("immutable_stage64_target"), length=64
+        ) != stable_hash(stage64_target, length=64):
+            issues.append({"code": "truth_first_artifact_target_mismatch"})
+        source_meta = (
+            artifact.get("source_graph_meta")
+            if isinstance(artifact.get("source_graph_meta"), dict)
+            else {}
+        )
+        if source_meta.get("truth_first_generate_by_construction") is not True:
+            issues.append({"code": "truth_first_artifact_source_provenance_missing"})
+        expected_hashes = {
+            "truth_skeleton_sha256": skeleton.get("skeleton_sha256"),
+            "truth_manifest_sha256": manifest.get("manifest_sha256"),
+            "truth_graph_sha256": manifest.get("graph_sha256"),
+        }
+        metadata = plan.get("metadata") if isinstance(plan.get("metadata"), dict) else {}
+        for field, expected in expected_hashes.items():
+            if not normalize_space(expected):
+                issues.append({"code": f"truth_first_artifact_{field}_missing"})
+            if normalize_space(source_meta.get(field)) != normalize_space(expected):
+                issues.append({"code": f"truth_first_artifact_source_{field}_mismatch"})
+            metadata_field = (
+                "truth_skeleton_sha256"
+                if field == "truth_skeleton_sha256"
+                else "truth_manifest_sha256"
+                if field == "truth_manifest_sha256"
+                else None
+            )
+            if metadata_field and normalize_space(metadata.get(metadata_field)) != normalize_space(expected):
+                issues.append({"code": f"truth_first_artifact_plan_{field}_mismatch"})
+        if normalize_space(plan.get("_truth_first_binding_payload_sha256")) != normalize_space(
+            manifest.get("binding_payload_sha256")
+        ):
+            issues.append({"code": "truth_first_artifact_binding_hash_mismatch"})
+
+        frozen_graph = (
+            materialized.get("graph")
+            if isinstance(materialized.get("graph"), dict)
+            else {}
+        )
+        frozen_events = {
+            normalize_space(event.get("event_id")): event
+            for event in frozen_graph.get("events") or []
+            if isinstance(event, dict) and normalize_space(event.get("event_id"))
+        }
+        plan_events = {
+            normalize_space(event.get("event_id")): event
+            for event in plan.get("events") or []
+            if isinstance(event, dict) and normalize_space(event.get("event_id"))
+        }
+        if set(frozen_events) != set(plan_events):
+            issues.append({"code": "truth_first_artifact_event_set_mismatch"})
+        else:
+            for event_id in sorted(frozen_events):
+                frozen_projection = {
+                    field: copy.deepcopy(frozen_events[event_id].get(field))
+                    for field in TRUTH_FIRST_EVENT_FIELDS
+                    if field in frozen_events[event_id]
+                }
+                plan_projection = {
+                    field: copy.deepcopy(plan_events[event_id].get(field))
+                    for field in TRUTH_FIRST_EVENT_FIELDS
+                    if field in frozen_events[event_id]
+                }
+                if canonical_json_sha256(frozen_projection) != canonical_json_sha256(
+                    plan_projection
+                ):
+                    issues.append(
+                        {
+                            "code": "truth_first_artifact_event_truth_mismatch",
+                            "event_id": event_id,
+                        }
+                    )
+        for field in ("operation", "parent_graph_id", "relation_claims"):
+            if canonical_json_sha256(plan.get(field)) != canonical_json_sha256(
+                frozen_graph.get(field)
+            ):
+                issues.append({"code": f"truth_first_artifact_graph_{field}_mismatch"})
+    return issues
+
+
+def fixed_stage3_graph_source_gate_issues(
+    artifact: dict[str, Any],
+    *,
+    expected_operation: str | None,
+) -> list[dict[str, Any]]:
+    """Validate the exact semantic gate provenance retained by an artifact."""
+
+    source_meta = (
+        artifact.get("source_graph_meta")
+        if isinstance(artifact.get("source_graph_meta"), dict)
+        else {}
+    )
+    quality = (
+        source_meta.get("semantic_graph_v2_quality")
+        if isinstance(source_meta.get("semantic_graph_v2_quality"), dict)
+        else None
+    )
+    if quality is None:
+        return [{"code": "fixed_graph_source_semantic_gate_missing"}]
+
+    issues: list[dict[str, Any]] = []
+    if quality.get("pass") is not True:
+        issues.append({"code": "fixed_graph_source_semantic_gate_failed"})
+    gate_version = normalize_space(quality.get("gate_version"))
+    if gate_version != GRAPH_CACHE_SCHEMA_VERSION:
+        issues.append(
+            {
+                "code": "fixed_graph_source_semantic_gate_version_mismatch",
+                "expected": GRAPH_CACHE_SCHEMA_VERSION,
+                "actual": gate_version,
+            }
+        )
+    expected = normalize_space(expected_operation)
+    actual = normalize_space(quality.get("qa_operation"))
+    if expected and actual != expected:
+        issues.append(
+            {
+                "code": "fixed_graph_source_semantic_gate_operation_mismatch",
+                "expected": expected,
+                "actual": actual,
+            }
+        )
+    return issues
+
+
+def fixed_stage3_graph_artifact_reuse_graph_meta(
+    artifact: dict[str, Any],
+    *,
+    expected_operation: str | None,
+    artifact_source: str | None,
+    artifact_path: str | Path | None,
+    truth_first_mode: bool = False,
+) -> dict[str, Any]:
+    """Build reuse metadata without losing or double-counting source API audits."""
+
+    gate_issues = (
+        truth_first_stage3_graph_artifact_issues(
+            artifact,
+            stage64_target=(
+                artifact.get("stage64_target")
+                if isinstance(artifact.get("stage64_target"), dict)
+                else None
+            ),
+        )
+        if truth_first_mode
+        else fixed_stage3_graph_source_gate_issues(
+            artifact,
+            expected_operation=expected_operation,
+        )
+    )
+    if gate_issues:
+        raise NativeGraphDialogueReject(
+            "fixed Stage3 graph artifact lacks valid semantic gate provenance: "
+            f"{gate_issues}"
+        )
+    source_meta = artifact["source_graph_meta"]
+    graph_meta = {
+        key: copy.deepcopy(source_meta[key])
+        for key in FIXED_STAGE3_GRAPH_REUSE_AUDIT_META_FIELDS
+        if key in source_meta
+    }
+    graph_meta.update(
+        {
+            "used": True,
+            "call_kind": "fixed_stage3_graph_artifact",
+            "cache_hit": True,
+            "api_called": False,
+            "artifact_id": normalize_space(artifact.get("artifact_id")),
+            "artifact_source": normalize_space(artifact_source),
+            "artifact_path": str(artifact_path) if artifact_path else "",
+            "stage64_graph_quality": {
+                "pass": True,
+                "qa_operation": normalize_space(expected_operation),
+                "gate_version": GRAPH_CACHE_SCHEMA_VERSION,
+                "issues": [],
+            },
+            "truth_first_generate_by_construction": bool(truth_first_mode),
+        }
+    )
+    return graph_meta
+
+
+def fixed_stage3_graph_artifact_issues(
+    artifact: dict[str, Any],
+    *,
+    seed_row: dict[str, Any],
+    stage64_target_identity: str | None,
+    stage64_target: dict[str, Any] | None,
+    truth_first_mode: bool = False,
+) -> list[dict[str, Any]]:
+    """Fail closed when a fixed graph does not belong to this exact lineage slot."""
+
+    issues: list[dict[str, Any]] = []
+    seed_id = normalize_space(seed_row.get("sample_id") or seed_row.get("source_id"))
+    artifact_seed_id = normalize_space(artifact.get("seed_sample_id"))
+    if not seed_id or artifact_seed_id != seed_id:
+        issues.append(
+            {
+                "code": "fixed_graph_seed_mismatch",
+                "expected": seed_id,
+                "actual": artifact_seed_id,
+            }
+        )
+    expected_target_id = normalize_space(stage64_target_identity)
+    artifact_target_id = normalize_space(artifact.get("stage64_target_identity"))
+    if expected_target_id and artifact_target_id != expected_target_id:
+        issues.append(
+            {
+                "code": "fixed_graph_target_identity_mismatch",
+                "expected": expected_target_id,
+                "actual": artifact_target_id,
+            }
+        )
+    artifact_target = (
+        artifact.get("stage64_target")
+        if isinstance(artifact.get("stage64_target"), dict)
+        else {}
+    )
+    if isinstance(stage64_target, dict) and stage64_target:
+        if stable_hash(artifact_target, length=64) != stable_hash(
+            stage64_target, length=64
+        ):
+            issues.append({"code": "fixed_graph_target_payload_mismatch"})
+    expected_operation = normalize_space(
+        (
+            stage64_target.get("qa_operation")
+            if isinstance(stage64_target, dict)
+            else artifact_target.get("qa_operation")
+        )
+    )
+    if truth_first_mode:
+        issues.extend(
+            truth_first_stage3_graph_artifact_issues(
+                artifact,
+                stage64_target=stage64_target,
+            )
+        )
+    else:
+        issues.extend(
+            fixed_stage3_graph_source_gate_issues(
+                artifact,
+                expected_operation=expected_operation,
+            )
+        )
+
+    semantic_parent = _semantic_parent_graph_from_seed(seed_row)
+    expected_parent_id = normalize_space(semantic_parent.get("graph_id"))
+    parent_graph = artifact.get("parent_graph") or {}
+    child_delta = artifact.get("child_graph_delta") or {}
+    if normalize_space(parent_graph.get("graph_id")) != expected_parent_id:
+        issues.append(
+            {
+                "code": "fixed_graph_parent_snapshot_mismatch",
+                "expected": expected_parent_id,
+                "actual": normalize_space(parent_graph.get("graph_id")),
+            }
+        )
+    expected_parent_sha256 = canonical_json_sha256(semantic_parent)
+    artifact_parent_sha256 = canonical_json_sha256(parent_graph)
+    if artifact_parent_sha256 != expected_parent_sha256:
+        issues.append(
+            {
+                "code": "fixed_graph_parent_full_hash_mismatch",
+                "expected": expected_parent_sha256,
+                "actual": artifact_parent_sha256,
+            }
+        )
+    lineage_hashes = (
+        artifact.get("lineage_hashes")
+        if isinstance(artifact.get("lineage_hashes"), dict)
+        else {}
+    )
+    declared_parent_sha256 = normalize_space(
+        lineage_hashes.get("parent_graph_sha256")
+    )
+    if declared_parent_sha256 and declared_parent_sha256 != artifact_parent_sha256:
+        issues.append(
+            {
+                "code": "fixed_graph_declared_parent_hash_invalid",
+                "expected": artifact_parent_sha256,
+                "actual": declared_parent_sha256,
+            }
+        )
+    declared_child_sha256 = normalize_space(
+        lineage_hashes.get("child_graph_delta_sha256")
+    )
+    actual_child_sha256 = canonical_json_sha256(child_delta)
+    if (
+        (truth_first_mode and not declared_child_sha256)
+        or (
+            declared_child_sha256
+            and declared_child_sha256 != actual_child_sha256
+        )
+    ):
+        issues.append(
+            {
+                "code": "fixed_graph_declared_child_hash_invalid",
+                "expected": actual_child_sha256,
+                "actual": declared_child_sha256,
+            }
+        )
+    declared_plan_sha256 = normalize_space(
+        lineage_hashes.get("current_event_plan_sha256")
+    )
+    actual_plan_sha256 = canonical_json_sha256(artifact.get("current_event_plan") or {})
+    if (
+        (truth_first_mode and not declared_plan_sha256)
+        or (declared_plan_sha256 and declared_plan_sha256 != actual_plan_sha256)
+    ):
+        issues.append(
+            {
+                "code": "fixed_graph_declared_plan_hash_invalid",
+                "expected": actual_plan_sha256,
+                "actual": declared_plan_sha256,
+            }
+        )
+    combined_lineage = (
+        artifact.get("combined_lineage_graph")
+        if isinstance(artifact.get("combined_lineage_graph"), dict)
+        else {}
+    )
+    lineage_basis = {
+        "parent_graph_id": normalize_space(parent_graph.get("graph_id")),
+        "child_graph_id": normalize_space(
+            (artifact.get("current_event_plan") or {}).get("graph_id")
+            or child_delta.get("graph_id")
+        ),
+        "parent_graph_sha256": artifact_parent_sha256,
+        "child_graph_delta_sha256": actual_child_sha256,
+        "current_event_plan_sha256": actual_plan_sha256,
+        "parent_event_count": len(parent_graph.get("events") or []),
+        "child_event_count": len(
+            (artifact.get("current_event_plan") or {}).get("events") or []
+        ),
+    }
+    actual_combined_sha256 = canonical_json_sha256(lineage_basis)
+    declared_combined_sha256 = normalize_space(
+        lineage_hashes.get("combined_lineage_sha256")
+    )
+    combined_graph_sha256 = normalize_space(
+        combined_lineage.get("combined_lineage_sha256")
+    )
+    if (
+        (truth_first_mode and not declared_combined_sha256)
+        or (
+            declared_combined_sha256
+            and declared_combined_sha256 != actual_combined_sha256
+        )
+        or (
+            combined_graph_sha256
+            and combined_graph_sha256 != actual_combined_sha256
+        )
+    ):
+        issues.append(
+            {
+                "code": "fixed_graph_declared_combined_lineage_hash_invalid",
+                "expected": actual_combined_sha256,
+                "actual": declared_combined_sha256,
+            }
+        )
+    if normalize_space(child_delta.get("parent_graph_id")) != expected_parent_id:
+        issues.append(
+            {
+                "code": "fixed_graph_child_parent_id_mismatch",
+                "expected": expected_parent_id,
+                "actual": normalize_space(child_delta.get("parent_graph_id")),
+            }
+        )
+
+    plan = artifact.get("current_event_plan") or {}
+    if _is_v4_memory_parent(seed_row):
+        parent_max_time = stage3_parent_continuity.parent_max_global_time_index(
+            _graph_parent_source_events(seed_row)
+        )
+        for index, event in enumerate(plan.get("events") or []):
+            if not isinstance(event, dict):
+                continue
+            local_time = event.get("local_time_index")
+            global_time = event.get("global_time_index")
+            time_index = event.get("time_index")
+            if (
+                isinstance(local_time, bool)
+                or not isinstance(local_time, int)
+                or local_time != time_index
+            ):
+                issues.append(
+                    {
+                        "code": "fixed_graph_child_local_time_invalid",
+                        "event_index": index,
+                    }
+                )
+            if (
+                isinstance(global_time, bool)
+                or not isinstance(global_time, int)
+                or global_time <= parent_max_time
+            ):
+                issues.append(
+                    {
+                        "code": "fixed_graph_child_global_time_not_after_parent",
+                        "event_index": index,
+                        "parent_max_global_time_index": parent_max_time,
+                    }
+                )
+    event_to_anchor = plan.get("current_event_instance_to_anchor")
+    anchor_to_event = plan.get("current_anchor_to_event_instance_id")
+    event_ids = {
+        normalize_space(event.get("event_instance_id"))
+        for event in (plan.get("events") or [])
+        if isinstance(event, dict) and normalize_space(event.get("event_instance_id"))
+    }
+    if not isinstance(event_to_anchor, dict) or not isinstance(anchor_to_event, dict):
+        issues.append({"code": "fixed_graph_anchor_maps_missing"})
+    else:
+        mapped_ids = {normalize_space(value) for value in anchor_to_event.values()}
+        if set(event_to_anchor) != event_ids or mapped_ids != event_ids:
+            issues.append(
+                {
+                    "code": "fixed_graph_anchor_coverage_mismatch",
+                    "event_count": len(event_ids),
+                    "event_to_anchor_count": len(event_to_anchor),
+                    "anchor_to_event_count": len(anchor_to_event),
+                }
+            )
+        elif any(
+            normalize_space(anchor_to_event.get(normalize_space(anchor)))
+            != normalize_space(event_id)
+            for event_id, anchor in event_to_anchor.items()
+        ):
+            issues.append({"code": "fixed_graph_anchor_maps_not_inverse"})
+    return issues
+
+
 def call_raw_json_api(
     args: argparse.Namespace,
     prompt_payload: dict[str, Any],
@@ -4873,6 +7835,7 @@ def call_raw_json_api(
     max_tokens_override: int | None = None,
     max_retries_override: int | None = None,
     temperature_override: float | None = None,
+    include_raw_response: bool = False,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     api_key = (
         getattr(args, "challenger_api_key", None)
@@ -4903,6 +7866,12 @@ def call_raw_json_api(
     )
     errors: list[dict[str, Any]] = []
     previous_error: dict[str, Any] | None = None
+    usage_totals = {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+    }
+    usage_recorded = False
     for attempt in range(1, max_retries + 2):
         request_payload = build_json_request(
             args,
@@ -4912,7 +7881,18 @@ def call_raw_json_api(
             max_tokens_override,
             temperature_override,
         )
-        if call_kind in {"api_graph_expansion", "api_formal_dialogue_segment"}:
+        if call_kind in {
+            "api_graph_expansion",
+            "api_formal_dialogue_segment",
+            "api_dialogue_expansion",
+            "api_dialogue_length_continuation",
+            "api_visible_claim_append_repair",
+            "api_truth_content_binding",
+            "api_truth_single_scene_probe",
+            "api_truth_discourse_generation",
+            "api_truth_discourse_act_generation",
+            "api_truth_discourse_segment_generation",
+        }:
             request_payload["response_format"] = {"type": "json_object"}
         try:
             if hasattr(old_gate, "post_json_with_curl"):
@@ -4929,6 +7909,10 @@ def call_raw_json_api(
             content = str(data["choices"][0]["message"]["content"])
             finish_reason = data["choices"][0].get("finish_reason")
             usage = copy.deepcopy(data.get("usage")) if isinstance(data.get("usage"), dict) else None
+            if isinstance(usage, dict):
+                usage_recorded = True
+                for key in usage_totals:
+                    usage_totals[key] += int(usage.get(key) or 0)
             candidate, parsed_json = old_gate.json_candidate_from_text(content)
             normalizer_diag: dict[str, Any] = {}
             if (
@@ -4951,6 +7935,31 @@ def call_raw_json_api(
                             "formal_dialogue_segment_bare_list_normalizer_used"
                         )
                     )
+            if (
+                (not parsed_json or not isinstance(candidate, dict))
+                and call_kind
+                in {
+                    "api_truth_discourse_act_generation",
+                    "api_truth_discourse_segment_generation",
+                }
+                and required_keys in {(), ("turns",)}
+            ):
+                try:
+                    bare_candidate = json.loads(content.strip())
+                except json.JSONDecodeError:
+                    bare_candidate = None
+                if isinstance(bare_candidate, list):
+                    candidate, normalizer_diag = (
+                        normalize_truth_discourse_segment_bare_list_payload(
+                            bare_candidate
+                        )
+                    )
+                    parsed_json = bool(
+                        isinstance(candidate, dict)
+                        and normalizer_diag.get(
+                            "truth_discourse_segment_bare_list_normalizer_used"
+                        )
+                    )
             if not parsed_json or not isinstance(candidate, dict):
                 retry_error = {
                     "attempt": attempt,
@@ -4967,7 +7976,18 @@ def call_raw_json_api(
                         "raw_response": content,
                         "usage": usage,
                         "json_response_format_requested": call_kind
-                        in {"api_graph_expansion", "api_formal_dialogue_segment"},
+                        in {
+                            "api_graph_expansion",
+                            "api_formal_dialogue_segment",
+                            "api_dialogue_expansion",
+                            "api_dialogue_length_continuation",
+                            "api_visible_claim_append_repair",
+                            "api_truth_content_binding",
+                            "api_truth_single_scene_probe",
+                            "api_truth_discourse_generation",
+                            "api_truth_discourse_act_generation",
+                            "api_truth_discourse_segment_generation",
+                        },
                     }
                 )
                 previous_error = retry_error
@@ -4991,13 +8011,20 @@ def call_raw_json_api(
                         "base_url": base_url,
                         "previous_errors": errors,
                         "finish_reason": finish_reason,
-                        "usage": usage,
+                        "usage": (
+                            copy.deepcopy(usage_totals)
+                            if usage_recorded
+                            else None
+                        ),
+                        "last_attempt_usage": usage,
                         "max_retries_override": max_retries_override,
                         "temperature_override": temperature_override,
                         "effective_temperature": effective_temperature,
                     }
                     if normalizer_diag:
                         meta["normalizer_diagnostics"] = normalizer_diag
+                    if include_raw_response:
+                        meta["raw_response"] = content
                     return candidate, meta
                 retry_error = {
                     "attempt": attempt,
@@ -5036,6 +8063,7 @@ def call_raw_json_api(
         "base_url": base_url,
         "error_type": last_error.get("error_type", "api_failed"),
         "errors": errors,
+        "usage": copy.deepcopy(usage_totals) if usage_recorded else None,
         "max_retries_override": max_retries_override,
         "temperature_override": temperature_override,
         "effective_temperature": effective_temperature,
@@ -5282,6 +8310,11 @@ def normalize_current_event_plan(
     raw = raw_plan if isinstance(raw_plan, dict) else {}
     raw_events = raw.get("events") if isinstance(raw.get("events"), list) else []
     semantic_graph_v2 = _semantic_graph_v2_enabled(policy)
+    stage64_operation = normalize_space(
+        ((policy or {}).get("stage64_target") or {}).get("qa_operation")
+        if isinstance((policy or {}).get("stage64_target"), dict)
+        else ""
+    ) or normalize_space(raw.get("operation"))
     if not semantic_graph_v2:
         if len(raw_events) < 4:
             raw_events = _fallback_event_specs(seed_row, question_type, attack_skill)
@@ -5292,11 +8325,7 @@ def normalize_current_event_plan(
         raw_events = _enforce_qtype_status_prerequisites(raw_events, question_type)
 
     graph_snapshot_id = normalize_space(raw.get("graph_id") or raw.get("graph_snapshot_id")) or f"{round_id}:S{sample_index:04d}:graph"
-    semantic_parent = (
-        seed_row.get("semantic_parent_graph")
-        if isinstance(seed_row.get("semantic_parent_graph"), dict)
-        else {}
-    )
+    semantic_parent = _semantic_parent_graph_from_seed(seed_row)
     parent_graph_id = normalize_space(
         raw.get("parent_graph_id")
         or semantic_parent.get("graph_id")
@@ -5314,7 +8343,88 @@ def normalize_current_event_plan(
             if semantic_graph_v2
             else _coerce_status(raw_event.get("status"))
         )
-        event_type = _coerce_event_type(raw_event.get("event_type") or raw_event.get("role"), status)
+        raw_scope = (
+            copy.deepcopy(raw_event.get("scope"))
+            if isinstance(raw_event.get("scope"), dict)
+            else None
+        )
+        typed_visibility = (
+            _visibility_permission_projection(raw_event)
+            if semantic_graph_v2
+            and stage64_operation == "visibility"
+            and raw_scope is not None
+            else None
+        )
+        if typed_visibility is not None:
+            typed_visibility["status"] = status
+        raw_membership = (
+            copy.deepcopy(raw_event.get("set_membership"))
+            if isinstance(raw_event.get("set_membership"), dict)
+            else None
+        )
+        typed_membership = None
+        if raw_membership is not None:
+            typed_membership = {
+                "entity": raw_event.get("entity"),
+                "slot": raw_event.get("slot"),
+                "member": raw_event.get("value"),
+                "set_id": raw_membership.get("set_id"),
+                "condition": raw_membership.get("condition"),
+                "included": raw_membership.get("included"),
+                "status": status,
+            }
+        typed_cause = None
+        if semantic_graph_v2 and stage64_operation == "cause_consequence":
+            raw_dependencies = raw_event.get("depends_on")
+            if not isinstance(raw_dependencies, list):
+                raw_dependencies = (
+                    [raw_dependencies] if raw_dependencies is not None else []
+                )
+            dependency_ids = []
+            for dependency in raw_dependencies:
+                if isinstance(dependency, dict):
+                    dependency_id = normalize_space(
+                        dependency.get("event_id")
+                        or dependency.get("target_event_id")
+                        or dependency.get("id")
+                    )
+                else:
+                    dependency_id = normalize_space(dependency)
+                if dependency_id:
+                    dependency_ids.append(dependency_id)
+            if len(dependency_ids) == 1:
+                cause_event = next(
+                    (
+                        candidate
+                        for candidate in raw_events
+                        if isinstance(candidate, dict)
+                        and normalize_space(
+                            candidate.get("event_id")
+                            or candidate.get("event_instance_id")
+                            or candidate.get("id")
+                        )
+                        == dependency_ids[0]
+                    ),
+                    None,
+                )
+                if isinstance(cause_event, dict):
+                    typed_cause = {
+                        "cause_entity": cause_event.get("entity"),
+                        "cause_slot": cause_event.get("slot"),
+                        "cause_value": cause_event.get("value"),
+                        "effect_entity": raw_event.get("entity"),
+                        "effect_slot": raw_event.get("slot"),
+                        "effect_value": raw_event.get("value"),
+                        "condition": raw_event.get("condition"),
+                        "status": status,
+                    }
+        event_type = (
+            VISIBILITY_PERMISSION_EVENT_TYPE
+            if typed_visibility is not None
+            else _coerce_event_type(
+                raw_event.get("event_type") or raw_event.get("role"), status
+            )
+        )
         entity = normalize_space(raw_event.get("entity") or raw_event.get("actor") or seed_row.get("source_id") or "conversation")
         slot = normalize_space(raw_event.get("slot") or raw_event.get("field") or "memory_state")
         raw_value = raw_event.get("value")
@@ -5347,26 +8457,45 @@ def normalize_current_event_plan(
         support_claim = normalize_space(
             ((raw_event.get("alignment_hints") or {}) if isinstance(raw_event.get("alignment_hints"), dict) else {}).get("support_claim")
         )
-        if not support_claim:
-            support_claim = f"{entity} / {slot}: {value_text}."
-            if status != "active":
-                support_claim += f" Mark this fact as {status.replace('_', ' ')}."
-        if status in STATUS_ALIASES:
-            support_norm = normalize_text(support_claim)
-            has_status_language = any(normalize_text(alias) in support_norm for alias in STATUS_ALIASES[status])
-            if not has_status_language:
-                if status == "belief":
-                    support_claim += " This is a belief, not an active current state."
-                elif status == "report":
-                    support_claim += " This is only a report, not an active current state."
-                elif status == "scope_limited":
-                    support_claim += " This is scope limited, not a generally visible active state."
-                elif status == "delayed_not_active":
-                    support_claim += " This is delayed and not active yet."
-                else:
-                    support_claim += f" This is {status.replace('_', ' ')} and not an active current state."
+        if semantic_graph_v2:
+            # Never synthesize an evidence contract from ``entity / slot`` or
+            # ``Mark this fact ...``.  Those strings are graph schema, not a
+            # natural dialogue claim, and caused otherwise good API turns to
+            # fail exact sidecar alignment in Stage3.
+            support_claim = semantic_event_dialogue_support_claim(
+                entity,
+                slot,
+                value_text,
+                status,
+                typed_visibility=typed_visibility,
+                typed_membership=typed_membership,
+                typed_cause=typed_cause,
+            )
+        else:
+            if not support_claim:
+                support_claim = f"{entity} / {slot}: {value_text}."
+                if status != "active":
+                    support_claim += f" Mark this fact as {status.replace('_', ' ')}."
+            if status in STATUS_ALIASES:
+                support_norm = normalize_text(support_claim)
+                has_status_language = any(normalize_text(alias) in support_norm for alias in STATUS_ALIASES[status])
+                if not has_status_language:
+                    if status == "belief":
+                        support_claim += " This is a belief, not an active current state."
+                    elif status == "report":
+                        support_claim += " This is only a report, not an active current state."
+                    elif status == "scope_limited":
+                        support_claim += " This is scope limited, not a generally visible active state."
+                    elif status == "delayed_not_active":
+                        support_claim += " This is delayed and not active yet."
+                    else:
+                        support_claim += f" This is {status.replace('_', ' ')} and not an active current state."
         dialogue_value = sanitize_internal_text(value_text)
-        dialogue_support_claim = _naturalize_claim_for_status(support_claim or value_text, status)
+        dialogue_support_claim = (
+            support_claim
+            if semantic_graph_v2
+            else _naturalize_claim_for_status(support_claim or value_text, status)
+        )
         must_mention_any = [entity, slot]
         must_mention_value_any = [value]
         event_row: dict[str, Any] = {
@@ -5401,8 +8530,14 @@ def normalize_current_event_plan(
                 "support_claim": dialogue_support_claim,
             },
         }
-        if raw_event.get("scope") is not None:
-            event_row["scope"] = copy.deepcopy(raw_event.get("scope"))
+        if raw_scope is not None:
+            event_row["scope"] = raw_scope
+        if typed_visibility is not None:
+            for field in VISIBILITY_TYPED_FIELDS:
+                event_row[field] = typed_visibility[field]
+        for time_field in ("global_time", "local_time"):
+            if time_field in raw_event:
+                event_row[time_field] = copy.deepcopy(raw_event[time_field])
         if raw_event.get("set_membership") is not None:
             event_row["set_membership"] = copy.deepcopy(raw_event.get("set_membership"))
         if raw_event.get("evidence_turn_ids") is not None:
@@ -5456,12 +8591,7 @@ def normalize_current_event_plan(
         "graph_id": graph_snapshot_id,
         "graph_snapshot_id": graph_snapshot_id,
         "parent_graph_id": parent_graph_id or "root",
-        "operation": normalize_space(
-            ((policy or {}).get("stage64_target") or {}).get("qa_operation")
-            if isinstance((policy or {}).get("stage64_target"), dict)
-            else ""
-        )
-        or None,
+        "operation": stage64_operation or None,
         "question_type": _normalize_plan_question_type(question_type, policy),
         "attack_skill": _normalize_plan_attack_skill(attack_skill, policy),
         "events": normalized_events,
@@ -5512,6 +8642,505 @@ def _normalize_plan_attack_skill(attack_skill: str, policy: dict[str, Any] | Non
     raise NativeGraphDialogueReject(f"plan attack_skill out of set: {attack_skill!r}")
 
 
+def truth_first_generate_by_construction_enabled(args: argparse.Namespace) -> bool:
+    return bool(getattr(args, "truth_first_generate_by_construction", False))
+
+
+def _truth_first_parent_timeline(
+    parent_events: Iterable[dict[str, Any]],
+) -> tuple[int, int]:
+    global_values: list[int] = []
+    session_values: list[int] = []
+    for event in parent_events:
+        if not isinstance(event, dict):
+            continue
+        raw_global = event.get("global_time_index")
+        if raw_global is None:
+            raw_global = event.get("time_index")
+        raw_session = event.get("session_index")
+        for raw_value, target in (
+            (raw_global, global_values),
+            (raw_session, session_values),
+        ):
+            if isinstance(raw_value, bool):
+                continue
+            try:
+                value = int(raw_value)
+            except (TypeError, ValueError):
+                continue
+            if value >= 0:
+                target.append(value)
+    return max(global_values, default=0), max(session_values, default=0)
+
+
+def prepare_truth_first_graph_contract(
+    seed_row: dict[str, Any],
+    policy: dict[str, Any] | None,
+    rng: random.Random,
+    *,
+    sample_index: int,
+    round_id: str,
+) -> dict[str, Any]:
+    """Freeze a local truth skeleton before requesting typed content values."""
+
+    stage64_target = (
+        copy.deepcopy(policy.get("stage64_target"))
+        if isinstance(policy, dict) and isinstance(policy.get("stage64_target"), dict)
+        else None
+    )
+    if not isinstance(stage64_target, dict):
+        raise NativeGraphDialogueReject(
+            "Truth-first generation requires one immutable Stage64 target"
+        )
+    operation = normalize_space(stage64_target.get("qa_operation"))
+    if operation not in stage3_truth_constructors.OPERATIONS:
+        raise NativeGraphDialogueReject(
+            f"Truth-first generation does not support operation={operation!r}"
+        )
+    if not _is_v4_memory_parent(seed_row):
+        raise NativeGraphDialogueReject(
+            "Truth-first generation requires a v4 memory-backfilled parent"
+        )
+    parent_view, retrieval = build_v4_parent_prompt_view(
+        seed_row,
+        operation=operation,
+    )
+    selected_events = copy.deepcopy(parent_view.get("events") or [])
+    selected_ids = list(retrieval.get("selected_parent_event_ids") or [])
+    parent_graph = _semantic_parent_graph_from_seed(seed_row)
+    parent_events = [
+        event
+        for event in parent_graph.get("events") or []
+        if isinstance(event, dict)
+    ]
+    parent_max_global, parent_max_session = _truth_first_parent_timeline(
+        parent_events
+    )
+    graph_id = f"{round_id}:S{sample_index:04d}:truth_first_graph_v1"
+    parent_graph_id = normalize_space(parent_graph.get("graph_id")) or normalize_space(
+        seed_row.get("sample_id") or seed_row.get("source_id")
+    )
+    try:
+        skeleton = stage3_truth_constructors.construct_truth_skeleton(
+            stage64_target,
+            graph_id=graph_id,
+            parent_graph_id=parent_graph_id,
+            selected_parent_event_ids=selected_ids,
+            selected_parent_events=selected_events,
+            parent_max_global_time_index=parent_max_global,
+            parent_max_session_index=parent_max_session,
+        )
+    except stage3_truth_constructors.TruthConstructionError as exc:
+        raise NativeGraphDialogueReject(
+            "Truth-first parent continuity construction failed before API: "
+            f"{exc}"
+        ) from exc
+    question_type = _normalize_plan_question_type(
+        choose_question_type(policy, rng), policy
+    )
+    attack_skill = _normalize_plan_attack_skill(
+        choose_attack_skill(question_type, policy, rng), policy
+    )
+    binding_contract = stage3_truth_constructors.api_binding_contract(skeleton)
+    continuity_match = copy.deepcopy(
+        skeleton["parent_anchor_contract"].get("continuity_match") or {}
+    )
+    prompt_payload = {
+        "mode": "stage3_truth_first_typed_content_binding_v1",
+        "selected_parent_fact_view": parent_view,
+        "parent_event_retrieval": _compact_v4_parent_prompt_ledger(retrieval),
+        "binding_contract": binding_contract,
+        "parent_continuity_contract": {
+            "anchor_event_ids": [
+                skeleton["parent_anchor_contract"]["primary_parent_event_id"]
+            ]
+            if skeleton["parent_anchor_contract"].get("primary_parent_event_id")
+            else [],
+            "required_any_topic_terms": copy.deepcopy(
+                skeleton["parent_anchor_contract"]["topic_terms"]
+            ),
+            "child_event_id": continuity_match.get("child_event_id"),
+            "continuity_binding_id": continuity_match.get("child_binding_id"),
+            "required_binding_value": continuity_match.get("parent_identity"),
+            "required_relation": continuity_match.get("relation"),
+            "rule": (
+                "Copy required_binding_value exactly into continuity_binding_id, "
+                "and make discourse_frame.topic or discourse_frame.setting contain "
+                "at least one required topic term."
+            ),
+        },
+        "requirements": [
+            "Return only the binding payload described by binding_contract.output_schema.",
+            "Return exactly two top-level keys: bindings and discourse_frame. The program attaches the immutable schema and skeleton hash locally.",
+            "Choose concrete natural names, topics, and values that satisfy every declared narrow value_type; base_value_type is compatibility metadata, not permission to use another union member.",
+            "Apply both binding_contract.value_type_rules and binding_contract.semantic_value_type_rules literally, including every slot-specific valid/invalid example; keep each value atomic.",
+            "A Location must be a physical or virtual place, venue, room, or geographic region, never a group, activity, time period, or access class.",
+            "An EventName must be an occurrence or activity noun phrase such as a book launch or gaming party, never an outcome, status, or action sentence such as faced a setback, was postponed, or signed a deal.",
+            "The discourse_frame topic or setting must continue at least one visible entity, relation, resource, or topic from the primary selected parent fact.",
+            "For the declared continuity_binding_id, copy required_binding_value exactly; do not paraphrase or replace it.",
+            "Do not return events, slots, statuses, edges, membership flags, scopes, answer roles, gold answers, proofs, or reasoning paths.",
+            "Do not include raw QA text or Q:/A: wrappers.",
+        ],
+    }
+    return {
+        "skeleton": skeleton,
+        "prompt_payload": prompt_payload,
+        "stage64_target": stage64_target,
+        "operation": operation,
+        "question_type": question_type,
+        "attack_skill": attack_skill,
+        "parent_view": parent_view,
+        "parent_event_retrieval": retrieval,
+        "parent_events": parent_events,
+        "selected_parent_events": selected_events,
+    }
+
+
+def _compact_truth_binding_retry_feedback(
+    report: dict[str, Any],
+) -> dict[str, Any]:
+    compact_issues: list[dict[str, Any]] = []
+    for issue in report.get("issues") or []:
+        if not isinstance(issue, dict):
+            continue
+        compact = {
+            key: copy.deepcopy(issue[key])
+            for key in (
+                "code",
+                "binding_id",
+                "value_type",
+                "binding_ids",
+                "required_semantic_value_type",
+                "detected_semantic_value_types",
+                "required_any_topic_terms",
+                "allowed_values",
+            )
+            if key in issue
+        }
+        if "value" in issue:
+            compact["rejected_value"] = copy.deepcopy(issue["value"])
+            compact["must_change_rejected_value"] = True
+        semantic_value_type = normalize_space(
+            issue.get("required_semantic_value_type")
+        )
+        if semantic_value_type in stage3_truth_constructors.SEMANTIC_VALUE_RULES:
+            compact["required_semantic_value_rule"] = (
+                stage3_truth_constructors.SEMANTIC_VALUE_RULES[
+                    semantic_value_type
+                ]
+            )
+            compact["required_semantic_value_examples"] = copy.deepcopy(
+                stage3_truth_constructors.SEMANTIC_VALUE_EXAMPLES[
+                    semantic_value_type
+                ]
+            )
+        value_type = normalize_space(issue.get("value_type"))
+        if value_type in stage3_truth_constructors.VALUE_TYPE_RULES:
+            compact["required_base_value_rule"] = (
+                stage3_truth_constructors.VALUE_TYPE_RULES[value_type]
+            )
+        if compact:
+            compact_issues.append(compact)
+    if compact_issues:
+        return {
+            "schema_version": "stage3_truth_binding_retry_feedback_v1",
+            "stage": "typed_binding_validation",
+            "issues": compact_issues,
+            "instruction": (
+                "Return the complete two-key creative body again. Replace every listed "
+                "rejected value with a genuinely different value that satisfies both its "
+                "base value_type and slot-specific semantic_value_type. Preserve other valid "
+                "bindings, but still return the complete bindings object and discourse_frame."
+            ),
+        }
+    api_meta = report.get("api_meta") if isinstance(report.get("api_meta"), dict) else {}
+    return {
+        "schema_version": "stage3_truth_binding_retry_feedback_v1",
+        "stage": normalize_space(report.get("stage")) or "api_response_contract",
+        "error_types": sorted(set(_api_meta_error_types(api_meta))),
+        "instruction": "Return the complete two-key creative body as one JSON object.",
+    }
+
+
+def materialize_truth_first_graph_contract(
+    prepared: dict[str, Any],
+    binding_payload: dict[str, Any],
+    *,
+    sample_index: int,
+    round_id: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Materialize and independently admit one API content-binding response."""
+
+    skeleton = prepared["skeleton"]
+    binding_validation = stage3_truth_constructors.validate_content_bindings(
+        skeleton, binding_payload
+    )
+    if binding_validation.get("pass") is not True:
+        raise NativeGraphDialogueReject(
+            "Truth-first typed content binding failed: "
+            f"{binding_validation.get('issues')[:8]}"
+        )
+    materialized = stage3_truth_constructors.materialize_truth_skeleton(
+        skeleton, binding_payload
+    )
+    admission = stage3_truth_constructors.validate_materialized_truth(
+        skeleton, materialized
+    )
+    if admission.get("pass") is not True:
+        raise NativeGraphDialogueReject(
+            f"Truth-first local materialization admission failed: {admission.get('issues')}"
+        )
+    graph = copy.deepcopy(materialized["graph"])
+    semantic_issues = semantic_graph_v2.validate_graph_delta(
+        graph,
+        operation=prepared["operation"],
+        reasoning_target=prepared["stage64_target"],
+    )
+    if semantic_issues:
+        raise NativeGraphDialogueReject(
+            f"Truth-first graph failed independent semantic validation: {semantic_issues[:8]}"
+        )
+    continuity = stage3_parent_continuity.parent_child_continuity_audit(
+        graph,
+        prepared["selected_parent_events"],
+        selected_parent_event_ids=prepared["parent_event_retrieval"].get(
+            "selected_parent_event_ids"
+        ),
+    )
+    if continuity.get("pass") is not True:
+        raise NativeGraphDialogueReject(
+            f"Truth-first parent continuity failed: {continuity.get('issues')}"
+        )
+    for index, event in enumerate(graph.get("events") or [], start=1):
+        if not isinstance(event, dict):
+            continue
+        event_id = normalize_space(event.get("event_id"))
+        event["event_instance_id"] = event_id
+        event["origin_event_id"] = event_id
+        event["round_id"] = round_id
+        event["raw_value"] = copy.deepcopy(event.get("value"))
+        event["dialogue_value"] = sanitize_internal_text(event.get("value"))
+        support_claim = normalize_space(
+            (event.get("alignment_hints") or {}).get("support_claim")
+            if isinstance(event.get("alignment_hints"), dict)
+            else ""
+        )
+        event["raw_support_claim"] = support_claim
+        event["dialogue_support_claim"] = support_claim
+        event["dialogue_fact_id"] = f"F{index:02d}"
+        event["source"] = "local_truth_constructor"
+    metadata = graph.get("metadata") if isinstance(graph.get("metadata"), dict) else {}
+    graph.update(
+        {
+            "graph_snapshot_id": graph["graph_id"],
+            "question_type": prepared["question_type"],
+            "attack_skill": prepared["attack_skill"],
+            "false_candidates": [
+                {
+                    "candidate_event_instance_id": event.get("event_instance_id"),
+                    "text": copy.deepcopy(event.get("value")),
+                    "candidate_status": event.get("status"),
+                }
+                for event in graph.get("events") or []
+                if isinstance(event, dict)
+                and event.get("status") in FALSE_STATUSES
+            ],
+            "metadata": {
+                **metadata,
+                "sample_index": sample_index,
+                "round_id": round_id,
+                "frozen_graph": True,
+                "semantic_graph_v2": True,
+                "truth_first_generate_by_construction": True,
+                "truth_skeleton_sha256": skeleton["skeleton_sha256"],
+                "truth_manifest_sha256": materialized["truth_manifest"][
+                    "manifest_sha256"
+                ],
+                "parent_event_retrieval": copy.deepcopy(
+                    prepared["parent_event_retrieval"]
+                ),
+                "parent_child_continuity_audit": copy.deepcopy(continuity),
+                "parent_continuity": {
+                    "depends_on_parent_event_ids": continuity.get(
+                        "depends_on_parent_event_ids"
+                    ),
+                    "parent_topic_anchor_event_ids": continuity.get(
+                        "parent_topic_anchor_event_ids"
+                    ),
+                    "continuity_relations": copy.deepcopy(
+                        metadata.get("parent_continuity", {}).get(
+                            "continuity_relations"
+                        )
+                    ),
+                    "continuity_score": continuity.get("continuity_score"),
+                    "continuity_reasons": continuity.get("continuity_reasons"),
+                },
+            },
+        }
+    )
+    graph["graph_snapshot_hash"] = compute_graph_snapshot_hash(graph)
+    graph["_truth_first_skeleton"] = copy.deepcopy(skeleton)
+    graph["_truth_first_materialized"] = copy.deepcopy(materialized)
+    graph["_truth_first_binding_payload_sha256"] = (
+        stage3_truth_constructors.canonical_sha256(binding_payload)
+    )
+    return graph, {
+        "binding_validation": binding_validation,
+        "materialization_admission": admission,
+        "parent_child_continuity_audit": continuity,
+        "truth_skeleton_sha256": skeleton["skeleton_sha256"],
+        "truth_manifest_sha256": materialized["truth_manifest"]["manifest_sha256"],
+        "truth_graph_sha256": materialized["truth_manifest"]["graph_sha256"],
+    }
+
+
+def call_api_truth_first_graph_expansion(
+    seed_row: dict[str, Any],
+    policy: dict[str, Any] | None,
+    args: argparse.Namespace,
+    rng: random.Random,
+    *,
+    sample_index: int,
+    round_id: str,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]:
+    prepared = prepare_truth_first_graph_contract(
+        seed_row,
+        policy,
+        rng,
+        sample_index=sample_index,
+        round_id=round_id,
+    )
+    max_attempts = max(1, int(getattr(args, "graph_semantic_retries", 2) or 2) + 1)
+    attempt_reports: list[dict[str, Any]] = []
+    last_payload: dict[str, Any] | None = None
+    total_transport_attempts = 0
+    aggregate_usage = {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+    }
+    for attempt in range(1, max_attempts + 1):
+        prompt = copy.deepcopy(prepared["prompt_payload"])
+        if attempt_reports:
+            prompt["prior_binding_rejection"] = _compact_truth_binding_retry_feedback(
+                attempt_reports[-1]
+            )
+        payload, api_meta = call_raw_json_api(
+            args,
+            prompt,
+            system_prompt=(
+                "You fill typed content variables for a locally frozen truth skeleton. "
+                "Return JSON only. You may choose natural content, but you must not create or alter graph truth."
+            ),
+            required_keys=("bindings", "discourse_frame"),
+            call_kind="api_truth_content_binding",
+            max_tokens_override=min(
+                4096, max(1200, int(getattr(args, "graph_expansion_max_tokens", 2048) or 2048))
+            ),
+            max_retries_override=0,
+            temperature_override=float(
+                getattr(args, "challenger_temperature", 0.25) or 0.25
+            ),
+        )
+        total_transport_attempts += int(api_meta.get("attempts") or 0)
+        usage = api_meta.get("usage") if isinstance(api_meta, dict) else {}
+        if isinstance(usage, dict):
+            for key in aggregate_usage:
+                aggregate_usage[key] += int(usage.get(key) or 0)
+        if not api_meta.get("used") or not isinstance(payload, dict):
+            response_error_types = set(_api_meta_error_types(api_meta))
+            attempt_reports.append(
+                {
+                    "attempt": attempt,
+                    "stage": (
+                        "api_response_contract"
+                        if response_error_types.intersection(
+                            {
+                                "invalid_json",
+                                "missing_required_keys",
+                                "json_decode_error",
+                                "parse_error",
+                            }
+                        )
+                        else "api_transport"
+                    ),
+                    "api_meta": api_meta,
+                }
+            )
+            continue
+        last_payload = copy.deepcopy(payload)
+        normalized_payload, envelope_normalization = (
+            stage3_truth_constructors.normalize_content_binding_envelope(
+                prepared["skeleton"], payload
+            )
+        )
+        validation = stage3_truth_constructors.validate_content_bindings(
+            prepared["skeleton"], normalized_payload
+        )
+        if validation.get("pass") is not True:
+            attempt_reports.append(
+                {
+                    "attempt": attempt,
+                    "stage": "typed_binding_validation",
+                    "issues": copy.deepcopy(validation.get("issues") or []),
+                    "binding_envelope_normalization": copy.deepcopy(
+                        envelope_normalization
+                    ),
+                    "api_meta": api_meta,
+                }
+            )
+            continue
+        plan, local_meta = materialize_truth_first_graph_contract(
+            prepared,
+            normalized_payload,
+            sample_index=sample_index,
+            round_id=round_id,
+        )
+        meta = {
+            "used": True,
+            "call_kind": "api_truth_content_binding",
+            "attempts": total_transport_attempts,
+            "semantic_attempts": attempt,
+            "model": api_meta.get("model"),
+            "base_url": api_meta.get("base_url"),
+            "usage": copy.deepcopy(aggregate_usage),
+            "truth_first_generate_by_construction": True,
+            "api_returned_graph_events": False,
+            "api_defined_truth_fields": [],
+            "binding_envelope_normalization": copy.deepcopy(
+                envelope_normalization
+            ),
+            "api_binding_raw_body_sha256": (
+                stage3_truth_constructors.canonical_sha256(payload)
+            ),
+            "normalized_binding_payload_sha256": (
+                stage3_truth_constructors.canonical_sha256(normalized_payload)
+            ),
+            "binding_envelope_correlation_source": (
+                "live_request_scoped_truth_skeleton"
+            ),
+            "parent_event_retrieval": copy.deepcopy(
+                prepared["parent_event_retrieval"]
+            ),
+            "attempt_reports": attempt_reports,
+            **local_meta,
+        }
+        return plan, meta, last_payload
+    return {}, {
+        "used": False,
+        "call_kind": "api_truth_content_binding",
+        "attempts": total_transport_attempts,
+        "semantic_attempts": max_attempts,
+        "usage": copy.deepcopy(aggregate_usage),
+        "truth_first_generate_by_construction": True,
+        "reason": "typed_content_binding_exhausted",
+        "attempt_reports": attempt_reports,
+        "parent_event_retrieval": copy.deepcopy(
+            prepared["parent_event_retrieval"]
+        ),
+    }, last_payload
+
+
 def call_api_graph_expansion(
     seed_row: dict[str, Any],
     legacy_alignment_result: dict[str, Any],
@@ -5522,10 +9151,22 @@ def call_api_graph_expansion(
     sample_index: int,
     round_id: str,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]:
+    if truth_first_generate_by_construction_enabled(args):
+        return call_api_truth_first_graph_expansion(
+            seed_row,
+            policy,
+            args,
+            rng,
+            sample_index=sample_index,
+            round_id=round_id,
+        )
     question_type = choose_question_type(policy, rng)
     attack_skill = choose_attack_skill(question_type, policy, rng)
     stage64_target = policy.get("stage64_target") if isinstance(policy, dict) and isinstance(policy.get("stage64_target"), dict) else {}
     stage64_operation = normalize_space(stage64_target.get("qa_operation"))
+    v4_selected_parent_view = bool(
+        stage64_operation and _is_v4_memory_parent(seed_row)
+    )
     preferred_answer_type = normalize_space(stage64_target.get("preferred_answer_type"))
     stage64_reasoning_contract = _stage64_reasoning_contract_from_target(
         stage64_target
@@ -5560,7 +9201,7 @@ def call_api_graph_expansion(
     event_count_instruction = (
         "Include exactly 8 concrete semantic events in the fixed operation role layout specified below."
         if stage64_operation
-        in {"temporal_state_update", "visibility", "relation_lookup"}
+        in {"temporal_state_update", "bridge", "visibility", "relation_lookup"}
         else SEMANTIC_GRAPH_V2_EVENT_INSTRUCTION
         if stage64_operation
         else EASY_GRAPH_EVENT_INSTRUCTION
@@ -5631,9 +9272,27 @@ def call_api_graph_expansion(
                 ),
                 STAGE64_GRAPH_OBJECTIVE_HINTS.get(stage64_operation, "Create coherent graph-grounded hard negatives for the requested operation."),
                 "Every event must include event_id, entity, slot, value, status, and an integer time_index. Follow operation_contract literally; these are hard validator requirements, not suggestions.",
-                "The seed contains only a hash and compressed speaker structure for the parent dialogue; do not infer, reconstruct, or quote parent utterances from it.",
+                *(
+                    [
+                        "The seed exposes only an operation-conditioned, evidence-verified selected view of the v4 parent facts. The full parent dialogue and all unselected event atoms remain omitted.",
+                        "Use selected parent facts to create a genuine lineage continuation, but do not copy a complete parent entity+slot+value+status signature or support sentence into a child event.",
+                        "For every non-visibility child fact, do not shorten, paraphrase, or relabel a selected parent fact into the same entity+value under a new slot/status; a slot alias is still parent-fact reuse. Visibility scope variants instead obey the dedicated typed observer/action/resource/condition/status signature contract.",
+                        "Return metadata.parent_continuity with depends_on_parent_event_ids, parent_topic_anchor_event_ids, and continuity_relations. Every referenced parent event ID must come from seed.parent_event_retrieval.selected_parent_event_ids; never reference a full-but-unselected event.",
+                        "Parent source status literals are context-only and may include legacy v4 values. Every child event must still use one exact semantic_graph_v2 approved status literal.",
+                    ]
+                    if v4_selected_parent_view
+                    else [
+                        "The seed contains only a hash and compressed speaker structure for the parent dialogue; do not infer, reconstruct, or quote parent utterances from it.",
+                    ]
+                ),
                 "Create a novel child graph delta. No child event may copy a complete parent entity+slot+value+status fact, and no child alignment_hints.support_claim may copy or reconstruct a parent support sentence.",
-                "seed.semantic_parent_graph.events is an entity-anchor-only provenance ledger: parent slots and values are intentionally omitted. You may reuse a short entity_anchor for continuity, but must introduce a new concrete slot and value; never try to reconstruct a hidden parent fact.",
+                *(
+                    []
+                    if v4_selected_parent_view
+                    else [
+                        "seed.semantic_parent_graph.events is an entity-anchor-only provenance ledger: parent slots and values are intentionally omitted. You may reuse a short entity_anchor for continuity, but must introduce a new concrete slot and value; never try to reconstruct a hidden parent fact.",
+                    ]
+                ),
                 "Treat seed.semantic_parent_graph.events as provenance/context only, not as events that count toward this child operation's required roles.",
                 "For temporal_state_update only, a parent slot may be reused to express a genuine update, but the child value/status combination must form a new transition; copying a complete parent fact is forbidden.",
                 operation_contract,
@@ -5672,9 +9331,17 @@ def call_api_graph_expansion(
                     "Do not expose the final answer as a surface statement; only provide graph events and support claims that can later be verbalized naturally.",
                 ]
             )
+    full_parent_event_retrieval: dict[str, Any] = {}
     semantic_seed_prompt = compact_seed_for_prompt(
         seed_row,
         semantic_graph_v2=bool(stage64_operation),
+        parent_operation=stage64_operation or None,
+        full_parent_event_retrieval_out=full_parent_event_retrieval,
+    )
+    parent_event_retrieval = (
+        copy.deepcopy(full_parent_event_retrieval)
+        if full_parent_event_retrieval
+        else None
     )
     expected_child_graph_id = f"{round_id}:S{sample_index:04d}:semantic_graph_v2"
     operation_event_fields: dict[str, Any] = {}
@@ -5690,6 +9357,13 @@ def call_api_graph_expansion(
     elif stage64_operation == "visibility":
         operation_event_fields = {
             "depends_on": ["resource fact event_id for the permission composition"],
+            "event_type": "visibility_permission on scoped permission events only",
+            "owner": "concrete owner of the protected resource",
+            "resource": "concrete protected resource",
+            "observer": "same concrete observer as scope.observer",
+            "action": "same concrete action as scope.permission",
+            "condition": "same concrete condition as scope.condition",
+            "access_class": "same concrete access class as value",
             "scope": {
                 "observer": "concrete person/group",
                 "permission": "concrete visibility or access condition",
@@ -5705,6 +9379,17 @@ def call_api_graph_expansion(
             },
         }
     temporal_generation_layout_contract: dict[str, Any] | None = None
+    temporal_required_event_ids = [f"E{index}" for index in range(1, 9)]
+    temporal_required_dependency_map = {
+        "E1": [],
+        "E2": ["E1"],
+        "E3": ["E2"],
+        "E4": ["E3"],
+        "E5": [],
+        "E6": [],
+        "E7": [],
+        "E8": [],
+    }
     if stage64_operation == "temporal_state_update":
         temporal_anti_shortcut = bool(
             stage64_reasoning_contract is not None
@@ -5741,11 +9426,21 @@ def call_api_graph_expansion(
         temporal_generation_layout_contract = {
             "total_event_count": 8,
             "array_role_order_is_mandatory": True,
+            "required_array_event_id_order": temporal_required_event_ids,
+            "required_dependency_map": temporal_required_dependency_map,
             "primary_chain_array_indexes": [0, 1, 2, 3],
             "context_singleton_array_indexes": [4, 5, 6, 7],
             "primary_chain": {
                 "entity_and_slot": "byte-for-byte identical across events[0:4]",
-                "value_rule": "four semantically distinct values; no repeated value and no restore cycle",
+                "value_rule": (
+                    "four pairwise semantically distinct values; no repeated value, "
+                    "no restore cycle, and the canceled hard-negative value must "
+                    "differ from the active/current value"
+                ),
+                "preferred_answer_type": preferred_answer_type or None,
+                "preferred_answer_type_rule": _stage64_temporal_answer_type_requirement(
+                    preferred_answer_type
+                ),
                 "status_by_array_index": temporal_status_by_index,
                 "max_time_shortcut_forbidden": temporal_anti_shortcut,
                 "current_gold_array_index": 1 if temporal_anti_shortcut else 3,
@@ -5771,9 +9466,96 @@ def call_api_graph_expansion(
                     "all four pairs are mutually distinct and each differs from the primary chain pair"
                 ),
                 "previous_value_rule": "OMIT THE KEY on events[4:8], including null",
+                "depends_on_rule": "OMIT depends_on or use [] on E5, E6, E7, and E8",
                 "second_update_chain_forbidden": True,
             },
             "time_index_by_array_index": [1, 2, 3, 4, 5, 6, 7, 8],
+            "machine_checks": [
+                "event IDs are exactly E1,E2,E3,E4,E5,E6,E7,E8 in array order",
+                "E1.depends_on is omitted or []",
+                "E2.depends_on == ['E1']",
+                "E3.depends_on == ['E2']",
+                "E4.depends_on == ['E3']",
+                "E5,E6,E7,E8 each omit depends_on or use []",
+                "no dependency edge exists beyond required_dependency_map",
+            ],
+        }
+    bridge_generation_layout_contract: dict[str, Any] | None = None
+    bridge_required_event_ids = [f"E{index}" for index in range(1, 9)]
+    bridge_required_dependency_map = {
+        event_id: (["E1", "E2"] if event_id == "E3" else [])
+        for event_id in bridge_required_event_ids
+    }
+    if stage64_operation == "bridge":
+        bridge_generation_layout_contract = {
+            "total_event_count": 8,
+            "array_role_order_is_mandatory": True,
+            "required_array_event_id_order": bridge_required_event_ids,
+            "required_dependency_map": bridge_required_dependency_map,
+            "binder_support_array_index": 0,
+            "answer_support_array_index": 1,
+            "terminal_connector_array_index": 2,
+            "terminal_related_negative_array_index": 3,
+            "typed_hard_negative_array_indexes": [3, 4, 5],
+            "independent_context_array_indexes": [6, 7],
+            "binder_support": {
+                "value_rule": (
+                    "one short concrete named-entity atom, never a fact sentence or relation clause"
+                ),
+                "dependency_rule": "OMIT depends_on or use []",
+            },
+            "answer_support": {
+                "entity_rule": "copy events[0].value byte-for-byte",
+                "slot_rule": _stage64_answer_slot_requirement(
+                    preferred_answer_type
+                ),
+                "value_rule": (
+                    f"one concrete atomic {preferred_answer_type or 'semantic'} value; "
+                    "never a sentence or complete relation claim"
+                ),
+                "person_value_rule": (
+                    "when preferred_answer_type is Person, use only a concrete person's proper name of one to five words"
+                ),
+                "dependency_rule": "OMIT depends_on or use []",
+            },
+            "terminal_connector": {
+                "dependency_rule": "exactly [events[0].event_id, events[1].event_id]",
+                "answer_copy_rule": (
+                    "entity, slot, value, and support_claim must not contain events[1].value"
+                ),
+            },
+            "terminal_related_negative": {
+                "entity_rule": "copy events[2].entity byte-for-byte",
+                "slot_rule": "copy events[1].slot byte-for-byte",
+                "value_rule": "use a preferred_answer_type-compatible value distinct from events[1].value",
+                "dependency_rule": "OMIT depends_on or use []",
+            },
+            "typed_hard_negatives": {
+                "array_indexes": [3, 4, 5],
+                "slot_rule": "copy events[1].slot byte-for-byte on events[3:6]",
+                "value_rule": (
+                    f"three pairwise-distinct atomic {preferred_answer_type or 'semantic'} values, all distinct from events[1].value"
+                ),
+                "dependency_rule": "OMIT depends_on or use [] on events[3:6]",
+            },
+            "independent_context": {
+                "dependency_rule": "OMIT depends_on or use [] on events[6:8]",
+                "role_rule": "concrete novel context facts; do not form another dependency chain",
+            },
+            "parent_novelty_rule": (
+                "selected parent facts may anchor topic continuity only; every child fact tuple and support claim must be novel"
+            ),
+            "time_index_by_array_index": [1, 2, 3, 4, 5, 6, 7, 8],
+            "machine_checks": [
+                "event IDs are exactly E1,E2,E3,E4,E5,E6,E7,E8 in array order",
+                "events[0].value equals events[1].entity byte-for-byte",
+                "events[1].slot is compatible with preferred_answer_type and events[1].value is one matching atomic value",
+                "events[2].depends_on == ['E1', 'E2']",
+                "every event except E3 omits depends_on or uses []",
+                "E3 does not expose E2.value in any semantic or support field",
+                "E4-E6 copy E2.slot, have three distinct values matching preferred_answer_type, and E4 copies E3.entity",
+                "no child event or support claim copies a parent fact",
+            ],
         }
     comparison_generation_layout_contract: dict[str, Any] | None = None
     if stage64_operation == "comparison":
@@ -5868,6 +9650,12 @@ def call_api_graph_expansion(
                 "scope_rule": (
                     "observer, permission, and condition are all concrete non-empty strings"
                 ),
+                "typed_visibility_rule": (
+                    "event_type is visibility_permission; owner, resource, observer, action, "
+                    "condition, access_class, and status are concrete non-empty strings; "
+                    "observer/action/condition/access_class/status exactly preserve "
+                    "scope.observer/scope.permission/scope.condition/value/status"
+                ),
             },
             "minimal_pair_scopes": {
                 "events[2]": "same permission and condition as events[1], different observer",
@@ -5924,10 +9712,35 @@ def call_api_graph_expansion(
                 "Set schema_version exactly to 'semantic_graph_v2' and operation exactly to the requested qa_operation.",
                 f"Set graph_id exactly to {expected_child_graph_id!r}; it must differ from parent_graph_id.",
                 "For every event, status is an independent field and must equal one exact literal from approved_statuses. Never copy event_type, operation names, or category labels into status.",
-                "For Stage64 semantic graphs, omit the optional event_type field entirely; event_type is not a status value.",
+                (
+                    "For visibility, use event_type='visibility_permission' on every scoped permission event and omit it on the unscoped resource event. "
+                    "For every other Stage64 operation, omit event_type entirely; event_type is never a status value."
+                ),
                 "Omit every optional event field that is not shown for the requested operation. Never emit null, empty-object, placeholder, or alternate-shape optional fields.",
             ]
         )
+        if stage64_operation == "bridge":
+            bridge_answer_rule = (
+                "a concrete person's proper name of one to five words, with no predicate or clause"
+                if preferred_answer_type == "Person"
+                else f"one concrete atomic {preferred_answer_type or 'semantic'} value, not a sentence"
+            )
+            requirements.extend(
+                [
+                    "Return exactly 8 events with IDs E1 through E8 in fixed array order and time_index 1 through 8.",
+                    "E1 is the binder support. Its value must be one short concrete named-entity atom, not a sentence or complete relation claim, and it must omit depends_on.",
+                    "E2 is the answer support. Copy E1.value byte-for-byte into E2.entity, omit E2.depends_on, set E2.slot so it obeys this rule: "
+                    + _stage64_answer_slot_requirement(preferred_answer_type)
+                    + "; and set E2.value to "
+                    + bridge_answer_rule
+                    + ".",
+                    "E3 is the sole terminal proof connector. Set E3.depends_on exactly to ['E1', 'E2']; none of E3.entity, E3.slot, E3.value, or its support_claim may contain E2.value.",
+                    "E4-E6 are the three answer alternatives. Copy E2.slot byte-for-byte onto all three. Their values must be pairwise distinct, differ from E2.value, and each satisfy the same frozen preferred_answer_type as E2.value. Copy E3.entity byte-for-byte onto E4 so it preserves one terminal hop. All three omit depends_on.",
+                    "E7-E8 are independent concrete context facts and must omit depends_on. Do not create any second dependency endpoint or secondary bridge chain.",
+                    "Use selected parent facts only as topic and continuity anchors. Every E1-E8 entity+slot+value+status tuple and every support_claim must describe a novel child fact rather than copy or paraphrase a parent fact.",
+                    "Before returning, machine-check bridge_generation_layout_contract, including the exact binder equality, answer value type, sole dependency closure, terminal anti-copy rule, and parent novelty rule.",
+                ]
+            )
         if stage64_operation == "relation_lookup":
             relation_answer_type_examples = {
                 "Person": "a concrete person's name",
@@ -5968,6 +9781,16 @@ def call_api_graph_expansion(
                         else f"Return exactly 8 events. events[0:4] are the only update chain: the same exact entity and slot with four distinct values. Each events[0:3].status must be exactly one of [{STAGE64_NON_ACTIVE_STATUS_LITERAL_TEXT}], never the category label 'non-active'; events[3].status must be exactly 'active'. Never use 'restored' in the primary chain."
                     ),
                     "events[0] must OMIT previous_value and depends_on. events[1], events[2], and events[3] must point previous_value to the immediately preceding value and set depends_on to exactly the immediately preceding event_id. A repeated value, skipped dependency, or restore cycle is invalid.",
+                    "Use event IDs exactly E1 through E8 in array order. Machine-check required_dependency_map exactly: E1=[], E2=['E1'], E3=['E2'], E4=['E3'], and every context E5-E8=[]. No additional dependency is permitted.",
+                    "The strategy label same_slot_canceled_value means a canceled alternative value for the SAME slot; it never permits copying, restoring, or repeating the active/current value. Choose all four primary values before writing events and verify every pair differs after casefolding and punctuation normalization.",
+                    (
+                        "The frozen preferred_answer_type applies to the answer-bearing primary chain: "
+                        f"preferred_answer_type={preferred_answer_type!r}; "
+                        f"{_stage64_temporal_answer_type_requirement(preferred_answer_type)}. "
+                        "Do not create a chain whose slot/value surface belongs to another answer type."
+                        if preferred_answer_type
+                        else ""
+                    ),
                     "events[4:8] are four context singletons. Give each a different entity+slot pair from every other context event and from the primary chain. OMIT previous_value entirely on all four; never return previous_value:null.",
                     (
                         "Before returning, machine-check the exact temporal_generation_layout_contract. The sole active/current gold must be events[1], and the later events[2:4] must remain invalid with events[3] realizing the target strategy; a maximum-time gold is a hard failure."
@@ -6011,8 +9834,10 @@ def call_api_graph_expansion(
                 [
                     "Return exactly 8 events in fixed role order. events[0] is a novel child resource fact and must omit scope and depends_on; it must not copy a complete parent event signature.",
                     "events[1] is the sole permission composition. It must depend_on exactly [events[0].event_id] and its observer, permission, and condition scope fields must all be concrete non-empty strings.",
+                    "On every scoped event events[1:8], set event_type exactly to 'visibility_permission' and provide flat non-empty owner, resource, observer, action, condition, access_class, and status. Copy observer from scope.observer, action from scope.permission, condition from scope.condition, access_class from value, and status from the event status; never replace any of them with a default.",
                     "Build three exact minimal-pair negatives: events[2] changes only observer, events[3] changes only permission, and events[4] changes only condition relative to events[1].",
                     "Every events[5:8] scope must also differ from events[1] in at least one of observer, permission, or condition. A different status does not make an identical scope distinct.",
+                    "Every scoped support claim must naturally state its owner, resource, observer, action, condition, access_class, and status semantics, and all seven scoped typed signatures and support claims must be pairwise distinct.",
                     "events[1] -> events[0] is the sole dependency edge. Every other event must omit depends_on. Before returning, machine-check visibility_generation_layout_contract and verify exactly one full scope match.",
                 ]
             )
@@ -6047,6 +9872,104 @@ def call_api_graph_expansion(
         event_schema["event_type"] = (
             "state_change|belief_update|cancel|restore|delay|expire|report|permission_scope|conflict"
         )
+    output_event_schemas = [event_schema]
+    if stage64_operation == "bridge":
+        output_event_schemas = []
+        for event_index, event_id in enumerate(bridge_required_event_ids):
+            role_schema = copy.deepcopy(event_schema)
+            role_schema["event_id"] = event_id
+            role_schema["time_index"] = event_index + 1
+            role_schema["depends_on"] = copy.deepcopy(
+                bridge_required_dependency_map[event_id]
+            )
+            role_schema["alignment_hints"]["support_claim"] = (
+                "one natural sentence for this novel child fact; do not copy or paraphrase a parent support claim"
+            )
+            if event_index == 0:
+                role_schema["entity"] = "a novel child roster, plan, or record entity"
+                role_schema["slot"] = "a concrete semantic binder slot"
+                role_schema["value"] = (
+                    "one short concrete named-entity atom only; no sentence or relation clause"
+                )
+            elif event_index == 1:
+                role_schema["entity"] = "copy E1.value byte-for-byte"
+                role_schema["slot"] = _stage64_answer_slot_requirement(
+                    preferred_answer_type
+                )
+                role_schema["value"] = (
+                    "one concrete person's proper name of one to five words only; no predicate or sentence"
+                    if preferred_answer_type == "Person"
+                    else f"one concrete atomic {preferred_answer_type or 'semantic'} value only; no sentence"
+                )
+            elif event_index == 2:
+                role_schema["entity"] = "a novel terminal coordination or proof-record entity"
+                role_schema["slot"] = "a concrete terminal connector slot"
+                role_schema["value"] = (
+                    "one atomic connector state that does not contain E2.value"
+                )
+            elif 3 <= event_index <= 5:
+                if event_index == 3:
+                    role_schema["entity"] = "copy E3.entity byte-for-byte"
+                else:
+                    role_schema["entity"] = "a concrete alternative entity"
+                role_schema["slot"] = "copy E2.slot byte-for-byte"
+                role_schema["value"] = (
+                    "a concrete person's proper name of one to five words, distinct from E2.value and every other hard-negative value"
+                    if preferred_answer_type == "Person"
+                    else f"an atomic {preferred_answer_type or 'semantic'} value distinct from E2.value and every other hard-negative value"
+                )
+            else:
+                role_schema["entity"] = "a concrete novel context entity"
+                role_schema["slot"] = "a concrete independent context slot"
+                role_schema["value"] = "a concrete independent atomic context value"
+            output_event_schemas.append(role_schema)
+    if stage64_operation == "temporal_state_update":
+        # A repeated generic event example made Qwen treat depends_on as optional
+        # even though the prose contract was exact.  Give every temporal role its
+        # literal machine shape.  These are schema instructions only; the guarded
+        # compiler below still rejects any explicit conflicting dependency edge.
+        output_event_schemas = []
+        value_labels = ("A", "B", "C", "D")
+        for event_index, event_id in enumerate(temporal_required_event_ids):
+            role_schema = copy.deepcopy(event_schema)
+            role_schema["event_id"] = event_id
+            role_schema["time_index"] = event_index + 1
+            role_schema["depends_on"] = copy.deepcopy(
+                temporal_required_dependency_map[event_id]
+            )
+            if event_index < 4:
+                role_schema["entity"] = (
+                    "the same concrete entity string used by E1, E2, E3, and E4"
+                )
+                role_schema["slot"] = (
+                    "the same concrete semantic slot used by E1, E2, E3, and E4"
+                )
+                role_schema["value"] = (
+                    f"concrete {preferred_answer_type or 'semantic'} value "
+                    f"{value_labels[event_index]}; pairwise distinct from every "
+                    "other primary value"
+                )
+                allowed_statuses = list(
+                    temporal_status_by_index[str(event_index)][
+                        "allowed_status_literals"
+                    ]
+                )
+                role_schema["status"] = {
+                    "type": "string",
+                    "allowed_values": allowed_statuses,
+                    "must_equal_one_allowed_value": True,
+                }
+                if event_index:
+                    role_schema["previous_value"] = (
+                        f"copy E{event_index}.value byte-for-byte"
+                    )
+            else:
+                role_schema["entity"] = "a concrete context entity"
+                role_schema["slot"] = (
+                    "a concrete context slot whose entity+slot pair is unique"
+                )
+                role_schema["value"] = "a concrete independent context value"
+            output_event_schemas.append(role_schema)
     prompt = {
         "task": "current_method graph-first native challenger graph/event_plan expansion",
         "requirements": requirements,
@@ -6060,7 +9983,11 @@ def call_api_graph_expansion(
         "stage64_item_difficulty_contract": stage64_difficulty_contract if stage64_operation else None,
         "operation_contract": operation_contract or None,
         "approved_attack_skills": list(APPROVED_ATTACK_SKILLS),
-        "approved_event_types": ([] if stage64_operation else sorted(APPROVED_EVENT_TYPES)),
+        "approved_event_types": (
+            [VISIBILITY_PERMISSION_EVENT_TYPE]
+            if stage64_operation == "visibility"
+            else ([] if stage64_operation else sorted(APPROVED_EVENT_TYPES))
+        ),
         "approved_statuses": sorted(APPROVED_STATUSES),
         "status_literal_contract": status_literal_contract,
         "seed": semantic_seed_prompt,
@@ -6070,6 +9997,7 @@ def call_api_graph_expansion(
         ),
         "hidden_query_conditioned_objective": query_objective,
         "temporal_generation_layout_contract": temporal_generation_layout_contract,
+        "bridge_generation_layout_contract": bridge_generation_layout_contract,
         "comparison_generation_layout_contract": comparison_generation_layout_contract,
         "count_generation_layout_contract": count_generation_layout_contract,
         "visibility_generation_layout_contract": visibility_generation_layout_contract,
@@ -6095,6 +10023,7 @@ def call_api_graph_expansion(
             "unsupported_status_correction",
             "semantic_correction_constraints",
             "temporal_generation_layout_contract",
+            "bridge_generation_layout_contract",
             "comparison_generation_layout_contract",
             "count_generation_layout_contract",
             "visibility_generation_layout_contract",
@@ -6107,12 +10036,33 @@ def call_api_graph_expansion(
             "operation": stage64_operation or "requested Stage3 qa_operation",
             "question_type": question_type,
             "attack_skill": attack_skill,
-            "events": [event_schema],
+            "events": output_event_schemas,
             "false_candidates": [],
             "metadata": {
                 "query_conditioned_graph_expansion": "optional bool; echo true only if hidden_query_conditioned_objective was followed",
                 "query_plan_type": "optional string",
                 "query_conditioned_notes": "optional short string",
+                **(
+                    {
+                        "parent_continuity": {
+                            "depends_on_parent_event_ids": [
+                                "one or more IDs from seed.parent_event_retrieval.selected_parent_event_ids"
+                            ],
+                            "parent_topic_anchor_event_ids": [
+                                "one or more IDs from seed.parent_event_retrieval.selected_parent_event_ids"
+                            ],
+                            "continuity_relations": [
+                                {
+                                    "parent_event_id": "selected parent event ID",
+                                    "child_event_id": "local child event ID",
+                                    "relation": "continues|updates|supersedes|follows|caused_by|led_to|resolves|modifies|depends_on",
+                                }
+                            ],
+                        }
+                    }
+                    if v4_selected_parent_view
+                    else {}
+                ),
             },
         },
     }
@@ -6122,7 +10072,7 @@ def call_api_graph_expansion(
         "schema_version, graph_id, parent_graph_id, operation, question_type, attack_skill, events, false_candidates, and metadata. "
         "Never copy task, requirements, seed, legacy_alignment_result, output_schema, approved_* lists, status_literal_contract, operation_contract, hidden_query_conditioned_objective, "
         "item_difficulty_target, stage64_item_difficulty_contract, stage64_reasoning_target_contract, "
-        "temporal_generation_layout_contract, comparison_generation_layout_contract, count_generation_layout_contract, visibility_generation_layout_contract, relation_generation_layout_contract, previous_semantic_validation_error, invalid_graph_to_correct, correction_instruction, unsupported_status_correction, or semantic_correction_constraints into the response. "
+        "temporal_generation_layout_contract, bridge_generation_layout_contract, comparison_generation_layout_contract, count_generation_layout_contract, visibility_generation_layout_contract, relation_generation_layout_contract, previous_semantic_validation_error, invalid_graph_to_correct, correction_instruction, unsupported_status_correction, or semantic_correction_constraints into the response. "
         "Do not write dialogue. Do not write final trusted QA."
     )
     semantic_retry_limit = max(0, int(getattr(args, "graph_semantic_retries", 1) or 0))
@@ -6161,8 +10111,10 @@ def call_api_graph_expansion(
             raise error
         prompt_attempt = copy.deepcopy(prompt)
         if semantic_attempt_history:
-            prompt_attempt["previous_semantic_validation_error"] = copy.deepcopy(
-                semantic_attempt_history[-1]["issues"]
+            prompt_attempt["previous_semantic_validation_error"] = (
+                sanitize_semantic_retry_prompt_issues(
+                    semantic_attempt_history[-1]["issues"]
+                )
             )
             prompt_attempt["invalid_graph_to_correct"] = sanitize_invalid_graph_for_semantic_retry(
                 semantic_attempt_history[-1]["raw_payload"]
@@ -6216,7 +10168,11 @@ def call_api_graph_expansion(
                 )
                 for issue in semantic_attempt_history[-1].get("issues") or []
                 if isinstance(issue, dict)
-                and issue.get("code") == "parent_event_exact_semantic_reuse"
+                and issue.get("code")
+                in {
+                    "parent_event_exact_semantic_reuse",
+                    "parent_dialogue_entity_value_semantic_reuse",
+                }
                 and normalize_space(
                     (
                         issue.get("details")
@@ -6358,9 +10314,13 @@ def call_api_graph_expansion(
                         "all context_event_ids have pairwise distinct keys and none equals primary_key"
                     ),
                     "repair_mode": "rebuild_numeric_roles_from_scratch",
-                    "detected_native_layout_issues": comparison_raw_generation_layout_issues(
-                        {"operation": "comparison", "events": invalid_events},
-                        stage64_target,
+                    "detected_native_layout_issues": (
+                        sanitize_semantic_retry_prompt_issues(
+                            comparison_raw_generation_layout_issues(
+                                {"operation": "comparison", "events": invalid_events},
+                                stage64_target,
+                            )
+                        )
                     ),
                     "machine_checks": [
                         "len(events) == 8 and event IDs appear in required_array_event_id_order",
@@ -6425,28 +10385,97 @@ def call_api_graph_expansion(
                 }
                 prompt_attempt["semantic_correction_constraints"] = {
                     "operation": "bridge",
-                    "required_total_event_count_range": [6, 8],
+                    "required_total_event_count": 8,
+                    "required_total_event_count_range": [8, 8],
                     "required_array_event_id_order": required_event_ids,
                     "required_terminal_event_id": required_event_ids[2],
+                    "required_binder_event_id": required_event_ids[0],
+                    "required_answer_event_id": required_event_ids[1],
+                    "required_binder_join": "events[0].value == events[1].entity",
+                    "required_field_equalities": [
+                        "events[0].value == events[1].entity",
+                    ],
+                    "preferred_answer_type": preferred_answer_type or None,
+                    "required_role_schema": {
+                        required_event_ids[0]: {
+                            "role": "binder_support",
+                            "value_shape": "one short concrete named-entity atom; no sentence or relation clause",
+                            "depends_on": [],
+                        },
+                        required_event_ids[1]: {
+                            "role": "answer_support",
+                            "entity_shape": f"copy {required_event_ids[0]}.value byte-for-byte",
+                            "slot_shape": _stage64_answer_slot_requirement(
+                                preferred_answer_type
+                            ),
+                            "value_shape": (
+                                "one concrete person's proper name of one to five words only; no predicate or sentence"
+                                if preferred_answer_type == "Person"
+                                else f"one concrete atomic {preferred_answer_type or 'semantic'} value only; no sentence"
+                            ),
+                            "depends_on": [],
+                        },
+                        required_event_ids[2]: {
+                            "role": "terminal_connector",
+                            "value_shape": f"atomic connector that does not expose {required_event_ids[1]}.value",
+                            "depends_on": required_event_ids[:2],
+                        },
+                        required_event_ids[3]: {
+                            "role": "terminal_related_typed_hard_negative",
+                            "entity_shape": f"copy {required_event_ids[2]}.entity byte-for-byte",
+                            "slot_shape": f"copy {required_event_ids[1]}.slot byte-for-byte",
+                            "value_shape": f"atomic {preferred_answer_type or 'semantic'} value distinct from the answer",
+                            "depends_on": [],
+                        },
+                        required_event_ids[4]: {
+                            "role": "typed_hard_negative",
+                            "slot_shape": f"copy {required_event_ids[1]}.slot byte-for-byte",
+                            "value_shape": f"atomic {preferred_answer_type or 'semantic'} value distinct from the answer and every other option",
+                            "depends_on": [],
+                        },
+                        required_event_ids[5]: {
+                            "role": "typed_hard_negative",
+                            "slot_shape": f"copy {required_event_ids[1]}.slot byte-for-byte",
+                            "value_shape": f"atomic {preferred_answer_type or 'semantic'} value distinct from the answer and every other option",
+                            "depends_on": [],
+                        },
+                    },
+                    "terminal_must_not_copy_answer_value": True,
                     "required_dependency_map": dependency_map,
                     "forbidden_additional_dependency_edges": True,
                     "parent_collision_event_ids": parent_collision_event_ids,
                     "repair_mode": "rebuild_roles_from_scratch",
                     "machine_checks": [
+                        "len(events) == 8 and event IDs appear in required_array_event_id_order",
                         "the first three listed event IDs are the sole bridge roles",
+                        "events[0].value equals events[1].entity byte-for-byte",
+                        "events[1].value is the unique answer-bearing value with the requested answer type",
+                        "events[2] entity, slot, value, and materialized support claim do not expose events[1].value",
                         "events[0] and events[1] omit depends_on",
                         "events[2].depends_on is exactly [events[0].event_id, events[1].event_id]",
                         "every event after events[2] omits depends_on",
+                        "events[1].slot is compatible with preferred_answer_type",
+                        "events[3:6] copy events[1].slot and have three pairwise-distinct preferred_answer_type-compatible values that differ from events[1].value",
+                        "events[3].entity copies events[2].entity and has a different value",
                         "the core validator reports exactly one sink endpoint with a dependency closure of at least two events",
                         "every parent-collision event is replaced as a whole, including its fact tuple and support claim",
                     ],
                 }
                 prompt_attempt["correction_instruction"] += (
-                    " For bridge, rebuild the complete events array in the listed order. Replace every event listed in "
-                    "parent_collision_event_ids with a genuinely new child fact before assigning bridge roles. Keep exactly one terminal "
+                    " For bridge, rebuild exactly eight events in the listed order. Replace every event listed in "
+                    "parent_collision_event_ids with a genuinely new child fact before assigning bridge roles. Set "
+                    "events[0].value to one short named-entity atom only, not a sentence or relation clause, and copy it "
+                    "byte-for-byte into events[1].entity. Rewrite events[1].slot together with its value so the slot is "
+                    "a semantic role compatible with the frozen preferred answer type, never a date/location/count/status "
+                    "slot holding a Person. Make events[1].value one atomic value of the frozen preferred "
+                    "answer type; for Person it must be only a concrete person's proper name, never a predicate or clause. Rewrite "
+                    "events[2] so none of its entity, slot, value, or support surface repeats that answer. Keep exactly one terminal "
                     f"bridge endpoint {required_event_ids[2]!r}; set its depends_on exactly to "
                     f"[{required_event_ids[0]!r}, {required_event_ids[1]!r}], remove depends_on from every other event, "
-                    "and rewrite any former secondary bridge/context chain as independent context facts. Do not leave "
+                    "and copy events[2].entity into events[3].entity. Copy events[1].slot onto events[3:6], then give "
+                    "events[3:6] three distinct atomic values that match the same preferred answer type as "
+                    "events[1].value. Rewrite any former secondary "
+                    "bridge/context chain as independent context facts. Do not leave "
                     "a second sink with two ancestors. Satisfy every machine check before returning."
                 )
             elif stage64_operation == "relation_lookup" and isinstance(invalid_events, list) and len(invalid_events) >= 4:
@@ -6576,6 +10605,7 @@ def call_api_graph_expansion(
                         "events[0] is the unique earlier cause",
                         "events[1].depends_on is exactly [events[0].event_id] and events[1].time_index is greater",
                         "every event after events[1] omits depends_on",
+                        "at least one event after events[1] shares events[1].entity or events[1].slot with a different value",
                         "the core validator reports exactly one ordered dependency edge",
                         "every parent-reused event ID is replaced by a novel entity/slot/value/status fact",
                     ],
@@ -6585,7 +10615,8 @@ def call_api_graph_expansion(
                     "invalid graph wholesale. Preserve exactly one "
                     f"edge: {required_event_ids[1]!r}.depends_on must be [{required_event_ids[0]!r}], with a strictly later "
                     "time_index; remove depends_on from every event after the effect. Rewrite any secondary chains as "
-                    "independent adjacent noncausal facts. Replace every parent-reused event named in the constraints "
+                    "independent adjacent noncausal facts, with at least one sharing the effect entity or slot while "
+                    "carrying a different value. Replace every parent-reused event named in the constraints "
                     "with a genuinely novel fact. None of the listed entity/slot/value/status tuples may appear in the "
                     "corrected graph; change at least one tuple component and its support claim. The flagged cause event "
                     "must receive a new concrete value, not the old parent value. Satisfy every machine check before "
@@ -6640,6 +10671,19 @@ def call_api_graph_expansion(
                     "required_permission_scope_reference_event_id": required_event_ids[1],
                     "required_permission_dependency": [required_event_ids[0]],
                     "required_dependency_map": required_dependency_map,
+                    "required_typed_visibility_fields": list(
+                        VISIBILITY_TYPED_FIELDS
+                    ),
+                    "required_typed_visibility_event_type": (
+                        VISIBILITY_PERMISSION_EVENT_TYPE
+                    ),
+                    "typed_visibility_source_map": {
+                        "observer": "scope.observer",
+                        "action": "scope.permission",
+                        "condition": "scope.condition",
+                        "access_class": "value",
+                        "status": "status",
+                    },
                     "forbidden_exact_scope_match_event_ids": required_event_ids[2:],
                     "detected_exact_scope_match_event_ids": exact_scope_duplicate_event_ids,
                     "detected_duplicate_scope_event_ids": [
@@ -6658,6 +10702,9 @@ def call_api_graph_expansion(
                         "events[3] changes only permission relative to events[1]",
                         "events[4] changes only condition relative to events[1]",
                         "events[5:8] each differ from events[1] in at least one observer/permission/condition field",
+                        "events[1:8] use event_type visibility_permission and concrete non-empty owner/resource/observer/action/condition/access_class/status",
+                        "events[1:8] flat observer/action/condition/access_class/status exactly preserve scope.observer/scope.permission/scope.condition/value/status",
+                        "the seven required typed signatures and seven natural support claims are each pairwise unique",
                         "events[2:8] omit depends_on",
                         "exactly one event has the full required_permission_scope",
                         "every detected duplicate scope event is rewritten; changing status alone is insufficient",
@@ -6671,7 +10718,10 @@ def call_api_graph_expansion(
                     f"event's three-field scope as the reference. Make {required_event_ids[2]!r} differ only in observer, "
                     f"{required_event_ids[3]!r} differ only in permission, and {required_event_ids[4]!r} differ only "
                     "in condition. Rewrite every later event so at least one scope field differs, and remove depends_on "
-                    "from every event except the permission event. Rewrite every ID in detected_duplicate_scope_event_ids "
+                    "from every event except the permission event. On events[1:8], set event_type to visibility_permission; "
+                    "write concrete owner/resource fields and mirror scope.observer to observer, scope.permission to action, "
+                    "scope.condition to condition, value to access_class, and status to status without defaults. Make every "
+                    "typed signature and natural support claim unique. Rewrite every ID in detected_duplicate_scope_event_ids "
                     "explicitly; changing status is not a repair. Replace every event listed in parent_collision_event_ids "
                     "with a new fact tuple and new natural support claim. Exactly one event may match all three scope "
                     "fields; satisfy every machine check before returning."
@@ -6711,8 +10761,10 @@ def call_api_graph_expansion(
                         "all eight values are pairwise distinct after casefolding and punctuation/underscore normalization"
                     ),
                     "detected_native_layout_issues": (
-                        count_raw_generation_layout_issues(
-                            {"operation": "count", "events": invalid_events}
+                        sanitize_semantic_retry_prompt_issues(
+                            count_raw_generation_layout_issues(
+                                {"operation": "count", "events": invalid_events}
+                            )
                         )
                     ),
                     "parent_collision_event_ids": parent_collision_event_ids,
@@ -6741,20 +10793,7 @@ def call_api_graph_expansion(
                     "check before returning."
                 )
             elif stage64_operation == "temporal_state_update" and isinstance(invalid_events, list):
-                existing_event_ids = [
-                    normalize_space(event.get("event_id"))
-                    if isinstance(event, dict)
-                    else ""
-                    for event in invalid_events[:8]
-                ]
-                if (
-                    len(existing_event_ids) == 8
-                    and all(existing_event_ids)
-                    and len(set(existing_event_ids)) == 8
-                ):
-                    required_event_ids = existing_event_ids
-                else:
-                    required_event_ids = [f"E{index}" for index in range(1, 9)]
+                required_event_ids = list(temporal_required_event_ids)
                 primary_event_ids = required_event_ids[:4]
                 context_event_ids = required_event_ids[4:]
                 prompt_attempt["semantic_correction_constraints"] = {
@@ -6767,6 +10806,13 @@ def call_api_graph_expansion(
                     "primary_chain_event_ids": primary_event_ids,
                     "secondary_context_event_ids": context_event_ids,
                     "required_array_event_id_order": required_event_ids,
+                    "required_dependency_map": copy.deepcopy(
+                        temporal_required_dependency_map
+                    ),
+                    "preferred_answer_type": preferred_answer_type or None,
+                    "primary_answer_type_rule": _stage64_temporal_answer_type_requirement(
+                        preferred_answer_type
+                    ),
                     "required_status_literals_by_event_id": (
                         {
                             primary_event_ids[0]: list(STAGE64_NON_ACTIVE_STATUS_LITERALS),
@@ -6808,21 +10854,40 @@ def call_api_graph_expansion(
                         *context_event_ids,
                     ],
                     "detected_candidate_chain_diagnostics": (
-                        temporal_retry_candidate_chain_diagnostics(invalid_events)
-                    ),
-                    "detected_native_layout_issues": (
-                        temporal_raw_generation_layout_issues(
-                            {
-                                "operation": "temporal_state_update",
-                                "events": invalid_events,
-                            },
-                            stage64_target,
+                        sanitize_semantic_retry_prompt_diagnostics(
+                            temporal_retry_candidate_chain_diagnostics(
+                                invalid_events
+                            )
                         )
                     ),
+                    "detected_native_layout_issues": (
+                        sanitize_semantic_retry_prompt_issues(
+                            temporal_raw_generation_layout_issues(
+                                {
+                                    "operation": "temporal_state_update",
+                                    "events": invalid_events,
+                                },
+                                stage64_target,
+                            )
+                        )
+                    ),
+                    "parent_collision_event_ids": parent_collision_event_ids,
+                    "primary_value_uniqueness_contract": {
+                        "all_pairs_must_differ_after_normalization": True,
+                        "canceled_strategy_value_must_differ_from_current_gold": True,
+                        "strategy_label_is_not_a_restore_instruction": True,
+                    },
                     "machine_checks": [
                         "len(events) == 8 and event IDs appear in required_array_event_id_order",
                         "events[0:4] use one byte-for-byte identical entity string and one byte-for-byte identical slot string",
                         "events[0:4] contain four semantically distinct values; no value repeats and no cycle returns to an earlier value",
+                        "the later canceled hard-negative value differs from every prior chain value, especially the active/current gold value",
+                        (
+                            f"events[0:4] satisfy frozen preferred_answer_type={preferred_answer_type!r}: "
+                            f"{_stage64_temporal_answer_type_requirement(preferred_answer_type)}"
+                            if preferred_answer_type
+                            else "events[0:4] use one concrete semantic answer-value type"
+                        ),
                         *(
                             [
                                 f"events[0].status and events[2].status each equal one exact literal from [{STAGE64_NON_ACTIVE_STATUS_LITERAL_TEXT}]",
@@ -6839,6 +10904,13 @@ def call_api_graph_expansion(
                         "events[1].previous_value == events[0].value",
                         "events[2].previous_value == events[1].value",
                         "events[3].previous_value == events[2].value",
+                        "E1.depends_on is omitted or []",
+                        "E2.depends_on == ['E1']",
+                        "E3.depends_on == ['E2']",
+                        "E4.depends_on == ['E3']",
+                        "E5,E6,E7,E8 each omit depends_on or use []",
+                        "no dependency edge exists beyond required_dependency_map",
+                        "every parent-collision event is replaced as a whole with a novel entity-value fact and support claim",
                         "events[4:8] have four mutually distinct entity+slot pairs and none equals the primary entity+slot pair",
                         "events[4:8] all omit previous_value; null is not omission",
                         "time_index equals the one-based array position 1 through 8",
@@ -6850,12 +10922,23 @@ def call_api_graph_expansion(
                     "semantic_correction_constraints. The first four listed event IDs are the sole answer chain. Give "
                     "them one exact entity+slot and four different values. "
                     + (
+                        f"The chain must satisfy frozen preferred_answer_type={preferred_answer_type!r}: "
+                        f"{_stage64_temporal_answer_type_requirement(preferred_answer_type)}. "
+                        if preferred_answer_type
+                        else ""
+                    )
+                    + (
                         f"Set the second event to status active as the current/gold value, while the first and third use non-active literals and the fourth uses one exact status from {temporal_strategy_statuses!r} as the later target-strategy invalid update. The maximum-time event must not be gold. "
                         if temporal_anti_shortcut
                         else f"Set each of the first three statuses to one exact literal from [{STAGE64_NON_ACTIVE_STATUS_LITERAL_TEXT}], never the category label 'non-active'; follow them with status exactly active. "
                     )
                     + "Preserve the three exact adjacent previous_value links. Do not "
-                    "preserve a restore cycle. "
+                    "preserve a restore cycle. For same_slot_canceled_value, the canceled "
+                    "event is an alternative value in the same slot, never a copy of the "
+                    "active/current value; compare every pair after normalization before returning. "
+                    "Use IDs exactly E1 through E8. Apply required_dependency_map literally: E1=[], "
+                    "E2=['E1'], E3=['E2'], E4=['E3'], and E5=E6=E7=E8=[]. Remove every "
+                    "other dependency edge. "
                     "The last four listed event IDs are independent context singletons: rewrite each to a different "
                     "entity+slot pair and REMOVE previous_value entirely. Do not turn the second candidate chain into "
                     "another chain, and do not return previous_value:null. Satisfy every machine check before returning."
@@ -6877,6 +10960,15 @@ def call_api_graph_expansion(
                 "semantic_attempt_history": copy.deepcopy(
                     semantic_attempt_history
                 ),
+                **(
+                    {
+                        "parent_event_retrieval": copy.deepcopy(
+                            parent_event_retrieval
+                        )
+                    }
+                    if parent_event_retrieval is not None
+                    else {}
+                ),
             }
             error = NativeGraphDialogueReject(
                 "graph API prompt failed parent-text exposure audit before request"
@@ -6892,6 +10984,18 @@ def call_api_graph_expansion(
             )
             setattr(error, "api_graph_meta", copy.deepcopy(current_meta))
             raise error
+        semantic_retry_temperature: float | None = None
+        if semantic_attempt:
+            try:
+                base_temperature = float(
+                    getattr(args, "challenger_temperature", 0.25) or 0.25
+                )
+            except (TypeError, ValueError):
+                base_temperature = 0.25
+            semantic_retry_temperature = min(
+                0.75,
+                max(0.0, base_temperature) + 0.20 * semantic_attempt,
+            )
         current_payload, current_meta = call_raw_json_api(
             args,
             prompt_attempt,
@@ -6899,11 +11003,19 @@ def call_api_graph_expansion(
             required_keys=("events",),
             call_kind="api_graph_expansion",
             max_tokens_override=int(getattr(args, "graph_expansion_max_tokens", 0) or 0) or None,
+            temperature_override=semantic_retry_temperature,
         )
         current_meta["semantic_attempt"] = semantic_attempt + 1
+        current_meta["semantic_retry_temperature_override"] = (
+            semantic_retry_temperature
+        )
         current_meta["graph_parent_prompt_audit"] = copy.deepcopy(
             graph_parent_prompt_audit
         )
+        if parent_event_retrieval is not None:
+            current_meta["parent_event_retrieval"] = copy.deepcopy(
+                parent_event_retrieval
+            )
         if not isinstance(current_payload, dict):
             raw_responses = [
                 item.get("raw_response")
@@ -6929,6 +11041,21 @@ def call_api_graph_expansion(
                     "api_meta": copy.deepcopy(current_meta),
                 }
             )
+            if _api_meta_has_timeout(current_meta):
+                current_meta["semantic_retry_count"] = semantic_attempt
+                current_meta["semantic_retry_suppressed"] = (
+                    "transport_timeout_exhausted"
+                )
+                current_meta["semantic_attempt_history"] = copy.deepcopy(
+                    semantic_attempt_history
+                )
+                error = NativeGraphDialogueReject(
+                    "api graph expansion exhausted transport timeout retries; "
+                    "semantic retry suppressed"
+                )
+                setattr(error, "api_graph_payload", raw_context)
+                setattr(error, "api_graph_meta", copy.deepcopy(current_meta))
+                raise error
             if semantic_attempt < semantic_retry_limit:
                 continue
             current_meta["semantic_retry_count"] = semantic_attempt
@@ -6954,9 +11081,66 @@ def call_api_graph_expansion(
             current_meta.setdefault("normalizer_diagnostics", {}).update(
                 duplicate_normalizer_diagnostics
             )
+        elif stage64_operation == "temporal_state_update":
+            provider_temporal_payload = copy.deepcopy(current_payload)
+            current_payload, dependency_compiler_audit = (
+                materialize_temporal_dependency_contract(current_payload)
+            )
+            current_meta["temporal_dependency_compiler"] = copy.deepcopy(
+                dependency_compiler_audit
+            )
+            if dependency_compiler_audit.get("applied") is True:
+                # Out-of-band audit only.  The compiled graph stays solver-visible;
+                # the exact provider payload remains available for diagnosis.
+                current_meta[
+                    "provider_payload_before_temporal_dependency_compilation"
+                ] = provider_temporal_payload
 
         raw_semantic_issues: list[dict[str, Any]] = []
         if stage64_operation and current_meta.get("used"):
+            if v4_selected_parent_view:
+                selected_parent_graph = (
+                    semantic_seed_prompt.get("semantic_parent_graph")
+                    if isinstance(semantic_seed_prompt.get("semantic_parent_graph"), dict)
+                    else {}
+                )
+                selected_parent_events = [
+                    event
+                    for event in selected_parent_graph.get("events") or []
+                    if isinstance(event, dict)
+                ]
+                selected_parent_event_ids = (
+                    parent_event_retrieval.get("selected_event_ids")
+                    if isinstance(parent_event_retrieval, dict)
+                    and isinstance(parent_event_retrieval.get("selected_event_ids"), list)
+                    else []
+                )
+                parent_continuity_audit = (
+                    stage3_parent_continuity.parent_child_continuity_audit(
+                        current_payload,
+                        selected_parent_events,
+                        selected_parent_event_ids=selected_parent_event_ids,
+                    )
+                )
+                current_meta["parent_child_continuity_audit"] = copy.deepcopy(
+                    parent_continuity_audit
+                )
+                raw_semantic_issues.extend(
+                    {
+                        "code": normalize_space(issue.get("code"))
+                        or "parent_continuity_failed",
+                        "path": "$.metadata.parent_continuity",
+                        "message": normalize_space(issue.get("message"))
+                        or "The child graph failed selected-parent continuity validation.",
+                        "details": {
+                            key: copy.deepcopy(value)
+                            for key, value in issue.items()
+                            if key not in {"code", "message"}
+                        },
+                    }
+                    for issue in parent_continuity_audit.get("issues") or []
+                    if isinstance(issue, dict)
+                )
             parent_novelty_gate = graph_parent_novelty_gate_summary(
                 current_payload,
                 seed_row,
@@ -7030,6 +11214,51 @@ def call_api_graph_expansion(
                         "details": {"expected": expected_parent_graph_id, "actual": actual_parent_graph_id},
                     }
                 )
+            if stage64_operation == "visibility":
+                try:
+                    normalized_visibility_candidate = normalize_current_event_plan(
+                        current_payload,
+                        seed_row,
+                        question_type=question_type,
+                        attack_skill=attack_skill,
+                        policy=policy,
+                        sample_index=sample_index,
+                        round_id=round_id,
+                    )
+                    visibility_pre_dialogue_gate = (
+                        normalized_visibility_pre_dialogue_gate(
+                            normalized_visibility_candidate
+                        )
+                    )
+                except Exception as exc:
+                    visibility_pre_dialogue_gate = {
+                        "schema_version": VISIBILITY_PRE_DIALOGUE_GATE_VERSION,
+                        "applicable": True,
+                        "pass": False,
+                        "required_count": 0,
+                        "unique_typed_signature_count": 0,
+                        "unique_support_claim_count": 0,
+                        "issues": [
+                            {
+                                "code": "visibility_normalization_failed_before_dialogue",
+                                "path": "$.events",
+                                "message": (
+                                    "The visibility graph could not be normalized "
+                                    "into typed permission events."
+                                ),
+                                "details": {
+                                    "error_type": type(exc).__name__,
+                                    "error": str(exc),
+                                },
+                            }
+                        ],
+                    }
+                current_meta["normalized_visibility_pre_dialogue_gate"] = (
+                    copy.deepcopy(visibility_pre_dialogue_gate)
+                )
+                raw_semantic_issues.extend(
+                    visibility_pre_dialogue_gate["issues"]
+                )
             current_meta["semantic_graph_v2_quality"] = {
                 "pass": not raw_semantic_issues,
                 "qa_operation": stage64_operation,
@@ -7080,6 +11309,52 @@ def call_api_graph_expansion(
         setattr(exc, "api_graph_payload", copy.deepcopy(raw_payload))
         setattr(exc, "api_graph_meta", copy.deepcopy(meta))
         raise
+    if v4_selected_parent_view:
+        plan = stage3_parent_continuity.materialize_child_global_time(
+            plan,
+            _graph_parent_source_events(seed_row),
+        )
+        plan.setdefault("metadata", {})
+        if isinstance(plan.get("metadata"), dict):
+            continuity_audit = (
+                meta.get("parent_child_continuity_audit")
+                if isinstance(meta.get("parent_child_continuity_audit"), dict)
+                else {}
+            )
+            raw_continuity = (
+                (raw_payload.get("metadata") or {}).get("parent_continuity")
+                if isinstance(raw_payload.get("metadata"), dict)
+                and isinstance((raw_payload.get("metadata") or {}).get("parent_continuity"), dict)
+                else {}
+            )
+            verified_parent_continuity = {
+                "depends_on_parent_event_ids": copy.deepcopy(
+                    continuity_audit.get("depends_on_parent_event_ids") or []
+                ),
+                "parent_topic_anchor_event_ids": copy.deepcopy(
+                    continuity_audit.get("parent_topic_anchor_event_ids") or []
+                ),
+                "continuity_relations": copy.deepcopy(
+                    raw_continuity.get("continuity_relations") or []
+                ),
+                "continuity_score": continuity_audit.get("continuity_score"),
+                "continuity_reasons": copy.deepcopy(
+                    continuity_audit.get("continuity_reasons") or []
+                ),
+            }
+            meta["parent_continuity"] = copy.deepcopy(
+                verified_parent_continuity
+            )
+            plan["metadata"]["parent_continuity"] = copy.deepcopy(
+                verified_parent_continuity
+            )
+            plan["metadata"]["parent_event_retrieval"] = copy.deepcopy(
+                parent_event_retrieval
+            )
+            plan["metadata"]["parent_child_continuity_audit"] = copy.deepcopy(
+                meta.get("parent_child_continuity_audit")
+            )
+        plan["graph_snapshot_hash"] = compute_graph_snapshot_hash(plan)
     if query_objective:
         plan.setdefault("metadata", {})
         if isinstance(plan["metadata"], dict):
@@ -7380,6 +11655,14 @@ def sanitize_event_plan_for_dialogue_api(current_event_plan: dict[str, Any]) -> 
                 "marker": anchor,
                 "required": event.get("required_for_dialogue") is not False,
             }
+        for typed_field in (
+            "event_type",
+            *VISIBILITY_TYPED_FIELDS[:-1],
+            "global_time",
+            "local_time",
+        ):
+            if typed_field in event:
+                sanitized_event[typed_field] = copy.deepcopy(event[typed_field])
         sanitized_events.append(sanitized_event)
     return {
         "question_type": current_event_plan.get("question_type"),
@@ -9284,6 +13567,59 @@ def normalize_formal_segment_sidecar_support_quotes(
     return normalized, diagnostics
 
 
+def normalize_long_form_sidecar_support_quotes(
+    proposal: dict[str, Any],
+    *,
+    anchor_to_event: dict[str, str],
+    current_event_plan: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Repair only a valid long-form sidecar quote to its actual turn text.
+
+    Long-form responses use the same anchor contract as formal segments, but
+    their field is named ``appended_dialogue_turns``.  Reuse the fail-closed
+    semantic normalizer: it changes no dialogue text and refuses any marker
+    whose marked turn does not independently support the frozen event.
+    """
+    if not isinstance(proposal, dict):
+        return proposal, {
+            "used": False,
+            "repair_count": 0,
+            "skipped": [{"reason": "proposal_not_object"}],
+            "dialogue_content_preserved": True,
+        }
+    marker_to_exact_claim: dict[str, str] = {}
+    for event in current_event_plan.get("events") or []:
+        if not isinstance(event, dict):
+            continue
+        event_id = normalize_space(event.get("event_instance_id"))
+        marker = normalize_space(
+            event.get("alignment_anchor")
+            or (current_event_plan.get("current_event_instance_to_anchor") or {}).get(event_id)
+        )
+        claim = normalize_space(event.get("dialogue_support_claim"))
+        if marker and claim:
+            marker_to_exact_claim[marker] = claim
+    wrapper = {
+        "appended_dialogue_turns_segment": copy.deepcopy(
+            proposal.get("appended_dialogue_turns")
+        )
+    }
+    normalized_wrapper, diagnostics = normalize_formal_segment_sidecar_support_quotes(
+        wrapper,
+        assigned_markers=set(anchor_to_event),
+        marker_to_exact_claim=marker_to_exact_claim,
+        anchor_to_event=anchor_to_event,
+        current_event_plan=current_event_plan,
+    )
+    normalized = copy.deepcopy(proposal)
+    normalized["appended_dialogue_turns"] = normalized_wrapper.get(
+        "appended_dialogue_turns_segment", []
+    )
+    diagnostics = copy.deepcopy(diagnostics)
+    diagnostics["schema_version"] = "long_form_sidecar_quote_normalizer_v1"
+    return normalized, diagnostics
+
+
 def _normalize_formal_segment_turn_text(value: Any) -> str:
     """Normalize dialogue text for duplicate detection without dropping Unicode."""
 
@@ -9947,7 +14283,7 @@ def audit_formal_dialogue_segment_graph_fact_isolation(
 def validate_formal_dialogue_segment(
     proposal: dict[str, Any] | None,
     *,
-    expected_turn_count: int | None = None,
+    expected_turn_count: int | tuple[int, int] | None = None,
     assigned_markers: set[str],
     anchor_to_event: dict[str, str],
     current_event_plan: dict[str, Any],
@@ -9979,7 +14315,25 @@ def validate_formal_dialogue_segment(
     turns = _as_dialogue_list(raw_turns)
     if not turns:
         return {"pass": False, "reason": "empty_dialogue_segment"}
-    if expected_turn_count is not None and len(turns) != int(expected_turn_count):
+    if isinstance(expected_turn_count, tuple):
+        minimum_turn_count, maximum_turn_count = expected_turn_count
+        if not (
+            isinstance(minimum_turn_count, int)
+            and not isinstance(minimum_turn_count, bool)
+            and isinstance(maximum_turn_count, int)
+            and not isinstance(maximum_turn_count, bool)
+            and 0 < minimum_turn_count <= maximum_turn_count
+        ):
+            raise ValueError("expected_turn_count range must be a positive ordered pair")
+        if not minimum_turn_count <= len(turns) <= maximum_turn_count:
+            return {
+                "pass": False,
+                "reason": "segment_turn_count_out_of_range",
+                "minimum_turn_count": minimum_turn_count,
+                "maximum_turn_count": maximum_turn_count,
+                "actual_turn_count": len(turns),
+            }
+    elif expected_turn_count is not None and len(turns) != int(expected_turn_count):
         return {
             "pass": False,
             "reason": "segment_turn_count_mismatch",
@@ -10542,6 +14896,218 @@ def formal_segment_exact_claim_preflight(
     return validated_plan, diagnostics
 
 
+def compile_formal_local_evidence_turns(
+    assigned_items: Iterable[dict[str, Any]],
+    *,
+    marker_to_exact_claim: dict[str, str],
+    anchor_to_event: dict[str, str],
+    current_event_plan: dict[str, Any],
+    parent_turns: Iterable[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Serialize validated child-graph claims without asking the API to copy them.
+
+    The challenger still proposes the child graph. This local step only compiles
+    already validated graph facts into the exact evidence surface that the formal
+    dialogue validator requires. It is used only after the API fails the brittle
+    copy/marker contract for an otherwise uncommitted dialogue segment.
+    """
+
+    event_by_id = {
+        normalize_space(event.get("event_instance_id")): event
+        for event in current_event_plan.get("events") or []
+        if isinstance(event, dict) and normalize_space(event.get("event_instance_id"))
+    }
+    speakers: list[str] = []
+    for turn in parent_turns:
+        if not isinstance(turn, dict):
+            continue
+        speaker = normalize_space(turn.get("speaker"))
+        if speaker and speaker not in speakers:
+            speakers.append(speaker)
+    if not speakers:
+        speakers = ["Participant"]
+
+    compiled: list[dict[str, Any]] = []
+    provenance: list[dict[str, Any]] = []
+    for index, item in enumerate(assigned_items):
+        if not isinstance(item, dict):
+            continue
+        marker = normalize_space(item.get("marker"))
+        claim = normalize_space(marker_to_exact_claim.get(marker))
+        event_id = normalize_space(anchor_to_event.get(marker))
+        event = event_by_id.get(event_id) or {}
+        if not marker or not claim or not event_id:
+            continue
+        entity = normalize_text(event.get("entity"))
+        eligible_speakers = [
+            speaker for speaker in speakers if normalize_text(speaker) != entity
+        ]
+        speaker_pool = eligible_speakers or speakers
+        speaker = speaker_pool[index % len(speaker_pool)]
+        compiled.append(
+            {
+                "speaker": speaker,
+                "text": claim,
+                "alignment_anchors": [marker],
+                "support_quotes": {marker: claim},
+            }
+        )
+        provenance.append(
+            {
+                "marker": marker,
+                "event_instance_id": event_id,
+                "speaker": speaker,
+                "claim_sha256": hashlib.sha256(
+                    claim.casefold().encode("utf-8")
+                ).hexdigest(),
+                "claim_source": "local_compiled_validated_exact_claim",
+            }
+        )
+    diagnostics = {
+        "schema_version": "formal_local_evidence_turn_compiler_v1",
+        "pass": len(compiled) == len(marker_to_exact_claim),
+        "requested_marker_count": len(marker_to_exact_claim),
+        "compiled_marker_count": len(compiled),
+        "provenance": provenance,
+    }
+    return compiled, diagnostics
+
+
+def compile_long_form_local_evidence_turns(
+    current_event_plan: dict[str, Any],
+    parent_turns: Iterable[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Compile each frozen Stage3 child fact once for long-form realization.
+
+    Long-form APIs repeatedly attached every marker to unrelated filler turns.
+    This adapter reuses the existing fail-closed evidence compiler, but assigns
+    all child claims once up front and leaves the API responsible only for the
+    genuinely open-ended conversational expansion.
+    """
+    event_to_marker = (
+        current_event_plan.get("current_event_instance_to_anchor")
+        if isinstance(
+            current_event_plan.get("current_event_instance_to_anchor"), dict
+        )
+        else {}
+    )
+    anchor_to_event = (
+        current_event_plan.get("current_anchor_to_event_instance_id")
+        if isinstance(
+            current_event_plan.get("current_anchor_to_event_instance_id"), dict
+        )
+        else {}
+    )
+    assigned_items: list[dict[str, Any]] = []
+    marker_to_exact_claim: dict[str, str] = {}
+    for event in current_event_plan.get("events") or []:
+        if not isinstance(event, dict) or event.get("required_for_dialogue") is False:
+            continue
+        event_id = normalize_space(event.get("event_instance_id"))
+        marker = normalize_space(event.get("alignment_anchor") or event_to_marker.get(event_id))
+        claim = normalize_space(event.get("dialogue_support_claim"))
+        if not event_id or not marker or not claim:
+            continue
+        assigned_items.append(
+            {
+                "event_instance_id": event_id,
+                "marker": marker,
+                "natural_support_claim_to_include": claim,
+            }
+        )
+        marker_to_exact_claim[marker] = claim
+    compiled, diagnostics = compile_formal_local_evidence_turns(
+        assigned_items,
+        marker_to_exact_claim=marker_to_exact_claim,
+        anchor_to_event=anchor_to_event,
+        current_event_plan=current_event_plan,
+        parent_turns=parent_turns,
+    )
+    diagnostics = copy.deepcopy(diagnostics)
+    diagnostics["schema_version"] = "long_form_local_evidence_compiler_v1"
+    diagnostics["assigned_item_count"] = len(assigned_items)
+    diagnostics["api_must_emit_neutral_turns_only"] = True
+    return compiled, diagnostics
+
+
+def interleave_formal_local_evidence_turns(
+    neutral_turns: Iterable[dict[str, Any]],
+    evidence_turns: Iterable[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Disperse compiler-produced evidence through one API-neutral segment."""
+
+    neutral = [copy.deepcopy(turn) for turn in neutral_turns if isinstance(turn, dict)]
+    evidence = [copy.deepcopy(turn) for turn in evidence_turns if isinstance(turn, dict)]
+    if not evidence:
+        return neutral
+    slots: dict[int, list[dict[str, Any]]] = {}
+    for index, turn in enumerate(evidence):
+        slot = ((index + 1) * (len(neutral) + 1)) // (len(evidence) + 1)
+        slots.setdefault(slot, []).append(turn)
+    interleaved: list[dict[str, Any]] = []
+    for index in range(len(neutral) + 1):
+        interleaved.extend(slots.get(index, []))
+        if index < len(neutral):
+            interleaved.append(neutral[index])
+    return interleaved
+
+
+def configure_formal_local_evidence_prompt(
+    prompt: dict[str, Any],
+    *,
+    compiler_diagnostics: dict[str, Any],
+    compiled_marker_count: int,
+    minimum_neutral_turns: int,
+    maximum_neutral_turns: int,
+    minimum_neutral_tokens: int,
+    minimum_neutral_tokens_per_turn: int,
+) -> None:
+    """Replace the API copy/marker task with the bounded neutral-only contract."""
+
+    prompt["requirements"] = [
+        "Return only one JSON object with exactly one top-level key appended_dialogue_turns_segment.",
+        "Return between segment.minimum_neutral_turns and segment.maximum_neutral_turns complete, substantive neutral dialogue turns; do not return a schema example, placeholder, or correction note.",
+        "Every returned turn must set alignment_anchors to [] and support_quotes to {}. Do not emit any marker, support quote, graph evidence turn, event ID, schema term, or QA.",
+        "Write new natural conversational context with varied openings and sentence structures. The combined neutral text must contain at least segment.minimum_neutral_tokens whitespace-delimited tokens, and every turn must contain at least segment.minimum_neutral_tokens_per_turn such tokens. Each turn should usually have 3-5 sentences and add a distinct detail.",
+        "Do not state or paraphrase a tracked graph entity together with its value, or with its slot and status. Do not introduce values for tracked entities or slots.",
+        "Never reproduce, rewrite, summarize, or replace the parent or accepted-prefix turns. Do not expose graph, dataset, round, or alignment terminology in dialogue text.",
+    ]
+    segment = prompt.get("segment")
+    if not isinstance(segment, dict):
+        raise ValueError("formal dialogue segment prompt is missing its segment object")
+    segment.update(
+        {
+            "local_evidence_compiler": {
+                "enabled": True,
+                "schema_version": compiler_diagnostics.get("schema_version"),
+                "compiled_marker_count": int(compiled_marker_count),
+                "api_must_not_emit_markers": True,
+            },
+            "minimum_neutral_turns": int(minimum_neutral_turns),
+            "maximum_neutral_turns": int(maximum_neutral_turns),
+            "minimum_neutral_tokens": int(minimum_neutral_tokens),
+            "minimum_neutral_tokens_per_turn": int(
+                minimum_neutral_tokens_per_turn
+            ),
+            "assigned_anchor_realization_checklist": [],
+            "allowed_markers": [],
+            "marker_to_exact_natural_support_claim": {},
+            "required_marked_turn_shapes": [],
+        }
+    )
+    output_schema = prompt.get("output_schema")
+    array_schema = (
+        output_schema.get("appended_dialogue_turns_segment")
+        if isinstance(output_schema, dict)
+        else None
+    )
+    if not isinstance(array_schema, dict):
+        raise ValueError("formal dialogue segment prompt is missing its array schema")
+    array_schema.pop("exact_item_count", None)
+    array_schema["minimum_item_count"] = int(minimum_neutral_turns)
+    array_schema["maximum_item_count"] = int(maximum_neutral_turns)
+
+
 def _formal_bounded_opening_prefix(value: Any) -> str:
     tokens = _normalize_formal_segment_turn_text(value).split()
     if len(tokens) not in FORMAL_SEGMENT_OPENING_PREFIX_TOKEN_LENGTHS:
@@ -10935,6 +15501,9 @@ def call_api_formal_segmented_dialogue_expansion(
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     """Generate an immutable chain of API-native dialogue-only append segments."""
 
+    require_normalized_visibility_pre_dialogue_gate(
+        current_event_plan_with_anchors
+    )
     anchor_to_event = current_event_plan_with_anchors.get("current_anchor_to_event_instance_id")
     if not isinstance(anchor_to_event, dict) or not anchor_to_event:
         return None, {
@@ -10990,6 +15559,7 @@ def call_api_formal_segmented_dialogue_expansion(
         or current_event_plan_with_anchors.get("operation")
         or current_event_plan_with_anchors.get("qa_operation")
     )
+    formal_stage64_target = bool(stage64_operation and stage64_target)
     evidence_layout_plan = _stage64_evidence_layout_plan(
         checklist,
         current_event_plan=current_event_plan_with_anchors,
@@ -11018,7 +15588,14 @@ def call_api_formal_segmented_dialogue_expansion(
         int(min_added_tokens or 0),
         effective_parent_baseline - parent_tokens + int(min_added_tokens or 0),
     )
-    target_tokens = required_new_tokens + FORMAL_DIALOGUE_TOKEN_MARGIN
+    # The formal Stage3 contract is an actual >=4k extension.  Requiring an
+    # additional fixed margin made the per-segment floor mathematically
+    # inconsistent with the API's observed segment size and rejected otherwise
+    # valid long dialogues.  Keep the historical margin for non-formal callers,
+    # but make the frozen Stage3 target itself the hard total-length threshold.
+    target_tokens = required_new_tokens + (
+        0 if formal_stage64_target else FORMAL_DIALOGUE_TOKEN_MARGIN
+    )
     max_segments = min(
         FORMAL_DIALOGUE_MAX_SEGMENTS,
         max(
@@ -11159,6 +15736,38 @@ def call_api_formal_segmented_dialogue_expansion(
             }
             for marker in sorted(marker_to_exact_claim)
         ]
+        # A formal sample must remain challenger-authored: the API writes every
+        # solver-visible turn, including graph evidence.  Earlier recovery code
+        # could switch a failed segment to a local fact compiler.  That made
+        # factual coverage easier to verify, but produced stitched dialogue and
+        # broke the intended API-challenger experiment.  Keep the old helpers
+        # for reading historical artifacts, but never activate them for new
+        # generation or retries.
+        local_compiler_trigger_reasons: set[str] = set()
+        use_local_evidence_compiler = False
+        local_evidence_turns: list[dict[str, Any]] = []
+        local_evidence_compiler: dict[str, Any] | None = None
+        if use_local_evidence_compiler:
+            local_evidence_turns, local_evidence_compiler = (
+                compile_formal_local_evidence_turns(
+                    assigned_items,
+                    marker_to_exact_claim=marker_to_exact_claim,
+                    anchor_to_event=anchor_to_event,
+                    current_event_plan=current_event_plan_with_anchors,
+                    parent_turns=parent_turns,
+                )
+            )
+            if local_evidence_compiler.get("pass") is not True:
+                return None, {
+                    "used": False,
+                    "call_kind": "api_formal_segmented_dialogue",
+                    "error_type": "formal_local_evidence_compiler_failed",
+                    "failed_segment_index": segment_index,
+                    "segment_api_call_count": api_call_count,
+                    "attempts": api_attempt_count,
+                    "local_evidence_compiler": local_evidence_compiler,
+                    "exact_claim_preflight": exact_claim_preflight,
+                }
         remaining_tokens = max(0, target_tokens - cumulative_tokens)
         requested_segment_tokens = min(target_segment_tokens, max(384, remaining_tokens + 96))
         requested_turns = max(
@@ -11173,13 +15782,86 @@ def call_api_formal_segmented_dialogue_expansion(
                 // FORMAL_DIALOGUE_SEGMENT_TARGET_TOKENS_PER_TURN,
             ),
         )
+        # A marker-free segment contains only independently audited neutral
+        # context.  API models often make an otherwise valid 16-turn segment
+        # 17 turns long.  Preserve that complete output rather than silently
+        # deleting a turn or spending retries on a non-semantic exact-count
+        # failure.  Evidence-bearing segments remain exact because their
+        # marker-to-turn mapping is part of the frozen proof contract.
+        marker_free_turn_count_tolerance = 1 if not assigned_markers else 0
+        minimum_requested_turns = requested_turns
+        maximum_requested_turns = (
+            requested_turns + marker_free_turn_count_tolerance
+        )
+        expected_turn_count: int | tuple[int, int] = (
+            (minimum_requested_turns, maximum_requested_turns)
+            if marker_free_turn_count_tolerance
+            else requested_turns
+        )
+        turn_count_requirement_text = (
+            f"between {minimum_requested_turns} and {maximum_requested_turns}"
+            if marker_free_turn_count_tolerance
+            else f"exactly {requested_turns}"
+        )
+        # The local compiler owns only exact graph-evidence turns.  The API
+        # must still supply a nearly complete neutral segment, otherwise a
+        # successful marker repair silently collapses a long-form Stage3
+        # extension back to a few hundred tokens and forces many brittle tail
+        # segments.  One bounded extra neutral turn is allowed for the same
+        # reason marker-free segments tolerate one extra complete turn: retain
+        # validated API content rather than trimming it.
+        minimum_neutral_turns = max(
+            4,
+            requested_turns - len(local_evidence_turns),
+        )
+        maximum_neutral_turns = max(
+            minimum_neutral_turns,
+            FORMAL_DIALOGUE_SEGMENT_MAX_TURNS
+            - len(local_evidence_turns)
+            + 1,
+        )
+        if formal_stage64_target:
+            # A local segment must be substantive, but its floor must also be
+            # achievable across the remaining bounded API calls.  The final
+            # aggregate check below remains exact and is the only authority on
+            # the required >=4k extension.
+            remaining_segment_count = max(1, max_segments - segment_index)
+            minimum_segment_tokens = min(
+                384,
+                max(
+                    192,
+                    int(
+                        (remaining_tokens * 0.70)
+                        / remaining_segment_count
+                    ),
+                ),
+            )
+        else:
+            minimum_segment_tokens = min(
+                384,
+                max(192, int(requested_segment_tokens * 0.25)),
+            )
+        local_evidence_tokens, _local_evidence_token_mode = (
+            dialogue_tokens_for_turns(local_evidence_turns, tokenizer_path)
+        )
+        minimum_neutral_tokens = max(
+            128,
+            int(minimum_segment_tokens) - int(local_evidence_tokens),
+        )
+        minimum_neutral_tokens_per_turn = max(
+            32,
+            (
+                int(minimum_neutral_tokens) + int(minimum_neutral_turns) - 1
+            )
+            // int(minimum_neutral_turns),
+        )
         segment_prompt = {
             "task": "formal current_method API-native immutable appended dialogue segment",
             "requirements": [
                 "Return only a new dialogue segment. Never reproduce, rewrite, summarize, or replace the parent or any accepted prefix turn.",
                 "Return exactly one JSON object with exactly one top-level key: appended_dialogue_turns_segment. Its value must be an array of turn objects; never return one bare turn object, qa_proposal, a final answer, or a full dialogue.",
                 "output_schema is a description, not output to copy. Return the actual appended_dialogue_turns_segment array; never emit value_type, exact_item_count, or item_schema as response fields.",
-                f"Write about {requested_segment_tokens} substantive dialogue tokens across exactly {requested_turns} natural turns; do not return fewer or more turns.",
+                f"Write about {requested_segment_tokens} substantive dialogue tokens across {turn_count_requirement_text} natural turns; do not return fewer or more than that permitted range.",
                 "Each neutral turn should usually contain 3-5 natural sentences and contribute a different concrete detail. A marked evidence turn is the sole exception: it must contain only its exact mapped claim. Do not use filler, repeated recap templates, or short acknowledgements.",
                 "Every returned turn must be textually distinct from every other turn in this segment and from every prior accepted appended turn; never copy an old turn and add a sentence to disguise it.",
                 "Do not restate, closely paraphrase, summarize, or extend prior accepted turns. Each neutral turn must add genuinely new semantic information with new wording and sentence structure.",
@@ -11223,6 +15905,12 @@ def call_api_formal_segmented_dialogue_expansion(
                 "segment_validation_attempt_limit": segment_attempt_limit,
                 "requested_dialogue_tokens": requested_segment_tokens,
                 "requested_turns": requested_turns,
+                "turn_count_contract": {
+                    "minimum_turns": minimum_requested_turns,
+                    "maximum_turns": maximum_requested_turns,
+                    "exact_required": marker_free_turn_count_tolerance == 0,
+                    "marker_free_tolerance": marker_free_turn_count_tolerance,
+                },
                 "assigned_anchor_realization_checklist": assigned_items,
                 "allowed_markers": sorted(assigned_markers),
                 "marker_to_exact_natural_support_claim": marker_to_exact_claim,
@@ -11282,7 +15970,14 @@ def call_api_formal_segmented_dialogue_expansion(
             "output_schema": {
                 "appended_dialogue_turns_segment": {
                     "value_type": "array",
-                    "exact_item_count": requested_turns,
+                    **(
+                        {"exact_item_count": requested_turns}
+                        if marker_free_turn_count_tolerance == 0
+                        else {
+                            "minimum_item_count": minimum_requested_turns,
+                            "maximum_item_count": maximum_requested_turns,
+                        }
+                    ),
                     "item_schema": {
                         "speaker": "string",
                         "text": "new natural dialogue text only",
@@ -11292,11 +15987,96 @@ def call_api_formal_segmented_dialogue_expansion(
                 },
             },
         }
+        if use_local_evidence_compiler:
+            configure_formal_local_evidence_prompt(
+                segment_prompt,
+                compiler_diagnostics=local_evidence_compiler,
+                compiled_marker_count=len(local_evidence_turns),
+                minimum_neutral_turns=minimum_neutral_turns,
+                maximum_neutral_turns=maximum_neutral_turns,
+                minimum_neutral_tokens=minimum_neutral_tokens,
+                minimum_neutral_tokens_per_turn=minimum_neutral_tokens_per_turn,
+            )
         accepted_validation: dict[str, Any] | None = None
         accepted_payload: dict[str, Any] | None = None
         accepted_meta: dict[str, Any] | None = None
         for segment_attempt in range(1, segment_attempt_limit + 1):
             prompt_for_attempt = copy.deepcopy(segment_prompt)
+            if (
+                not use_local_evidence_compiler
+                and assigned_markers
+                and isinstance(last_failure, dict)
+                and normalize_space(last_failure.get("reason"))
+                in local_compiler_trigger_reasons
+            ):
+                use_local_evidence_compiler = True
+                local_evidence_turns, local_evidence_compiler = (
+                    compile_formal_local_evidence_turns(
+                        assigned_items,
+                        marker_to_exact_claim=marker_to_exact_claim,
+                        anchor_to_event=anchor_to_event,
+                        current_event_plan=current_event_plan_with_anchors,
+                        parent_turns=parent_turns,
+                    )
+                )
+                if local_evidence_compiler.get("pass") is not True:
+                    return None, {
+                        "used": False,
+                        "call_kind": "api_formal_segmented_dialogue",
+                        "error_type": "formal_local_evidence_compiler_failed",
+                        "failed_segment_index": segment_index,
+                        "segment_api_call_count": api_call_count,
+                        "attempts": api_attempt_count,
+                        "local_evidence_compiler": local_evidence_compiler,
+                        "exact_claim_preflight": exact_claim_preflight,
+                    }
+                minimum_neutral_turns = max(
+                    4,
+                    min(8, requested_turns - len(local_evidence_turns)),
+                )
+                maximum_neutral_turns = max(
+                    minimum_neutral_turns,
+                    FORMAL_DIALOGUE_SEGMENT_MAX_TURNS - len(local_evidence_turns),
+                )
+                local_evidence_tokens, _local_evidence_token_mode = (
+                    dialogue_tokens_for_turns(local_evidence_turns, tokenizer_path)
+                )
+                minimum_neutral_tokens = max(
+                    128,
+                    int(minimum_segment_tokens) - int(local_evidence_tokens),
+                )
+                minimum_neutral_tokens_per_turn = max(
+                    32,
+                    (
+                        int(minimum_neutral_tokens)
+                        + int(minimum_neutral_turns)
+                        - 1
+                    )
+                    // int(minimum_neutral_turns),
+                )
+                configure_formal_local_evidence_prompt(
+                    prompt_for_attempt,
+                    compiler_diagnostics=local_evidence_compiler,
+                    compiled_marker_count=len(local_evidence_turns),
+                    minimum_neutral_turns=minimum_neutral_turns,
+                    maximum_neutral_turns=maximum_neutral_turns,
+                    minimum_neutral_tokens=minimum_neutral_tokens,
+                    minimum_neutral_tokens_per_turn=(
+                        minimum_neutral_tokens_per_turn
+                    ),
+                )
+            if use_local_evidence_compiler:
+                configure_formal_local_evidence_prompt(
+                    prompt_for_attempt,
+                    compiler_diagnostics=local_evidence_compiler or {},
+                    compiled_marker_count=len(local_evidence_turns),
+                    minimum_neutral_turns=minimum_neutral_turns,
+                    maximum_neutral_turns=maximum_neutral_turns,
+                    minimum_neutral_tokens=minimum_neutral_tokens,
+                    minimum_neutral_tokens_per_turn=(
+                        minimum_neutral_tokens_per_turn
+                    ),
+                )
             retry_generation_id = stable_hash(
                 {
                     "version": FORMAL_DIALOGUE_RETRY_VARIATION_VERSION,
@@ -11405,6 +16185,19 @@ def call_api_formal_segmented_dialogue_expansion(
                 retry_contract = _formal_segment_retry_contract(last_failure, assigned_items)
                 if retry_contract:
                     prompt_for_attempt["segment_alignment_repair_contract"] = retry_contract
+            if use_local_evidence_compiler and isinstance(last_failure, dict):
+                # The old repair contract asks the API to recreate markers and
+                # exact evidence claims. Once the local compiler takes ownership
+                # of those fields, replaying it would contradict the neutral-only
+                # prompt and reintroduce the same formatting failure.
+                prompt_for_attempt["previous_segment_validation_error"] = {
+                    "reason": normalize_space(last_failure.get("reason"))
+                    or "formal_dialogue_retry",
+                    "local_evidence_compiler_enabled": True,
+                    "api_evidence_copy_contract_replaced": True,
+                    "api_must_return_neutral_turns_only": True,
+                }
+                prompt_for_attempt.pop("segment_alignment_repair_contract", None)
             parent_prompt_audit = audit_formal_parent_prompt_verbatim_exposure(
                 prompt_for_attempt,
                 parent_turns,
@@ -11459,10 +16252,14 @@ def call_api_formal_segmented_dialogue_expansion(
                     ),
                     "exact_claim_preflight": exact_claim_preflight,
                 }
-            payload, segment_meta = call_raw_json_api(
-                args,
-                prompt_for_attempt,
-                system_prompt=(
+            segment_system_prompt = (
+                "You are a strict JSON-only neutral dialogue segment writer. "
+                "Return only new neutral turns for this segment and never return QA. "
+                "Return an actual appended_dialogue_turns_segment array, not an item_schema or one example item. "
+                "Every turn must use alignment_anchors=[] and support_quotes={}; never emit a marker or support quote. "
+                "Do not state tracked graph facts. Every turn must add new non-evidence context with varied wording and openings."
+                if use_local_evidence_compiler
+                else (
                     "You are a strict JSON-only append-only dialogue segment writer. "
                     "Return only new turns for this segment and never return QA. "
                     "The output_schema is descriptive only: return an actual appended_dialogue_turns_segment array "
@@ -11478,7 +16275,12 @@ def call_api_formal_segmented_dialogue_expansion(
                     "or extend another returned turn or any prior accepted turn."
                     " Vary how turns begin and how sentences advance the topic; do not cycle through 'I'm going to', "
                     "'I think', or 'That's' opening templates."
-                ),
+                )
+            )
+            payload, segment_meta = call_raw_json_api(
+                args,
+                prompt_for_attempt,
+                system_prompt=segment_system_prompt,
                 required_keys=("appended_dialogue_turns_segment",),
                 call_kind="api_formal_dialogue_segment",
                 max_tokens_override=segment_max_output_tokens,
@@ -11518,25 +16320,116 @@ def call_api_formal_segmented_dialogue_expansion(
             for key, value in (segment_meta.get("usage") or {}).items():
                 if isinstance(value, (int, float)):
                     usage_totals[key] += value
-            validation = validate_formal_dialogue_segment(
-                payload,
-                expected_turn_count=requested_turns,
-                assigned_markers=assigned_markers,
-                anchor_to_event=anchor_to_event,
-                current_event_plan=current_event_plan_with_anchors,
-                frozen_prefix_turns=parent_turns + appended_marked,
-                accepted_appended_turns=appended_marked,
-                marker_to_exact_claim=marker_to_exact_claim,
-                duplicate_marker_to_exact_claim=all_marker_to_exact_claim,
-            )
+            candidate_payload = payload
+            if use_local_evidence_compiler:
+                neutral_turns = _as_dialogue_list(
+                    payload.get("appended_dialogue_turns_segment")
+                    if isinstance(payload, dict)
+                    else None
+                )
+                compiler_failure: dict[str, Any] | None = None
+                normalized_neutral_turns: list[dict[str, Any]] = []
+                stripped_api_sidecar_turn_indices: list[int] = []
+                if not neutral_turns:
+                    compiler_failure = {
+                        "pass": False,
+                        "reason": "local_compiler_neutral_segment_missing",
+                    }
+                elif not (
+                    minimum_neutral_turns
+                    <= len(neutral_turns)
+                    <= maximum_neutral_turns
+                ):
+                    compiler_failure = {
+                        "pass": False,
+                        "reason": "local_compiler_neutral_turn_count_out_of_range",
+                        "minimum_neutral_turns": minimum_neutral_turns,
+                        "maximum_neutral_turns": maximum_neutral_turns,
+                        "actual_neutral_turns": len(neutral_turns),
+                    }
+                else:
+                    for turn_index, turn in enumerate(neutral_turns):
+                        if not isinstance(turn, dict):
+                            compiler_failure = {
+                                "pass": False,
+                                "reason": "local_compiler_neutral_turn_not_object",
+                                "turn_index": turn_index,
+                            }
+                            break
+                        raw_anchors = turn.get("alignment_anchors")
+                        raw_quotes = turn.get("support_quotes")
+                        if raw_anchors is not None and not isinstance(raw_anchors, list):
+                            compiler_failure = {
+                                "pass": False,
+                                "reason": "local_compiler_api_anchor_sidecar_invalid",
+                                "turn_index": turn_index,
+                            }
+                            break
+                        if raw_quotes is not None and not isinstance(raw_quotes, dict):
+                            compiler_failure = {
+                                "pass": False,
+                                "reason": "local_compiler_api_quote_sidecar_invalid",
+                                "turn_index": turn_index,
+                            }
+                            break
+                        normalized_turn = copy.deepcopy(turn)
+                        if raw_anchors or raw_quotes:
+                            stripped_api_sidecar_turn_indices.append(turn_index)
+                        # These are uncommitted neutral candidates. Marker sidecars
+                        # are formatting metadata, not evidence; discard them and
+                        # let the subsequent graph-fact isolation audit decide
+                        # whether the text itself improperly exposes a fact.
+                        normalized_turn["alignment_anchors"] = []
+                        normalized_turn["support_quotes"] = {}
+                        normalized_neutral_turns.append(normalized_turn)
+                if compiler_failure is not None:
+                    validation = compiler_failure
+                else:
+                    candidate_payload = {
+                        "appended_dialogue_turns_segment": (
+                            interleave_formal_local_evidence_turns(
+                                normalized_neutral_turns,
+                                local_evidence_turns,
+                            )
+                        )
+                    }
+                    validation = validate_formal_dialogue_segment(
+                        candidate_payload,
+                        expected_turn_count=None,
+                        assigned_markers=assigned_markers,
+                        anchor_to_event=anchor_to_event,
+                        current_event_plan=current_event_plan_with_anchors,
+                        frozen_prefix_turns=parent_turns + appended_marked,
+                        accepted_appended_turns=appended_marked,
+                        marker_to_exact_claim=marker_to_exact_claim,
+                        duplicate_marker_to_exact_claim=all_marker_to_exact_claim,
+                    )
+                validation["local_evidence_compiler"] = copy.deepcopy(
+                    local_evidence_compiler
+                )
+                validation["api_neutral_turn_count"] = len(neutral_turns)
+                validation["api_neutral_sidecar_strip_count"] = len(
+                    stripped_api_sidecar_turn_indices
+                )
+                validation["api_neutral_sidecar_strip_turn_indices"] = (
+                    stripped_api_sidecar_turn_indices
+                )
+            else:
+                validation = validate_formal_dialogue_segment(
+                    payload,
+                    expected_turn_count=expected_turn_count,
+                    assigned_markers=assigned_markers,
+                    anchor_to_event=anchor_to_event,
+                    current_event_plan=current_event_plan_with_anchors,
+                    frozen_prefix_turns=parent_turns + appended_marked,
+                    accepted_appended_turns=appended_marked,
+                    marker_to_exact_claim=marker_to_exact_claim,
+                    duplicate_marker_to_exact_claim=all_marker_to_exact_claim,
+                )
             if validation.get("pass") is True:
                 segment_token_count, segment_token_mode = dialogue_tokens_for_turns(
                     validation.get("clean_turns") or [],
                     tokenizer_path,
-                )
-                minimum_segment_tokens = min(
-                    384,
-                    max(192, int(requested_segment_tokens * 0.25)),
                 )
                 validation["segment_token_count"] = int(segment_token_count)
                 validation["segment_token_mode"] = segment_token_mode
@@ -11552,12 +16445,17 @@ def call_api_formal_segmented_dialogue_expansion(
                 "marker_schedule": copy.deepcopy(marker_schedule),
                 "meta": copy.deepcopy(segment_meta),
                 "payload": copy.deepcopy(payload),
+                "compiled_payload": (
+                    copy.deepcopy(candidate_payload)
+                    if use_local_evidence_compiler
+                    else None
+                ),
                 "validation": copy.deepcopy(validation),
             }
             segment_records.append(record)
             if segment_meta.get("used") and validation.get("pass") is True:
                 accepted_validation = validation
-                accepted_payload = payload
+                accepted_payload = candidate_payload
                 accepted_meta = segment_meta
                 last_failure = None
                 break
@@ -11567,6 +16465,7 @@ def call_api_formal_segmented_dialogue_expansion(
                 "api_used": bool(segment_meta.get("used")),
                 "reason": validation.get("reason") or segment_meta.get("error_type") or "segment_api_failed",
                 "retry_generation_id": retry_generation_id,
+                "local_evidence_compiler_used": use_local_evidence_compiler,
             }
             for detail_key in (
                 "missing_markers",
@@ -11632,7 +16531,7 @@ def call_api_formal_segmented_dialogue_expansion(
             _formal_extend_forbidden_opening_prefixes(
                 forbidden_opening_prefixes,
                 _formal_failed_candidate_opening_prefixes(
-                    payload,
+                    candidate_payload,
                     validation,
                     all_marker_to_exact_claim,
                 ),
@@ -12057,6 +16956,80 @@ def call_api_formal_segmented_dialogue_expansion(
     }
 
 
+def _long_form_chunk_fact_assignments(
+    checklist: list[dict[str, Any]],
+    *,
+    chunk_index: int,
+    chunk_count: int,
+    turn_count: int,
+) -> list[dict[str, Any]]:
+    """Assign graph facts to one immutable API dialogue chunk.
+
+    This is scheduling metadata only: it never writes dialogue or rewrites a
+    graph fact.  Spreading facts over the initial append and its API-only tails
+    is necessary for the evidence-dispersion gate, and prevents a model from
+    front-loading every fact before producing a long repeated filler tail.
+    """
+
+    normalized_chunk_count = max(1, int(chunk_count or 1))
+    normalized_chunk_index = min(
+        max(0, int(chunk_index or 0)), normalized_chunk_count - 1
+    )
+    assigned = [
+        item
+        for index, item in enumerate(checklist)
+        if index % normalized_chunk_count == normalized_chunk_index
+    ]
+    if not assigned:
+        return []
+    usable_turn_count = max(1, int(turn_count or 1))
+    # Keep the first and last assigned facts well inside the chunk instead of
+    # placing them in an opening fact list or a last-turn dump.  The dialogue
+    # API receives these positions and authors every visible token itself.
+    positions = [
+        max(
+            1,
+            min(
+                usable_turn_count,
+                round((position + 1) * (usable_turn_count + 1) / (len(assigned) + 1)),
+            ),
+        )
+        for position in range(len(assigned))
+    ]
+    return [
+        {
+            "response_turn_index": turn_position,
+            "evidence_id": normalize_space(item.get("marker")),
+            "natural_fact": normalize_space(
+                item.get("natural_support_claim_to_include")
+            ),
+        }
+        for item, turn_position in zip(assigned, positions)
+        if normalize_space(item.get("marker"))
+        and normalize_space(item.get("natural_support_claim_to_include"))
+    ]
+
+
+def _long_form_chunk_fact_event_ids(
+    checklist: list[dict[str, Any]],
+    *,
+    chunk_index: int,
+    chunk_count: int,
+) -> list[str]:
+    """Return the frozen event IDs assigned to one fact-only API chunk."""
+
+    normalized_chunk_count = max(1, int(chunk_count or 1))
+    normalized_chunk_index = min(
+        max(0, int(chunk_index or 0)), normalized_chunk_count - 1
+    )
+    return [
+        event_id
+        for index, item in enumerate(checklist)
+        if index % normalized_chunk_count == normalized_chunk_index
+        and (event_id := normalize_space(item.get("event_instance_id")))
+    ]
+
+
 def call_api_graph_conditioned_dialogue_expansion(
     current_event_plan_with_anchors: dict[str, Any],
     seed_row: dict[str, Any],
@@ -12071,7 +17044,13 @@ def call_api_graph_conditioned_dialogue_expansion(
     min_added_tokens: int,
     length_guard_parent_baseline_tokens: int = 0,
     retry_context: dict[str, Any] | None = None,
+    local_evidence_compiler: bool = False,
+    fact_chunk_index: int = 0,
+    fact_chunk_count: int = 1,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    require_normalized_visibility_pre_dialogue_gate(
+        current_event_plan_with_anchors
+    )
     dialogue_plan = sanitize_event_plan_for_dialogue_api(current_event_plan_with_anchors)
     sanitized_seed_context = sanitize_seed_context_for_dialogue_api(seed_row)
     stage64_qa_mode = bool(isinstance(policy, dict) and policy.get("qa_operation_answer_type_diversification"))
@@ -12136,17 +17115,77 @@ def call_api_graph_conditioned_dialogue_expansion(
     )
     effective_parent_baseline = max(parent_prompt_tokens, int(length_guard_parent_baseline_tokens or 0))
     effective_required_new_tokens = max(int(min_added_tokens or 0), effective_parent_baseline - parent_prompt_tokens + int(min_added_tokens or 0))
+    long_form_minimum_turns = max(int(min_added_turns or 0), 24)
+    long_form_minimum_words_per_turn: int | None = None
+    requested_initial_tokens: int | None = None
+    final_target_new_tokens: int | None = None
+    chunk_turn_count: int | None = None
     if easy_mode and not hard_length_delta:
         length_instruction = (
             f"Append at least {max(min_added_turns, 12)} turns and target {max(min_added_tokens, 500)}-900 "
             "new approximate tokens. Keep the appended block short and natural; do not pad."
         )
     else:
-        length_instruction = (
-            f"Append at least {max(min_added_turns, 24)} turns and target at least "
-            f"{max(effective_required_new_tokens + 384, 1400)} new approximate tokens. "
-            "Use enough substantive new turns to create a genuinely longer conversation; do not rely on short filler."
+        # A vague token target made the API satisfy only the old 24-turn floor
+        # (about 0.9k tokenizer tokens) while the final hard guard required
+        # +4k.  Translate the immutable length contract into observable output
+        # constraints.  Historical successful +4k samples used about 80--90
+        # substantive turns (roughly 52 tokenizer tokens per turn), so use
+        # that proven scale rather than an unnecessarily large 110-turn ask.
+        final_target_new_tokens = max(effective_required_new_tokens + 384, 1400)
+        # A single JSON response carrying a complete +4k extension regularly
+        # exceeds the API gateway's practical response window.  When the
+        # caller explicitly enables append-only continuations, ask for one
+        # modest API-authored chunk first.  The ordinary length guard then
+        # requests only immutable API tails; no graph or dialogue text is
+        # written locally and the final target remains unchanged.
+        try:
+            continuation_budget = max(
+                0,
+                int(getattr(args, "stage3_max_length_continuations", 0)),
+            )
+        except (TypeError, ValueError):
+            continuation_budget = 0
+        try:
+            api_chunk_tokens = max(
+                800,
+                int(getattr(args, "stage3_api_dialogue_chunk_tokens", 800)),
+            )
+        except (TypeError, ValueError):
+            api_chunk_tokens = 800
+        requested_initial_tokens = (
+            min(final_target_new_tokens, api_chunk_tokens)
+            if stage64_qa_mode and continuation_budget > 0
+            else final_target_new_tokens
         )
+        # A bounded JSON reply needs a fixed turn count.  "At least" let the
+        # model keep emitting near-duplicate filler until the provider cut off
+        # the closing brace.  This is a per-call bound only; the cumulative
+        # +4k guard remains in force after append-only continuations.
+        if stage64_qa_mode and continuation_budget > 0:
+            chunk_turn_count = max(16, (requested_initial_tokens + 49) // 50)
+            long_form_minimum_turns = chunk_turn_count
+        else:
+            long_form_minimum_turns = max(
+                long_form_minimum_turns,
+                (requested_initial_tokens + 51) // 52,
+            )
+        long_form_minimum_words_per_turn = 30
+        if chunk_turn_count is not None:
+            length_instruction = (
+                f"Return exactly {chunk_turn_count} complete appended turns, then close the JSON object immediately. "
+                f"Aim for about {requested_initial_tokens} new tokenizer tokens in this chunk. Every appended turn must contain "
+                f"at least {long_form_minimum_words_per_turn} whitespace-delimited words and 2-4 natural sentences. "
+                "Do not add an extra turn, a summary, or repeated filler after the required turns."
+            )
+        else:
+            length_instruction = (
+                f"Return at least {long_form_minimum_turns} complete appended turns and at least "
+                f"{requested_initial_tokens} new tokenizer tokens in total. Every appended turn must contain "
+                f"at least {long_form_minimum_words_per_turn} whitespace-delimited words and 2-4 "
+                "natural sentences. Count the returned turns before responding; a shorter block is rejected. "
+                "Use enough substantive new turns to create a genuinely longer conversation; do not rely on short filler."
+            )
     stage64_difficulty_target, stage64_difficulty_contract = _stage64_prompt_difficulty_contract(
         policy,
         stage64_target.get("qa_operation"),
@@ -12154,6 +17193,11 @@ def call_api_graph_conditioned_dialogue_expansion(
     stage64_reasoning_contract = _stage64_reasoning_contract_from_target(
         stage64_target
     )
+    # Formal Stage64 already has a QA-only call after dialogue alignment and
+    # hashes are frozen. Asking the long dialogue writer for the same QA is
+    # redundant and, at +4k, causes the JSON response to be truncated before
+    # the dialogue prefix can be validated or continued.
+    dialogue_returns_qa = not stage64_qa_mode
     if stage64_qa_mode:
         target_operation = normalize_space(stage64_target.get("qa_operation"))
         preferred_answer_type = normalize_space(stage64_target.get("preferred_answer_type"))
@@ -12216,9 +17260,10 @@ def call_api_graph_conditioned_dialogue_expansion(
                     "text": "answer option text",
                     "answer_type": "same answer_type as qa_proposal",
                     "truth_value": "true only for the gold option",
-                    "source_event_instance_id": "event_instance_id from sanitized_dialogue_fact_plan.events",
-                    "anchor_ref": "the event marker or event_instance_id used as a graph reference",
-                    "anchor_kind": "event or yesno_option",
+                    "source_event_instance_id": "gold: event_instance_id from sanitized_dialogue_fact_plan.events; synthetic non-gold: null",
+                    "anchor_ref": "gold: event marker/event_instance_id; synthetic non-gold: null",
+                    "anchor_kind": "event, yesno_option, or synthetic_distractor",
+                    "distractor_origin": "synthetic_same_type only for a non-gold synthetic distractor",
                 }
             ],
             "gold": ["single gold option id"],
@@ -12288,6 +17333,12 @@ def call_api_graph_conditioned_dialogue_expansion(
             "target_state": {},
             "options": [],
         }
+    if stage64_qa_mode and not dialogue_returns_qa:
+        qa_requirement = (
+            "Do not return qa_proposal, options, gold labels, or a question in this response. "
+            "After the append-only dialogue passes graph alignment and length validation, "
+            "a separate QA-only call will create the final question."
+        )
     prompt = {
         "task": "current_method graph-conditioned API appended dialogue expansion with current anchors",
         "requirements": [
@@ -12296,7 +17347,11 @@ def call_api_graph_conditioned_dialogue_expansion(
             "The program will construct final_dialogue = preserved_parent_dialogue_turns + appended_dialogue_turns.",
             length_instruction,
             "Make appended turns substantive: each turn should usually contain 2-4 natural sentences, not short acknowledgements.",
-            "Write appended turns that naturally continue the existing conversation and express every required current graph event.",
+            (
+                "Write appended turns that naturally continue the existing conversation and express every required current graph event."
+                if not local_evidence_compiler
+                else "Write only natural, scenario-compatible neutral continuation turns. The program will insert the frozen graph-evidence turns itself; do not restate, paraphrase, or contradict any graph fact."
+            ),
             *(
                 [
                     "No deterministic fact-table scaffold will be inserted into the solver-visible dialogue. The API-appended dialogue itself must naturally carry every checklist fact.",
@@ -12308,21 +17363,38 @@ def call_api_graph_conditioned_dialogue_expansion(
                     "Do not place more than half of required evidence turns in the final quarter of appended_dialogue_turns, and do not make more than half of the required evidence turns one consecutive run.",
                     "The support_quote for each marker must be an exact quote from its natural evidence turn, not necessarily the checklist wording.",
                 ]
-                if stage64_qa_mode
-                else [
+                if stage64_qa_mode and not local_evidence_compiler
+                else (
+                    [
+                        "The program has already compiled every frozen graph fact into a separate natural evidence turn.",
+                        "Return neutral conversational expansion only; every returned turn must set alignment_anchors to [] and support_quotes to {}.",
+                        "Do not emit a marker, support quote, graph fact, event ID, schema term, or a paraphrase of a tracked entity together with its tracked value.",
+                        "Add concrete but non-answer-bearing planning, coordination, preferences, questions, or consequences with varied wording and openings.",
+                    ]
+                    if stage64_qa_mode and local_evidence_compiler
+                    else [
                     "The natural_dialogue_scaffold is already valid and natural. Preserve every scaffold turn exactly in appended_dialogue_turns.",
                     "You may add neutral setup/closing turns, but do not delete, merge, paraphrase, or unanchor scaffold turns.",
                     "For each checklist item, include the natural_support_claim_to_include text verbatim in at least one dialogue turn.",
                     "The natural_support_claim_to_include already contains any required dependency, observer+permission scope, and membership condition/included-or-excluded semantics. Preserve the entire claim; never replace those clauses with IDs or schema words.",
                     "Use one separate dialogue turn for each checklist item; do not merge multiple checklist items into one support turn.",
                     "The support turn may be simple and direct; correctness is more important than literary style.",
+                    ]
+                )
+            ),
+            *(
+                [
+                    "Attach that fact's marker to the same turn via alignment_anchors and support_quotes.",
+                    "Set support_quotes[marker] to an exact quote from the same marked dialogue turn.",
+                    "For required graph events, sidecar alignment_anchors/support_quotes are enough; event_alignment_proposal may be an empty list when sidecars cover all required markers.",
+                    "Do not invent event_alignment_proposal entries for neutral/context turns.",
+                    "Use sidecar alignment_anchors/support_quotes; inline [[ANCHOR]] markers are only a fallback.",
+                ]
+                if not local_evidence_compiler
+                else [
+                    "Every returned turn must have alignment_anchors=[] and support_quotes={}; the program alone owns graph evidence sidecars.",
                 ]
             ),
-            "Attach that fact's marker to the same turn via alignment_anchors and support_quotes.",
-            "Set support_quotes[marker] to an exact quote from the same marked dialogue turn.",
-            "For required graph events, sidecar alignment_anchors/support_quotes are enough; event_alignment_proposal may be an empty list when sidecars cover all required markers.",
-            "Do not invent event_alignment_proposal entries for neutral/context turns.",
-            "Use sidecar alignment_anchors/support_quotes; inline [[ANCHOR]] markers are only a fallback.",
             "Write as if two or more people are discussing real-world plans, tasks, beliefs, corrections, or updates.",
             "Do not mention internal dataset IDs, conversation IDs, r2/r3 extension numbers, state-chain, memory state, graph_update, timeline event, event ids, anchors, markers, fact_id, or schema labels.",
             "Do not write 'Confirm that'.",
@@ -12339,8 +17411,8 @@ def call_api_graph_conditioned_dialogue_expansion(
                     "In qa_proposal, cite only event_instance_id values or marker values from sanitized_dialogue_fact_plan.events; do not invent graph references.",
                     "For non-YesNo Stage64 QA, provide exactly four options A-D. For YesNo Stage64 QA, provide exactly two options A-B.",
                     "qa_proposal.options is mandatory and must be a JSON array of option objects. Never omit options.",
-                    "Every option must include id, text, answer_type, source_event_instance_id, anchor_ref, and truth_value.",
-                    "Every options[].text must be non-empty and unique after case, punctuation, and whitespace normalization. Never copy the gold text into a distractor. Minimal-pair distractors with genuinely different dates, counts, entities, or states are allowed.",
+                    "The gold option must include a resolvable source_event_instance_id and anchor_ref from the frozen graph. A non-gold option may instead be an API-authored same-type distractor when the graph has too few distinct answer values; mark it with distractor_origin='synthetic_same_type', source_event_instance_id=null, anchor_ref=null, and anchor_kind='synthetic_distractor'.",
+                    "Every options[].text must be non-empty and unique after case, punctuation, and whitespace normalization. Never copy the gold text into a distractor. Minimal-pair distractors with genuinely different dates, counts, entities, or states are allowed. Synthetic distractors must be plausible answer values of the same type, must not assert a new dialogue fact, and must be explicitly false.",
                     "Each option text must be an answer value, not a restatement of the question. Number options must be numeric values, DateOrTime options must be dates/times, and YesNo options must be exactly Yes/No.",
                     "Use a concrete semantic graph slot, never raw_qa or raw_qa_*. For non-YesNo questions, at least one distractor must compete with the gold on the same entity or semantic slot.",
                     "Make the item hard for the fixed Stage2 solver through same-slot updates, one-hop-preserving bridge alternatives, close counts/dates, wrong visibility scope, or plausible cause/effect swaps. Do not use unrelated facts as distractors.",
@@ -12438,7 +17510,7 @@ def call_api_graph_conditioned_dialogue_expansion(
                     "For temporal_state_update, write each option as its source event's answer value. Never append parenthetical status annotations such as '(restored after cancellation)' or '(expired assumption)' to disguise repeated values or distinguish two otherwise identical answers.",
                     "qa_proposal.gold must always be option labels only, such as ['A'] or ['D']; never put a marker, anchor_ref, event_instance_id, or answer text in gold.",
                 ]
-                if stage64_qa_mode
+                if stage64_qa_mode and dialogue_returns_qa
                 else []
             ),
             "Do not expose old event ids, old anchors, current markers, or schema words as final truth in dialogue text.",
@@ -12465,6 +17537,25 @@ def call_api_graph_conditioned_dialogue_expansion(
             "length_guard_effective_parent_baseline_tokens": effective_parent_baseline,
             "length_guard_required_new_tokens": effective_required_new_tokens,
         },
+        "long_form_length_contract": {
+            "minimum_appended_turn_count": long_form_minimum_turns,
+            "minimum_whitespace_words_per_turn": long_form_minimum_words_per_turn,
+            "required_new_token_delta": effective_required_new_tokens,
+            "target_new_token_delta": final_target_new_tokens,
+            "requested_initial_token_chunk": requested_initial_tokens,
+            "append_only_continuations_enabled": bool(
+                stage64_qa_mode
+                and requested_initial_tokens is not None
+                and final_target_new_tokens is not None
+                and requested_initial_tokens < final_target_new_tokens
+            ),
+            "local_padding_forbidden": True,
+        },
+        "long_form_local_evidence_compiler": {
+            "enabled": bool(local_evidence_compiler),
+            "api_must_emit_neutral_turns_only": bool(local_evidence_compiler),
+            "graph_evidence_is_compiled_from_frozen_plan": bool(local_evidence_compiler),
+        },
         "sanitized_seed_context": sanitized_seed_context,
         "stage64_target": copy.deepcopy(stage64_target) if stage64_qa_mode else {},
         "stage64_reasoning_target_contract": (
@@ -12485,24 +17576,116 @@ def call_api_graph_conditioned_dialogue_expansion(
                     "support_quotes": {"MARKER": "exact natural quote inside text without marker"},
                 }
             ],
-            "event_alignment_proposal": [
+            **(
                 {
-                    "alignment_anchor": "marker string",
-                    "turn_index": "0-based index within appended_dialogue_turns",
-                    "support_quote": "string",
+                    "event_alignment_proposal": [
+                        {
+                            "alignment_anchor": "marker string",
+                            "turn_index": "0-based index within appended_dialogue_turns",
+                            "support_quote": "string",
+                        }
+                    ],
+                    "qa_proposal": qa_schema,
                 }
-            ],
-            "qa_proposal": qa_schema,
+                if dialogue_returns_qa
+                else {}
+            ),
             "dialogue_style_rationale": "string",
         },
     }
+    if stage64_qa_mode and not local_evidence_compiler:
+        # The full canonical graph is useful to the local verifier but is a
+        # needlessly large and schema-heavy API prompt.  It previously pushed
+        # a fixed-G3 dialogue request above 8k input tokens and the provider
+        # timed out before returning a byte.  Give the challenger only the
+        # natural facts it must realize, short parent continuity context, and
+        # sidecar IDs.  The untouched full graph remains the authority for all
+        # post-generation alignment and QA checks.
+        all_compact_required_facts = [
+            {
+                "evidence_id": normalize_space(item.get("marker")),
+                "natural_fact": normalize_space(
+                    item.get("natural_support_claim_to_include")
+                ),
+            }
+            for item in anchor_realization_checklist
+            if normalize_space(item.get("marker"))
+            and normalize_space(item.get("natural_support_claim_to_include"))
+        ]
+        fact_turn_assignments = _long_form_chunk_fact_assignments(
+            anchor_realization_checklist,
+            chunk_index=fact_chunk_index,
+            chunk_count=fact_chunk_count,
+            turn_count=chunk_turn_count or long_form_minimum_turns,
+        )
+        assigned_fact_ids = {item["evidence_id"] for item in fact_turn_assignments}
+        compact_required_facts = [
+            item for item in all_compact_required_facts
+            if item["evidence_id"] in assigned_fact_ids
+        ]
+        # The frozen parent remains part of the final dialogue.  Supplying
+        # raw parent turns here encouraged the API to copy parent wording into
+        # child evidence sidecars, so use its compact digest only.
+        compact_parent_turns: list[dict[str, Any]] = []
+        prompt = {
+            "task": "write a natural append-only dialogue continuation",
+            "requirements": [
+                "Return one JSON object containing appended_dialogue_turns only; never return a question, answer, graph, or summary.",
+                "Do not return qa_proposal, options, gold labels, or a question. A separate QA-only call runs after dialogue alignment is frozen.",
+                "Write new turns after the preserved parent dialogue. Do not repeat, rewrite, or summarize parent turns.",
+                length_instruction,
+                "Naturally state every required_fact assigned to this chunk without changing its meaning. Across API chunks, facts must span early, middle, and later parts of the full append; do not put them in one fact list.",
+                "VERBATIM EVIDENCE RULE: for every required_fact_turn_assignment, the specified turn's visible text MUST contain that assignment's natural_fact byte-for-byte as one complete sentence; do not paraphrase it. Set alignment_anchors=[] and support_quotes={} for every turn: the program verifies the visible natural_fact itself, while opaque graph anchors remain internal provenance. This is checked character-for-character. Never put an evidence_id or internal terminology in visible dialogue text.",
+                "Use several speakers and make every turn substantive, coherent, and scenario-specific. Add neutral planning, questions, consequences, and clarifications around the required facts; do not use generic filler.",
+                "Do not introduce a new value that conflicts with a required_fact. Do not mention datasets, rounds, graphs, IDs, anchors, or markers in dialogue text.",
+            ],
+            "required_facts": compact_required_facts,
+            "required_fact_turn_assignments": fact_turn_assignments,
+            "recent_parent_context": compact_parent_turns,
+            "parent_dialogue_digest": parent_context.get("parent_dialogue_digest"),
+            "item_difficulty_target": stage64_difficulty_target,
+            "append_contract": {
+                "parent_is_immutable": True,
+                "required_new_token_delta": effective_required_new_tokens,
+                "requested_initial_token_chunk": requested_initial_tokens,
+                "fact_chunk_index": int(fact_chunk_index),
+                "fact_chunk_count": max(1, int(fact_chunk_count)),
+                "exact_chunk_turn_count": chunk_turn_count,
+                "local_text_insertion_forbidden": True,
+            },
+            "output_schema": {
+                "appended_dialogue_turns": [
+                    {
+                        "speaker": "string",
+                        "text": "natural dialogue text",
+                        "alignment_anchors": ["evidence_id strings for facts stated in this turn"],
+                        "support_quotes": {"evidence_id": "exact text span from this turn"},
+                    }
+                ],
+                "dialogue_style_rationale": "short string",
+            },
+        }
     prompt_token_estimate = estimate_json_tokens(prompt)
     dialogue_max_tokens_override = None
     if stage64_qa_mode:
         try:
-            dialogue_max_tokens_override = max(int(getattr(args, "challenger_max_tokens", 4096) or 4096), 8192)
+            # The final QA is generated separately after alignment.  Bound a
+            # chunked dialogue response instead of granting a monolithic +4k
+            # JSON completion that can stall at the API gateway.
+            if requested_initial_tokens is not None:
+                dialogue_max_tokens_override = max(
+                    2048,
+                    min(
+                        int(getattr(args, "challenger_max_tokens", 4096) or 4096),
+                        int(requested_initial_tokens) * 2 + 512,
+                    ),
+                )
+            else:
+                dialogue_max_tokens_override = 12288 if hard_length_delta else 8192
         except (TypeError, ValueError):
-            dialogue_max_tokens_override = 8192
+            dialogue_max_tokens_override = 2048 if requested_initial_tokens is not None else (
+                12288 if hard_length_delta else 8192
+            )
     proposal, meta = call_raw_json_api(
         args,
         prompt,
@@ -12511,14 +17694,341 @@ def call_api_graph_conditioned_dialogue_expansion(
             "The frozen graph is source of truth. Use current random anchors for alignment. "
             "Return exactly one JSON object. Generate appended dialogue only."
         ),
-        required_keys=("event_alignment_proposal", "qa_proposal"),
+        required_keys=("event_alignment_proposal", "qa_proposal")
+        if dialogue_returns_qa
+        else ("appended_dialogue_turns",),
         call_kind="api_dialogue_expansion",
         max_tokens_override=dialogue_max_tokens_override,
     )
+    if not dialogue_returns_qa and not isinstance(proposal, dict):
+        recovered_proposal, recovery = recover_truncated_appended_dialogue_turns(
+            meta
+        )
+        if isinstance(recovered_proposal, dict):
+            proposal = recovered_proposal
+            meta = copy.deepcopy(meta)
+            meta["used"] = True
+            meta["partial_json_recovery"] = recovery
+            meta["recovered_from_length_truncation"] = True
     meta["prompt_tokens_estimate"] = prompt_token_estimate
     meta["parent_context_turns"] = ((parent_context.get("diagnostics") or {}).get("parent_context_turns") if isinstance(parent_context.get("diagnostics"), dict) else None)
     meta["parent_context_tokens_estimate"] = ((parent_context.get("diagnostics") or {}).get("parent_context_tokens_estimate") if isinstance(parent_context.get("diagnostics"), dict) else None)
+    if stage64_qa_mode:
+        meta["fact_chunk_index"] = int(fact_chunk_index)
+        meta["fact_chunk_count"] = max(1, int(fact_chunk_count))
+        meta["requested_initial_token_chunk"] = requested_initial_tokens
+        meta["exact_chunk_turn_count"] = chunk_turn_count
     return proposal, meta
+
+
+def recover_truncated_appended_dialogue_turns(
+    meta: dict[str, Any],
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Safely retain complete dialogue objects from a length-truncated JSON reply.
+
+    This is intentionally narrow: only a response explicitly stopped for
+    length, with a top-level ``appended_dialogue_turns`` array, is considered.
+    Each retained element is parsed by Python's JSON decoder as one complete
+    object; the incomplete tail and everything after it are discarded.  The
+    regular graph, alignment, length, and QA validators still run afterwards.
+    """
+    errors = meta.get("errors") if isinstance(meta, dict) else None
+    if not isinstance(errors, list):
+        return None, {"used": False, "reason": "no_error_records"}
+    raw_response = ""
+    finish_reason = ""
+    for error in reversed(errors):
+        if not isinstance(error, dict):
+            continue
+        candidate = error.get("raw_response")
+        if not isinstance(candidate, str) or not candidate:
+            candidate = error.get("raw_response_preview")
+        if not isinstance(candidate, str) or not candidate:
+            continue
+        raw_response = candidate
+        finish_reason = normalize_space(error.get("finish_reason"))
+        break
+    if finish_reason != "length" or not raw_response:
+        return None, {
+            "used": False,
+            "reason": "response_not_explicitly_length_truncated",
+            "finish_reason": finish_reason or None,
+        }
+    match = re.search(r'"appended_dialogue_turns"\s*:\s*\[', raw_response)
+    if match is None:
+        return None, {"used": False, "reason": "appended_turn_array_not_found"}
+    decoder = json.JSONDecoder()
+    index = match.end()
+    recovered_turns: list[dict[str, Any]] = []
+    while index < len(raw_response):
+        while index < len(raw_response) and raw_response[index].isspace():
+            index += 1
+        if index < len(raw_response) and raw_response[index] == ",":
+            index += 1
+            continue
+        if index >= len(raw_response) or raw_response[index] == "]":
+            break
+        try:
+            value, end_index = decoder.raw_decode(raw_response, index)
+        except json.JSONDecodeError:
+            break
+        if not isinstance(value, dict):
+            break
+        # A turn without text cannot contribute to an accepted dialogue, so
+        # stop rather than guessing how to repair a malformed tail item.
+        if not normalize_space(value.get("text")):
+            break
+        recovered_turns.append(value)
+        index = end_index
+    if not recovered_turns:
+        return None, {"used": False, "reason": "no_complete_turn_object"}
+    return {
+        "appended_dialogue_turns": recovered_turns,
+    }, {
+        "used": True,
+        "schema_version": "truncated_appended_dialogue_recovery_v1",
+        "finish_reason": "length",
+        "recovered_turn_count": len(recovered_turns),
+        "discarded_incomplete_tail": True,
+        "raw_response_char_count": len(raw_response),
+    }
+
+
+def call_api_graph_conditioned_dialogue_continuation(
+    existing_appended_dialogue_turns: list[dict[str, Any]],
+    args: argparse.Namespace,
+    *,
+    required_additional_tokens: int,
+    parent_context: dict[str, Any],
+    required_fact_turn_assignments: list[dict[str, Any]] | None = None,
+    fact_chunk_index: int = 0,
+    fact_chunk_count: int = 1,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Continue an under-length API append without regenerating its graph or prefix.
+
+    The first long-form response is immutable evidence for this attempt.  If it
+    misses the *post-hoc* tokenizer guard, request only the missing tail.  This
+    is deliberately not local padding and does not expose or re-request the
+    graph: the API writes a natural continuation, then the ordinary final
+    graph/alignment/length validators decide whether the combined dialogue is
+    acceptable.
+    """
+    # The program, not the API, retains the immutable prefix.  Including its
+    # text made the continuation model echo the entire prior chunk (and its
+    # old sidecars) instead of writing a new tail.  A count-only provenance
+    # record preserves the append contract without inviting verbatim replay.
+    previous_turn_count = len(existing_appended_dialogue_turns)
+    # Keep every tail request small enough for the API gateway to return one
+    # complete JSON object promptly.  Several API-only tails may be needed to
+    # satisfy the final guard; the prefix remains immutable and no local text
+    # is inserted between them.
+    try:
+        api_chunk_tokens = max(
+            800,
+            int(getattr(args, "stage3_api_dialogue_chunk_tokens", 800)),
+        )
+    except (TypeError, ValueError):
+        api_chunk_tokens = 800
+    target_additional_tokens = max(
+        800,
+        min(int(required_additional_tokens or 0) + 256, api_chunk_tokens),
+    )
+    # Fixed-size chunks guarantee that the JSON object closes before the API
+    # budget.  They are concatenated as immutable API-authored tails, so this
+    # does not relax the final cumulative length guard.
+    minimum_turns = max(16, (target_additional_tokens + 49) // 50)
+    fact_turn_assignments = [
+        {
+            "response_turn_index": int(item.get("response_turn_index") or 0),
+            "evidence_id": normalize_space(item.get("evidence_id")),
+            "natural_fact": normalize_space(item.get("natural_fact")),
+        }
+        for item in (required_fact_turn_assignments or [])
+        if isinstance(item, dict)
+        and normalize_space(item.get("evidence_id"))
+        and normalize_space(item.get("natural_fact"))
+    ]
+    prompt = {
+        "task": "continue an already-generated graph-conditioned dialogue append",
+        "requirements": [
+            "Return only NEW appended_dialogue_turns that come after the provided existing tail.",
+            "Do not repeat, summarize, edit, or return any prior appended turn or any parent turn.",
+            "Do not create a new graph, change any established fact, or introduce a new state update.",
+            "Continue the same natural conversation with substantive, scenario-compatible discussion, questions, clarifications, planning, or consequences; do not use canned filler or internal/schema language.",
+            f"Return exactly {minimum_turns} new complete turns, then close the JSON object immediately. Aim for about {target_additional_tokens} new tokenizer tokens. Do not add an extra turn, summary, or repeated filler after those turns.",
+            "Each new turn should normally have 2-4 natural sentences and at least 30 whitespace-delimited words.",
+            "VERBATIM EVIDENCE RULE: for every required_fact_turn_assignment, the specified turn's visible text MUST contain natural_fact byte-for-byte as one complete sentence. Set alignment_anchors=[] and support_quotes={} for every turn; opaque graph anchors are verified locally from the visible exact fact. Do not paraphrase the natural_fact and never repeat or copy a prior turn.",
+        ],
+        "existing_appended_dialogue_prefix": {
+            "turn_count": previous_turn_count,
+            "text_omitted_to_prevent_replay": True,
+            "prefix_is_immutable": True,
+        },
+        "compact_parent_context": {
+            "parent_dialogue_digest": parent_context.get("parent_dialogue_digest"),
+            "last_parent_turns_for_continuity": [],
+        },
+        "required_fact_turn_assignments": fact_turn_assignments,
+        "continuation_length_contract": {
+            "required_additional_tokens": int(required_additional_tokens or 0),
+            "target_additional_tokens": target_additional_tokens,
+            "minimum_new_turn_count": minimum_turns,
+            "fact_chunk_index": int(fact_chunk_index),
+            "fact_chunk_count": max(1, int(fact_chunk_count)),
+            "local_padding_forbidden": True,
+            "graph_regeneration_forbidden": True,
+            "prefix_rewrite_forbidden": True,
+        },
+        "output_schema": {
+            "appended_dialogue_turns": [
+                {
+                    "speaker": "string",
+                    "text": "natural continuation text only",
+                    "alignment_anchors": "optional empty list",
+                    "support_quotes": "optional empty object",
+                }
+            ],
+            "dialogue_style_rationale": "short string",
+        },
+    }
+    prompt_token_estimate = estimate_json_tokens(prompt)
+    try:
+        max_tokens_override = max(
+            2048,
+            min(
+                int(getattr(args, "challenger_max_tokens", 4096) or 4096),
+                int(target_additional_tokens) * 2 + 512,
+            ),
+        )
+    except (TypeError, ValueError):
+        max_tokens_override = 2048
+    proposal, meta = call_raw_json_api(
+        args,
+        prompt,
+        system_prompt=(
+            "You are a strict JSON-only dialogue continuation writer. "
+            "Return exactly one JSON object containing only new dialogue turns."
+        ),
+        required_keys=("appended_dialogue_turns",),
+        call_kind="api_dialogue_length_continuation",
+        max_tokens_override=max_tokens_override,
+    )
+    if not isinstance(proposal, dict):
+        recovered_proposal, recovery = recover_truncated_appended_dialogue_turns(
+            meta
+        )
+        if isinstance(recovered_proposal, dict):
+            proposal = recovered_proposal
+            meta = copy.deepcopy(meta)
+            meta["used"] = True
+            meta["partial_json_recovery"] = recovery
+            meta["recovered_from_length_truncation"] = True
+    meta["prompt_tokens_estimate"] = prompt_token_estimate
+    meta["continuation_required_additional_tokens"] = int(
+        required_additional_tokens or 0
+    )
+    meta["continuation_target_additional_tokens"] = target_additional_tokens
+    meta["continuation_minimum_turns"] = minimum_turns
+    meta["continuation_prefix_turn_count"] = previous_turn_count
+    meta["fact_chunk_index"] = int(fact_chunk_index)
+    meta["fact_chunk_count"] = max(1, int(fact_chunk_count))
+    meta["required_fact_turn_assignment_count"] = len(fact_turn_assignments)
+    meta["parent_context_turns"] = (
+        (parent_context.get("diagnostics") or {}).get("parent_context_turns")
+        if isinstance(parent_context.get("diagnostics"), dict)
+        else None
+    )
+    return proposal, meta
+
+
+def call_api_visible_claim_append_repair(
+    current_event_plan: dict[str, Any],
+    missing_event_instance_ids: Iterable[str],
+    args: argparse.Namespace,
+    *,
+    total_turn_count: int = 16,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Ask the API to append only missing, already-frozen visible claims.
+
+    This is an append-only evidence repair, not a graph rewrite and not a local
+    compiler: every returned turn is authored by the challenger.  It is used
+    only after a long API dialogue already contains most dispersed evidence,
+    so appending a small number of missing claims cannot turn the tail into a
+    fact dump.
+    """
+
+    missing = {normalize_space(item) for item in missing_event_instance_ids}
+    facts = [
+        normalize_space(event.get("dialogue_support_claim"))
+        for event in current_event_plan.get("events") or []
+        if isinstance(event, dict)
+        and normalize_space(event.get("event_instance_id")) in missing
+        and normalize_space(event.get("dialogue_support_claim"))
+    ]
+    if not facts:
+        return None, {
+            "used": False,
+            "call_kind": "api_visible_claim_append_repair",
+            "error_type": "missing_visible_claim_repair_facts",
+        }
+    turn_count = max(len(facts), int(total_turn_count or 0))
+    fact_turn_positions = [
+        max(1, min(turn_count, round((index + 1) * (turn_count + 1) / (len(facts) + 1))))
+        for index in range(len(facts))
+    ]
+    prompt = {
+        "task": "append missing factual dialogue turns to a frozen conversation",
+        "requirements": [
+            "Return exactly one JSON object with appended_dialogue_turns only.",
+            f"Return exactly {turn_count} turns and then close the JSON object immediately.",
+            "For each required_fact_turn, set the specified turn's text to exactly its natural_fact character-for-character. Do not add a prefix, suffix, explanation, quotation marks, or a paraphrase to that turn.",
+            "Every other turn must be a new, natural, neutral continuation with no graph fact. Set alignment_anchors=[] and support_quotes={} in every turn. Do not output any graph, ID, marker, question, answer, or summary.",
+        ],
+        "required_fact_turns": [
+            {
+                "response_turn_index": position,
+                "natural_fact": fact,
+            }
+            for fact, position in zip(facts, fact_turn_positions)
+        ],
+        "output_schema": {
+            "appended_dialogue_turns": [
+                {
+                    "speaker": "natural speaker name",
+                    "text": "exact natural_fact for this turn",
+                    "alignment_anchors": [],
+                    "support_quotes": {},
+                }
+            ]
+        },
+    }
+    proposal, meta = call_raw_json_api(
+        args,
+        prompt,
+        system_prompt=(
+            "You are a strict JSON-only dialogue evidence writer. "
+            "Copy each requested natural_fact exactly into its own new dialogue turn."
+        ),
+        required_keys=("appended_dialogue_turns",),
+        call_kind="api_visible_claim_append_repair",
+        max_tokens_override=2048,
+        max_retries_override=_visible_claim_transport_retry_budget(args),
+        temperature_override=0.0,
+    )
+    meta["prompt_tokens_estimate"] = estimate_json_tokens(prompt)
+    meta["requested_visible_claim_count"] = len(facts)
+    meta["requested_total_turn_count"] = turn_count
+    return proposal, meta
+
+
+def _visible_claim_transport_retry_budget(args: argparse.Namespace) -> int:
+    """Give deterministic evidence sidecars one retry for transient transport loss."""
+
+    try:
+        configured_retries = int(getattr(args, "max_llm_retries", 0) or 0)
+    except (TypeError, ValueError):
+        configured_retries = 0
+    return max(1, configured_retries)
 
 
 def required_anchor_repair_items(
@@ -13152,8 +18662,8 @@ def call_api_stage64_qa_repair(
             ),
             "Use only event_instance_id or marker values listed in event_candidates as graph references.",
             "For non-YesNo answers, provide exactly four options A-D. For YesNo, provide exactly two options A-B.",
-            "Every option must include id, text, answer_type, source_event_instance_id, anchor_ref, anchor_kind, and truth_value.",
-            "Every option text must be unique after case, punctuation, and whitespace normalization. Never duplicate the gold answer under another label; preserve meaningful minimal differences in dates, counts, entities, or states.",
+            "The sole gold option must include a resolvable source_event_instance_id and anchor_ref from event_candidates. A non-gold option may instead be an API-authored same-type distractor when event_candidates do not provide enough distinct values: set distractor_origin='synthetic_same_type', source_event_instance_id=null, anchor_ref=null, and anchor_kind='synthetic_distractor'.",
+            "Every option text must be unique after case, punctuation, and whitespace normalization. Never duplicate the gold answer under another label; preserve meaningful minimal differences in dates, counts, entities, or states. A synthetic distractor must be plausible for the answer type, explicitly false, and must not be presented as a fact from the frozen dialogue.",
             "Each option must be an answer value rather than a copied question. Number options are numeric values, DateOrTime options are dates/times, and YesNo options are exactly Yes/No.",
             "Use semantic graph slots only; never use raw_qa or raw_qa_*. At least one non-YesNo distractor must share the gold entity or semantic slot, and unrelated facts are invalid distractors.",
             "The qa_operation must match the actual reasoning in the question. bridge/comparison/count/cause_consequence must cite at least two reasoning anchors.",
@@ -13372,9 +18882,10 @@ def call_api_stage64_qa_repair(
                         "text": "option text",
                         "answer_type": "same answer_type as qa_proposal",
                         "truth_value": "JSON boolean; true for exactly one option and false for every other option",
-                        "source_event_instance_id": "event_instance_id from event_candidates",
-                        "anchor_ref": "event_instance_id or marker from event_candidates",
-                        "anchor_kind": "event",
+                        "source_event_instance_id": "gold: event_instance_id from event_candidates; synthetic non-gold: null",
+                        "anchor_ref": "gold: event_instance_id or marker from event_candidates; synthetic non-gold: null",
+                        "anchor_kind": "event for graph-grounded options; synthetic_distractor for a synthetic non-gold option",
+                        "distractor_origin": "omit for graph-grounded options; synthetic_same_type only for a non-gold synthetic option",
                     }
                 ],
                 "gold": (
@@ -13658,6 +19169,9 @@ def parse_anchor_annotations(
     *,
     turn_index_offset: int = 0,
     prefer_sidecar_when_complete: bool = True,
+    exact_visible_claim_fallback: bool = False,
+    ignore_api_sidecars: bool = False,
+    event_claims_by_anchor: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     proposals: list[dict[str, Any]] = []
     seen_current_anchors: set[str] = set()
@@ -13665,14 +19179,19 @@ def parse_anchor_annotations(
     turns = _as_dialogue_list(api_dialogue)
     for index, turn in enumerate(turns):
         text = str(turn.get("text") or "")
-        sidecar = turn.get("alignment_anchors")
+        sidecar = None if ignore_api_sidecars else turn.get("alignment_anchors")
         anchors: list[str] = []
         if isinstance(sidecar, list):
             anchors.extend(str(item).strip() for item in sidecar if str(item or "").strip())
         elif isinstance(sidecar, str) and sidecar.strip():
             anchors.append(sidecar.strip())
-        anchors.extend(collect_inline_anchors_from_text(text))
-        support_quotes = turn.get("support_quotes") if isinstance(turn.get("support_quotes"), dict) else {}
+        if not ignore_api_sidecars:
+            anchors.extend(collect_inline_anchors_from_text(text))
+        support_quotes = (
+            turn.get("support_quotes")
+            if not ignore_api_sidecars and isinstance(turn.get("support_quotes"), dict)
+            else {}
+        )
         for anchor in dict.fromkeys(anchors):
             if anchor in current_anchor_to_event_instance_id:
                 seen_current_anchors.add(anchor)
@@ -13730,6 +19249,37 @@ def parse_anchor_annotations(
                         "source": "event_alignment_proposal",
                     }
                 )
+
+    # Formal API-only mode keeps the random graph anchors as provenance, but
+    # asks the model to emit the graph's *visible natural claim* rather than
+    # asking it to transcribe opaque anchor strings.  This is a verifier-only
+    # fallback: it never inserts or rewrites text.  A match is admitted only
+    # when the API turn contains the entire frozen natural claim verbatim.
+    if exact_visible_claim_fallback:
+        normalized_claims = {
+            normalize_space(anchor): normalize_space(claim)
+            for anchor, claim in (event_claims_by_anchor or {}).items()
+            if normalize_space(anchor) in current_anchor_to_event_instance_id
+            and normalize_space(claim)
+        }
+        for index, turn in enumerate(turns):
+            turn_text = str(turn.get("text") or "")
+            normalized_turn = normalize_text(turn_text)
+            if not normalized_turn:
+                continue
+            for anchor, claim in normalized_claims.items():
+                if normalize_text(claim) not in normalized_turn:
+                    continue
+                seen_current_anchors.add(anchor)
+                proposals.append(
+                    {
+                        "alignment_anchor": anchor,
+                        "event_instance_id": current_anchor_to_event_instance_id.get(anchor),
+                        "turn_index": index + turn_index_offset,
+                        "support_quote": claim,
+                        "source": "visible_exact_claim_verifier",
+                    }
+                )
     return {
         "proposals": proposals,
         "current_anchor_seen": sorted(seen_current_anchors),
@@ -13746,7 +19296,14 @@ def strip_alignment_anchors_from_dialogue(api_dialogue: Any) -> list[dict[str, A
         text = normalize_space(GENERIC_MARKER_RE.sub(" ", str(turn.get("text") or "")))
         if not text:
             continue
-        clean_turns.append({"speaker": speaker, "text": text})
+        clean_turn = {"speaker": speaker, "text": text}
+        source_turn_id = normalize_space(turn.get("turn_id"))
+        if source_turn_id:
+            # Truth-first support is authored against immutable discourse-plan
+            # turn ids.  Preserve that source identity until the append-only
+            # freezer records its deterministic source -> frozen remap.
+            clean_turn["turn_id"] = source_turn_id
+        clean_turns.append(clean_turn)
     return clean_turns
 
 
@@ -13934,15 +19491,41 @@ def freeze_append_only_dialogue(
                 "text": text,
             }
         )
+    retained_parent_turn_count = len(turns)
     append_prefix = _next_append_dialogue_prefix(turns, sample_index)
+    appended_turn_id_map: dict[str, str] = {}
+    appended_frozen_turn_ids: list[str] = []
+    turn_id_map_issues: list[dict[str, Any]] = []
     for index, turn in enumerate(appended_clean_dialogue, start=1):
         text = normalize_space(turn.get("text"))
         if not text:
             continue
+        source_turn_id = normalize_space(turn.get("turn_id"))
         turn_id = f"{append_prefix}:{index}"
         while turn_id in seen_turn_ids:
             turn_id = f"{append_prefix}:{index}_{len(seen_turn_ids)}"
         seen_turn_ids.add(turn_id)
+        appended_frozen_turn_ids.append(turn_id)
+        if not source_turn_id:
+            turn_id_map_issues.append(
+                {
+                    "code": "source_turn_id_missing",
+                    "appended_turn_index": index,
+                    "frozen_turn_id": turn_id,
+                }
+            )
+        elif source_turn_id in appended_turn_id_map:
+            turn_id_map_issues.append(
+                {
+                    "code": "source_turn_id_duplicate",
+                    "appended_turn_index": index,
+                    "source_turn_id": source_turn_id,
+                    "first_frozen_turn_id": appended_turn_id_map[source_turn_id],
+                    "duplicate_frozen_turn_id": turn_id,
+                }
+            )
+        else:
+            appended_turn_id_map[source_turn_id] = turn_id
         turns.append(
             {
                 "turn_id": turn_id,
@@ -13950,8 +19533,160 @@ def freeze_append_only_dialogue(
                 "text": text,
             }
         )
+    mapped_frozen_turn_ids = list(appended_turn_id_map.values())
+    if len(appended_turn_id_map) != len(appended_frozen_turn_ids):
+        turn_id_map_issues.append(
+            {
+                "code": "appended_turn_id_map_incomplete",
+                "mapped_turn_count": len(appended_turn_id_map),
+                "appended_turn_count": len(appended_frozen_turn_ids),
+            }
+        )
+    if len(set(mapped_frozen_turn_ids)) != len(mapped_frozen_turn_ids):
+        turn_id_map_issues.append(
+            {
+                "code": "appended_turn_id_map_not_injective",
+            }
+        )
+    if set(mapped_frozen_turn_ids) != set(appended_frozen_turn_ids):
+        turn_id_map_issues.append(
+            {
+                "code": "appended_turn_id_map_target_coverage_mismatch",
+                "unmapped_frozen_turn_ids": sorted(
+                    set(appended_frozen_turn_ids) - set(mapped_frozen_turn_ids)
+                ),
+                "unexpected_frozen_turn_ids": sorted(
+                    set(mapped_frozen_turn_ids) - set(appended_frozen_turn_ids)
+                ),
+            }
+        )
     dialogue_hash = stable_hash({"turns": turns}, length=24)
-    return {"turns": turns, "dialogue_hash": dialogue_hash, "frozen_dialogue": True}
+    return {
+        "turns": turns,
+        "dialogue_hash": dialogue_hash,
+        "frozen_dialogue": True,
+        "parent_turn_count": retained_parent_turn_count,
+        "appended_turn_count": len(appended_frozen_turn_ids),
+        "appended_turn_id_map": appended_turn_id_map,
+        "appended_turn_id_map_validation": {
+            "pass": not turn_id_map_issues,
+            "source_turn_count": len(appended_frozen_turn_ids),
+            "mapped_turn_count": len(appended_turn_id_map),
+            "unique_target_turn_count": len(set(mapped_frozen_turn_ids)),
+            "issues": turn_id_map_issues,
+        },
+    }
+
+
+def remap_truth_first_claim_alignment_to_frozen_dialogue(
+    claim_alignment: dict[str, Any],
+    final_dialogue: dict[str, Any],
+) -> dict[str, Any]:
+    """Bind planned Truth-first support ids to append-only frozen turn ids."""
+
+    if not isinstance(claim_alignment, dict) or not claim_alignment:
+        raise NativeGraphDialogueReject(
+            "Truth-first discourse returned no claim_id support alignment"
+        )
+    if not isinstance(final_dialogue, dict):
+        raise NativeGraphDialogueReject(
+            "Truth-first claim alignment remap requires a frozen dialogue"
+        )
+    turn_id_map = final_dialogue.get("appended_turn_id_map")
+    map_validation = final_dialogue.get("appended_turn_id_map_validation")
+    if not isinstance(turn_id_map, dict) or not isinstance(map_validation, dict):
+        raise NativeGraphDialogueReject(
+            "Truth-first frozen dialogue is missing its appended turn_id map"
+        )
+    if map_validation.get("pass") is not True:
+        raise NativeGraphDialogueReject(
+            "Truth-first appended turn_id map is not complete and bijective: "
+            f"{map_validation.get('issues') or []}"
+        )
+
+    normalized_map = {
+        normalize_space(source_turn_id): normalize_space(frozen_turn_id)
+        for source_turn_id, frozen_turn_id in turn_id_map.items()
+        if normalize_space(source_turn_id) and normalize_space(frozen_turn_id)
+    }
+    try:
+        appended_turn_count = int(final_dialogue.get("appended_turn_count"))
+    except (TypeError, ValueError):
+        appended_turn_count = -1
+    if (
+        len(normalized_map) != len(turn_id_map)
+        or len(normalized_map) != appended_turn_count
+        or len(set(normalized_map.values())) != len(normalized_map)
+    ):
+        raise NativeGraphDialogueReject(
+            "Truth-first appended turn_id map failed independent bijection validation"
+        )
+
+    frozen_turn_by_id: dict[str, dict[str, Any]] = {}
+    frozen_turn_ids: list[str] = []
+    for turn in final_dialogue.get("turns") or []:
+        if not isinstance(turn, dict):
+            continue
+        frozen_turn_id = normalize_space(turn.get("turn_id"))
+        if not frozen_turn_id:
+            continue
+        if frozen_turn_id in frozen_turn_by_id:
+            raise NativeGraphDialogueReject(
+                "Truth-first frozen dialogue contains duplicate turn_id: "
+                f"{frozen_turn_id}"
+            )
+        frozen_turn_by_id[frozen_turn_id] = turn
+        frozen_turn_ids.append(frozen_turn_id)
+    missing_targets = sorted(set(normalized_map.values()) - set(frozen_turn_by_id))
+    if missing_targets:
+        raise NativeGraphDialogueReject(
+            "Truth-first appended turn_id map points outside the frozen dialogue: "
+            f"{missing_targets}"
+        )
+    try:
+        parent_turn_count = int(final_dialogue.get("parent_turn_count"))
+    except (TypeError, ValueError):
+        parent_turn_count = -1
+    if parent_turn_count < 0 or parent_turn_count > len(frozen_turn_ids):
+        raise NativeGraphDialogueReject(
+            "Truth-first frozen dialogue has an invalid parent/appended boundary"
+        )
+    expected_appended_ids = frozen_turn_ids[parent_turn_count:]
+    if (
+        len(expected_appended_ids) != appended_turn_count
+        or set(expected_appended_ids) != set(normalized_map.values())
+    ):
+        raise NativeGraphDialogueReject(
+            "Truth-first appended turn_id map failed independent target coverage "
+            "validation"
+        )
+
+    remapped: dict[str, Any] = {}
+    for raw_claim_id, raw_alignment in claim_alignment.items():
+        claim_id = normalize_space(raw_claim_id)
+        if not claim_id or not isinstance(raw_alignment, dict):
+            raise NativeGraphDialogueReject(
+                "Truth-first claim alignment contains an invalid claim entry"
+            )
+        source_turn_id = normalize_space(raw_alignment.get("turn_id"))
+        frozen_turn_id = normalized_map.get(source_turn_id)
+        if not frozen_turn_id:
+            raise NativeGraphDialogueReject(
+                "Truth-first claim alignment references an unmapped planned turn: "
+                f"claim_id={claim_id!r}, turn_id={source_turn_id!r}"
+            )
+        quote = str(raw_alignment.get("exact_support_quote") or "")
+        target_text = str(frozen_turn_by_id[frozen_turn_id].get("text") or "")
+        if not quote or quote not in target_text:
+            raise NativeGraphDialogueReject(
+                "Truth-first claim support quote is not an exact substring of its "
+                "frozen target turn: "
+                f"claim_id={claim_id!r}, frozen_turn_id={frozen_turn_id!r}"
+            )
+        remapped_alignment = copy.deepcopy(raw_alignment)
+        remapped_alignment["turn_id"] = frozen_turn_id
+        remapped[claim_id] = remapped_alignment
+    return remapped
 
 
 def freeze_final_dialogue(clean_dialogue: list[dict[str, Any]], sample_index: int) -> dict[str, Any]:
@@ -14445,12 +20180,47 @@ def validate_appended_dialogue_candidate(
     require_evidence_dispersion: bool = False,
     deterministic_scaffold_used: bool = False,
     formal_mining: bool = False,
+    local_evidence_compiler_used: bool = False,
+    allow_length_shortfall: bool = False,
 ) -> dict[str, Any]:
+    event_to_anchor = {
+        normalize_space(event_id): normalize_space(anchor)
+        for anchor, event_id in anchor_to_event.items()
+        if normalize_space(anchor) and normalize_space(event_id)
+    }
+    event_claims_by_anchor = {
+        normalize_space(anchor): normalize_space(
+            event.get("dialogue_support_claim")
+        )
+        for event in current_event_plan.get("events") or []
+        if isinstance(event, dict)
+        for anchor in [
+            normalize_space(
+                event.get("alignment_anchor")
+                or event_to_anchor.get(
+                    normalize_space(event.get("event_instance_id"))
+                )
+            )
+        ]
+        if anchor and normalize_space(event.get("dialogue_support_claim"))
+    }
+    use_visible_claim_alignment = bool(
+        formal_mining
+        and event_claims_by_anchor
+        and set(event_claims_by_anchor) == set(anchor_to_event)
+    )
     raw_alignment_proposal = parse_anchor_annotations(
         appended_dialogue_marked,
         anchor_to_event,
         event_alignment_proposal,
         turn_index_offset=len(parent_dialogue_turns),
+        exact_visible_claim_fallback=use_visible_claim_alignment,
+        # In formal API-only mining, random anchors are provenance metadata,
+        # not generated evidence.  We accept only the API-visible canonical
+        # claim match below, never a malformed sidecar that could point at a
+        # different sentence.
+        ignore_api_sidecars=use_visible_claim_alignment,
+        event_claims_by_anchor=event_claims_by_anchor,
     )
     seen = set(raw_alignment_proposal.get("current_anchor_seen") or [])
     invalid = set(raw_alignment_proposal.get("invalid_anchors") or [])
@@ -14490,7 +20260,13 @@ def validate_appended_dialogue_candidate(
             "dialogue_length_padding_used": dialogue_length_padding_used,
             "dialogue_local_padding_used": dialogue_local_padding_used,
             "formal_mining_api_native_dialogue_only": bool(
-                formal_mining and not deterministic_scaffold_used and not dialogue_local_padding_used
+                formal_mining
+                and not deterministic_scaffold_used
+                and not dialogue_local_padding_used
+                and not local_evidence_compiler_used
+            ),
+            "formal_mining_local_evidence_compiler": bool(
+                formal_mining and local_evidence_compiler_used
             ),
         }
     )
@@ -14532,22 +20308,74 @@ def validate_appended_dialogue_candidate(
                         "dialogue_length_padding_used": dialogue_length_padding_used,
                         "dialogue_local_padding_used": dialogue_local_padding_used,
                         "formal_mining_api_native_dialogue_only": False,
+                        "formal_mining_local_evidence_compiler": bool(
+                            formal_mining and local_evidence_compiler_used
+                        ),
                     }
                 )
                 length_metadata = fallback_metadata
                 break
         if fallback_metadata is None:
-            return {
-                "pass": False,
-                "reason": "length",
-                "raw_alignment_proposal": raw_alignment_proposal,
-                "final_dialogue": final_dialogue,
-                "length_metadata": length_metadata,
-                "seen": seen,
-                "invalid": invalid,
-                "missing_anchors": set(anchor_to_event) - seen,
-                "ignored_event_alignment_proposal": ignored_event_alignment_proposal,
-            }
+            # A continuation-cap shortfall relaxes only the final token target.
+            # It never admits a non-append, or a dialogue that misses the
+            # minimum turn-count structural requirement.
+            shortfall_failures = set(
+                length_metadata.get("length_guard_failures") or []
+            )
+            token_only_shortfall = bool(shortfall_failures) and (
+                shortfall_failures <= {"min_added_tokens"}
+            )
+            if (
+                not allow_length_shortfall
+                or not token_only_shortfall
+                or _formal_length_shortfall_must_reject(
+                    formal_mining, min_added_tokens
+                )
+            ):
+                length_metadata.update(
+                    {
+                        "length_guard_target_pass": False,
+                        "length_guard_target_delta": min_added_tokens,
+                        "length_guard_exemption_used": False,
+                    }
+                )
+                return {
+                    "pass": False,
+                    "reason": "length",
+                    "raw_alignment_proposal": raw_alignment_proposal,
+                    "final_dialogue": final_dialogue,
+                    "length_metadata": length_metadata,
+                    "seen": seen,
+                    "invalid": invalid,
+                    "missing_anchors": set(anchor_to_event) - seen,
+                    "ignored_event_alignment_proposal": ignored_event_alignment_proposal,
+                }
+            # The caller has exhausted its explicit append-only continuation
+            # budget.  Keep the actual hard-guard result for reporting, but
+            # continue with all semantic/alignment checks so the valid sample
+            # can be retained as a clearly labeled shortfall row.
+            length_metadata.update(
+                {
+                    "length_guard_target_pass": False,
+                    "length_guard_target_delta": min_added_tokens,
+                    "length_guard_fallback_used": False,
+                    "length_guard_exemption_used": True,
+                    "length_guard_exemption_reason": (
+                        "append_only_continuation_budget_exhausted"
+                    ),
+                    "fallback_delta": fallback_min_added_tokens,
+                    "emergency_floor": emergency_min_added_tokens,
+                    "rows_below_4000_delta_flag": (
+                        float(
+                            length_metadata.get(
+                                "length_guard_effective_delta_tokens"
+                            )
+                            or 0
+                        )
+                        < float(min_added_tokens or 0)
+                    ),
+                }
+            )
     else:
         length_metadata["length_guard_target_pass"] = True
         length_metadata["length_guard_target_delta"] = min_added_tokens
@@ -14626,6 +20454,19 @@ def validate_appended_dialogue_candidate(
     }
 
 
+def _formal_length_shortfall_must_reject(
+    formal_mining: bool,
+    min_added_tokens: int,
+) -> bool:
+    """Keep the Stage64 4k token contract hard across every internal caller."""
+
+    try:
+        required_tokens = int(min_added_tokens or 0)
+    except (TypeError, ValueError):
+        required_tokens = 0
+    return bool(formal_mining and required_tokens >= 4000)
+
+
 def _deps(hashes: dict[str, str]) -> dict[str, str]:
     return {
         "depends_on_graph_snapshot_hash": hashes["graph_snapshot_hash"],
@@ -14639,6 +20480,11 @@ def compile_graph_update_from_current_event_plan(
     current_alignment: dict[str, Any],
     hashes: dict[str, str],
 ) -> dict[str, Any]:
+    plan_metadata = (
+        current_event_plan.get("metadata")
+        if isinstance(current_event_plan.get("metadata"), dict)
+        else {}
+    )
     events_out: list[dict[str, Any]] = []
     state_changes: list[dict[str, Any]] = []
     invalidations: list[dict[str, Any]] = []
@@ -14664,6 +20510,7 @@ def compile_graph_update_from_current_event_plan(
             "lineage_id": event.get("lineage_id"),
             "node_id": f"{current_event_plan.get('graph_snapshot_id')}:{event_id.split(':')[-1]}",
             "role": event.get("event_type") or "state_change",
+            "event_type": event.get("event_type") or "state_change",
             "entity": event.get("entity"),
             "slot": event.get("slot"),
             "value": event.get("value"),
@@ -14742,6 +20589,26 @@ def compile_graph_update_from_current_event_plan(
         "cancellations": cancellations,
         "restorations": restorations,
         "delayed_activations": delayed_activations,
+        **(
+            {
+                "parent_continuity": copy.deepcopy(
+                    plan_metadata["parent_continuity"]
+                )
+            }
+            if isinstance(plan_metadata.get("parent_continuity"), dict)
+            and plan_metadata.get("parent_continuity")
+            else {}
+        ),
+        **(
+            {
+                "parent_event_retrieval": copy.deepcopy(
+                    plan_metadata["parent_event_retrieval"]
+                )
+            }
+            if isinstance(plan_metadata.get("parent_event_retrieval"), dict)
+            and plan_metadata.get("parent_event_retrieval")
+            else {}
+        ),
         "visibility_edges": [
             {
                 "observer": "solver",
@@ -14927,11 +20794,7 @@ def _event_option_surface_is_placeholder(event: dict[str, Any]) -> bool:
 
 
 def _parent_context_events(seed_row: dict[str, Any]) -> list[dict[str, Any]]:
-    semantic_parent = (
-        seed_row.get("semantic_parent_graph")
-        if isinstance(seed_row.get("semantic_parent_graph"), dict)
-        else {}
-    )
+    semantic_parent = _semantic_parent_graph_from_seed(seed_row)
     graph_update = seed_row.get("graph_update") if isinstance(seed_row.get("graph_update"), dict) else {}
     semantic_events = semantic_parent.get("events")
     source_events = (
@@ -18528,13 +24391,137 @@ def _stage64_reasoning_graph_target_issues(
                 actual=actual,
             )
     elif operation == "bridge" and len(event_rows) >= 3:
-        actual = [dependencies(event) for event in event_rows[:3]]
-        if actual[0] or actual[1] or set(actual[2]) != {event_ids[0], event_ids[1]}:
+        expected = [[], [], [event_ids[0], event_ids[1]], *(
+            [] for _event in event_rows[3:]
+        )]
+        actual = [dependencies(event) for event in event_rows]
+        if actual != expected:
             structural_issue(
                 "bridge_reasoning_target_incomplete_closure",
-                "The bridge terminal must depend on both independent support events.",
-                expected_terminal_dependencies=[event_ids[0], event_ids[1]],
+                "The bridge terminal must be the only event with dependencies and must cite both supports in order.",
+                expected=expected,
                 actual=actual,
+            )
+        binder_value = event_rows[0].get("value")
+        target_entity = event_rows[1].get("entity")
+        if (
+            not isinstance(binder_value, str)
+            or not binder_value.strip()
+            or not isinstance(target_entity, str)
+            or binder_value != target_entity
+        ):
+            structural_issue(
+                "bridge_reasoning_target_missing_binder_join",
+                "Bridge E1.value must equal E2.entity byte-for-byte.",
+                binder_value=binder_value,
+                target_entity=target_entity,
+            )
+        answer_value = event_rows[1].get("value")
+        preferred_answer_type = normalize_space(
+            (stage64_target or {}).get("preferred_answer_type")
+        )
+        answer_slot = event_rows[1].get("slot")
+        if (
+            preferred_answer_type == "Person"
+            and not _stage64_person_answer_slot(answer_slot)
+        ):
+            structural_issue(
+                "bridge_reasoning_target_answer_slot_type_mismatch",
+                "Bridge E2.slot must denote a person-valued semantic role for the frozen Person target.",
+                preferred_answer_type=preferred_answer_type,
+                answer_slot=answer_slot,
+                answer_event_id=event_ids[1],
+            )
+        if (
+            preferred_answer_type == "Person"
+            and not _stage64_person_answer_atom(answer_value)
+        ):
+            structural_issue(
+                "bridge_reasoning_target_answer_type_mismatch",
+                "Bridge E2.value must be one atomic person name for the frozen Person target.",
+                preferred_answer_type=preferred_answer_type,
+                answer_value=answer_value,
+                answer_event_id=event_ids[1],
+            )
+        if preferred_answer_type == "Person":
+            typed_negative_values: list[str] = []
+            seen_negative_values = {
+                stage64_quality.normalized_option_text(answer_value)
+            }
+            answer_slot_key = stage64_quality.normalized_option_text(answer_slot)
+            for event in event_rows[3:6]:
+                candidate = event.get("value")
+                normalized_candidate = stage64_quality.normalized_option_text(
+                    candidate
+                )
+                if (
+                    _stage64_person_answer_atom(candidate)
+                    and _stage64_person_answer_slot(event.get("slot"))
+                    and stage64_quality.normalized_option_text(event.get("slot"))
+                    == answer_slot_key
+                    and normalized_candidate
+                    and normalized_candidate not in seen_negative_values
+                ):
+                    seen_negative_values.add(normalized_candidate)
+                    typed_negative_values.append(normalize_space(candidate))
+            if len(typed_negative_values) < 3:
+                structural_issue(
+                    "bridge_reasoning_target_insufficient_typed_distractors",
+                    "Bridge needs three distinct Person-valued hard negatives for a four-option Person QA.",
+                    preferred_answer_type=preferred_answer_type,
+                    typed_distractor_count=len(typed_negative_values),
+                    typed_distractor_values=typed_negative_values,
+                )
+        if (
+            normalize_space((stage64_target or {}).get("hard_negative_strategy"))
+            == "one_hop_preserving_alternative"
+            and len(event_rows) >= 4
+            and normalize_space(event_rows[3].get("entity"))
+            != normalize_space(event_rows[2].get("entity"))
+        ):
+            structural_issue(
+                "bridge_reasoning_target_one_hop_negative_mismatch",
+                "Bridge E4 must copy E3.entity for the one-hop-preserving alternative.",
+                terminal_entity=event_rows[2].get("entity"),
+                hard_negative_entity=event_rows[3].get("entity"),
+            )
+        normalized_answer = stage64_quality.normalized_option_text(answer_value)
+        terminal = event_rows[2]
+        terminal_support = semantic_event_dialogue_support_claim(
+            terminal.get("entity"),
+            terminal.get("slot"),
+            terminal.get("value"),
+            terminal.get("status"),
+        )
+        terminal_surfaces = [
+            stage64_quality.normalized_option_text(terminal.get(field))
+            for field in ("entity", "slot", "value")
+        ]
+        terminal_surfaces.append(
+            stage64_quality.normalized_option_text(terminal_support)
+        )
+        if normalized_answer and any(
+            f" {normalized_answer} " in f" {surface} "
+            for surface in terminal_surfaces
+            if surface
+        ):
+            structural_issue(
+                "bridge_reasoning_target_terminal_copies_answer",
+                "Bridge E3 is a proof connector and must not expose E2.value.",
+                answer_value=answer_value,
+                terminal_event_id=event_ids[2],
+            )
+        if not any(
+            normalize_space(event.get("entity"))
+            == normalize_space(terminal.get("entity"))
+            or normalize_space(event.get("slot"))
+            == normalize_space(terminal.get("slot"))
+            for event in event_rows[3:]
+        ):
+            structural_issue(
+                "bridge_reasoning_target_unrelated_hard_negatives",
+                "Bridge needs a context event sharing the terminal entity or slot.",
+                terminal_event_id=event_ids[2],
             )
     elif operation == "comparison" and len(event_rows) >= 4:
         primary = event_rows[:2]
@@ -18688,6 +24675,18 @@ def _stage64_reasoning_graph_target_issues(
                 "Cause/consequence requires one unique earlier-cause to later-effect edge.",
                 expected_edges=expected_edge,
                 actual_edges=directed_edges,
+            )
+        if not any(
+            normalize_space(event.get("entity"))
+            == normalize_space(event_rows[1].get("entity"))
+            or normalize_space(event.get("slot"))
+            == normalize_space(event_rows[1].get("slot"))
+            for event in event_rows[2:]
+        ):
+            structural_issue(
+                "cause_reasoning_target_unrelated_hard_negatives",
+                "Cause/consequence needs a wrong-effect event sharing the effect entity or slot.",
+                effect_event_id=event_ids[1],
             )
     elif operation == "relation_lookup" and len(event_rows) >= 4:
         binder, relation, same_entity_negative, other_entity_negative = event_rows[:4]
@@ -18949,6 +24948,1836 @@ def _strict_nonnegative_int(value: Any, field: str) -> int:
     return value
 
 
+CLAIM_FIRST_MULTIQA_SCHEMA_VERSION = "stage3_native_claim_first_multiqa_v1"
+
+
+def claim_first_multiqa_settings(api_args: argparse.Namespace) -> dict[str, Any]:
+    """Read the opt-in Claim-first contract without changing legacy defaults."""
+
+    enabled = bool(getattr(api_args, "claim_first_multiqa", False))
+    try:
+        min_qas = int(getattr(api_args, "claim_first_min_qas", 3) or 3)
+        max_qas = int(getattr(api_args, "claim_first_max_qas", 6) or 6)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("claim_first_min_qas/max_qas must be integers") from exc
+    if min_qas < 3 or max_qas > 6 or max_qas < min_qas:
+        raise ValueError(
+            "claim_first_min_qas/max_qas must satisfy 3 <= min <= max <= 6"
+        )
+    try:
+        eval_per_mille = int(
+            getattr(api_args, "claim_first_eval_per_mille", 100) or 0
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("claim_first_eval_per_mille must be an integer") from exc
+    if not 0 <= eval_per_mille <= 1000:
+        raise ValueError("claim_first_eval_per_mille must be in [0, 1000]")
+    return {
+        "enabled": enabled,
+        "min_qas": min_qas,
+        "max_qas": max_qas,
+        "eval_per_mille": eval_per_mille,
+    }
+
+
+def _claim_first_lineage_group(seed_row: dict[str, Any]) -> str:
+    metadata = seed_row.get("metadata") if isinstance(seed_row.get("metadata"), dict) else {}
+    seed_source = seed_row.get("seed_source") if isinstance(seed_row.get("seed_source"), dict) else {}
+    return normalize_space(
+        seed_row.get("lineage_group")
+        or metadata.get("lineage_group")
+        or seed_source.get("lineage_group")
+        or seed_source.get("source_lineage_key")
+        or seed_row.get("parent_sample_id")
+        or seed_row.get("sample_id")
+        or seed_row.get("source_id")
+    )
+
+
+def precompile_claim_first_multiqa(
+    current_event_plan: dict[str, Any],
+    seed_row: dict[str, Any],
+    *,
+    min_qas: int = 3,
+    max_qas: int = 6,
+    eval_per_mille: int = 100,
+    immutable_stage64_target: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Freeze graph truth and 3--6 QA proofs before any dialogue API call."""
+
+    claim_ir = stage3_claim_ir.compile_claim_ir(current_event_plan)
+    compiled = stage3_claim_proof_compiler.compile_claim_first_qas(
+        claim_ir,
+        seed_sample_id=normalize_space(
+            seed_row.get("sample_id") or seed_row.get("source_id")
+        ),
+        lineage_group_id=_claim_first_lineage_group(seed_row),
+        min_qas=min_qas,
+        max_qas=max_qas,
+        eval_per_mille=eval_per_mille,
+        require_support=False,
+        immutable_stage64_target=copy.deepcopy(immutable_stage64_target),
+    )
+    compiled = _filter_claim_first_semantic_qas(
+        compiled,
+        claim_ir,
+        dialogue=None,
+        phase="pre_dialogue",
+    )
+    if int(compiled.get("qa_count") or 0) < int(min_qas):
+        raise NativeGraphDialogueReject(
+            "claim-first semantic precheck retained fewer than the minimum QAs: "
+            f"retained={compiled.get('qa_count')}, required={min_qas}"
+        )
+    target_qa_id = normalize_space(compiled.get("target_fulfillment_qa_id"))
+    if target_qa_id and compiled.get("target_fulfillment_status") != (
+        "semantic_pre_dialogue_pass"
+    ):
+        raise NativeGraphDialogueReject(
+            "claim-first immutable target QA failed the pre-dialogue semantic gate"
+        )
+    return claim_ir, compiled
+
+
+def precompile_truth_first_multiqa(
+    current_event_plan: dict[str, Any],
+    seed_row: dict[str, Any],
+    *,
+    min_qas: int,
+    max_qas: int,
+    immutable_stage64_target: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Compile Claim IR and 3--6 QAs from the original constructor graph."""
+
+    materialized = current_event_plan.get("_truth_first_materialized")
+    if not isinstance(materialized, dict):
+        raise NativeGraphDialogueReject(
+            "Truth-first current_event_plan is missing its admitted materialization"
+        )
+    truth_graph = materialized.get("graph")
+    if not isinstance(truth_graph, dict):
+        raise NativeGraphDialogueReject("Truth-first materialization has no graph")
+    pre_claim_ir = stage3_claim_ir.compile_claim_ir(truth_graph)
+    requested_count = min(max_qas, max(min_qas, 4))
+    compiled = stage3_truth_qa_compiler.compile_truth_first_qas(
+        materialized,
+        pre_claim_ir,
+        immutable_stage64_target=copy.deepcopy(immutable_stage64_target),
+        qa_count=requested_count,
+        seed_sample_id=normalize_space(
+            seed_row.get("sample_id") or seed_row.get("source_id")
+        ),
+        lineage_group_id=_claim_first_lineage_group(seed_row),
+    )
+    compiled.update(
+        {
+            "native_schema_version": CLAIM_FIRST_MULTIQA_SCHEMA_VERSION,
+            "compiler_qa_count": int(compiled.get("qa_count") or 0),
+            "pre_dialogue_semantic_pass_qa_count": int(
+                compiled.get("qa_count") or 0
+            ),
+            "pre_dialogue_semantic_reject_qa_count": 0,
+            "target_fulfillment_status": "semantic_pre_dialogue_pass",
+            "truth_first_generate_by_construction": True,
+            "question_surface_source": "local_truth_qa_compiler",
+        }
+    )
+    return pre_claim_ir, compiled
+
+
+def _truth_first_discourse_parent_context(
+    current_event_plan: dict[str, Any],
+    parent_context: dict[str, Any],
+    parent_dialogue_turns: list[dict[str, Any]],
+) -> dict[str, Any]:
+    materialized = current_event_plan.get("_truth_first_materialized")
+    discourse = (
+        materialized.get("discourse_plan")
+        if isinstance(materialized, dict)
+        and isinstance(materialized.get("discourse_plan"), dict)
+        else {}
+    )
+    speakers = list(
+        dict.fromkeys(
+            normalize_space(turn.get("speaker") or turn.get("role"))
+            for turn in parent_dialogue_turns
+            if isinstance(turn, dict)
+            and normalize_space(turn.get("speaker") or turn.get("role"))
+        )
+    )
+    if not speakers:
+        raise NativeGraphDialogueReject(
+            "Truth-first discourse requires the established parent speaker roster"
+        )
+    selected_parent_turns = copy.deepcopy(
+        parent_context.get("selected_relevant_parent_turns") or []
+    )
+    return {
+        "speaker_roster": speakers,
+        "topic": normalize_space(discourse.get("topic"))
+        or normalize_space(current_event_plan.get("operation")).replace("_", " "),
+        "setting": normalize_space(discourse.get("setting"))
+        or "the established participants' continuing conversation",
+        "dialogue": {
+            "turns": copy.deepcopy(parent_dialogue_turns[-12:]),
+        },
+        "selected_relevant_parent_turns": selected_parent_turns,
+        "parent_dialogue_digest": copy.deepcopy(
+            parent_context.get("parent_dialogue_digest") or {}
+        ),
+    }
+
+
+def _flatten_truth_first_discourse_response(
+    response: dict[str, Any],
+    discourse_plan: dict[str, Any],
+    pre_claim_ir: dict[str, Any],
+    current_event_plan: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    claim_by_id = {
+        normalize_space(claim.get("claim_id")): claim
+        for claim in pre_claim_ir.get("claims") or []
+        if isinstance(claim, dict) and normalize_space(claim.get("claim_id"))
+    }
+    event_to_anchor = current_event_plan.get(
+        "current_event_instance_to_anchor"
+    ) or {}
+    turns: list[dict[str, Any]] = []
+    claim_alignment: dict[str, Any] = {}
+    for act in response.get("acts") or []:
+        if not isinstance(act, dict):
+            continue
+        for beat in act.get("beats") or []:
+            if not isinstance(beat, dict):
+                continue
+            for raw_turn in beat.get("turns") or []:
+                if not isinstance(raw_turn, dict):
+                    continue
+                turn_id = normalize_space(raw_turn.get("turn_id"))
+                anchors: list[str] = []
+                support_quotes: dict[str, str] = {}
+                for support in raw_turn.get("support") or []:
+                    if not isinstance(support, dict):
+                        continue
+                    claim_id = normalize_space(support.get("claim_id"))
+                    quote = str(support.get("exact_support_quote") or "")
+                    claim_alignment[claim_id] = {
+                        "turn_id": turn_id,
+                        "exact_support_quote": quote,
+                    }
+                    claim = claim_by_id.get(claim_id) or {}
+                    claim_type = normalize_space(claim.get("claim_type"))
+                    endpoint_ids = [
+                        normalize_space(claim.get("subject_event_id")),
+                        *[
+                            normalize_space(value)
+                            for value in claim.get("object_event_ids") or []
+                        ],
+                    ]
+                    for event_id in endpoint_ids:
+                        anchor = normalize_space(event_to_anchor.get(event_id))
+                        if anchor and anchor not in anchors:
+                            anchors.append(anchor)
+                            support_quotes[anchor] = quote
+                    if claim_type == "node" and endpoint_ids[0]:
+                        claim_alignment[endpoint_ids[0]] = {
+                            "turn_id": turn_id,
+                            "exact_support_quote": quote,
+                        }
+                turns.append(
+                    {
+                        "turn_id": turn_id,
+                        "speaker": normalize_space(raw_turn.get("speaker")),
+                        "text": str(raw_turn.get("text") or ""),
+                        "alignment_anchors": anchors,
+                        "support_quotes": support_quotes,
+                        "discourse_act_id": normalize_space(act.get("act_id")),
+                        "discourse_beat_id": normalize_space(beat.get("beat_id")),
+                    }
+                )
+    return turns, claim_alignment
+
+
+def call_api_truth_first_content_binding_probe(
+    selected_claims: list[dict[str, Any]],
+    api_args: argparse.Namespace,
+    *,
+    topic: str,
+    setting: str,
+    canary_id: str,
+    max_tokens: int = 640,
+) -> dict[str, Any]:
+    """Run one bounded, zero-retry live probe of claim surface realization."""
+
+    contract = (
+        stage3_truth_first_discourse.build_live_content_binding_probe_contract(
+            selected_claims,
+            topic=topic,
+            setting=setting,
+        )
+    )
+    prompt_payload = {
+        "mode": "stage3_truth_first_content_binding_live_canary_v2",
+        "canary_id": normalize_space(canary_id),
+        "api_contract": contract,
+        "probe_scope": {
+            "single_short_response": True,
+            "dialogue_generation": False,
+            "graph_generation": False,
+            "qa_generation": False,
+            "api_retries": 0,
+        },
+    }
+    started = time.monotonic()
+    response, api_meta = call_raw_json_api(
+        api_args,
+        prompt_payload,
+        system_prompt=(
+            "Surface-realize each supplied immutable typed fact as one concise, "
+            "natural English sentence. Preserve every semantic role and status. "
+            "Return exactly one JSON object with the sole top-level key "
+            "realizations. Do not write dialogue, explanations, or markdown."
+        ),
+        required_keys=("realizations",),
+        call_kind="api_truth_content_binding",
+        max_tokens_override=max(128, int(max_tokens)),
+        max_retries_override=0,
+        temperature_override=float(
+            getattr(api_args, "challenger_temperature", 0.25) or 0.25
+        ),
+        include_raw_response=True,
+    )
+    latency_ms = int(round((time.monotonic() - started) * 1000))
+    validation = (
+        stage3_truth_first_discourse.validate_live_content_binding_probe_response(
+            contract,
+            response,
+            claims=selected_claims,
+        )
+    )
+    return {
+        "probe_kind": "content_binding_live_canary",
+        "canary_id": normalize_space(canary_id),
+        "contract_schema_version": contract["schema_version"],
+        "contract_sha256": contract["contract_sha256"],
+        "prompt_sha256": stage3_truth_first_discourse.canonical_sha256(
+            prompt_payload
+        ),
+        "prompt_payload": copy.deepcopy(prompt_payload),
+        "requested_claim_ids": [
+            normalize_space(claim.get("claim_id"))
+            for claim in selected_claims
+        ],
+        "requested_claim_count": len(selected_claims),
+        "response": copy.deepcopy(response),
+        "api_meta": copy.deepcopy(api_meta),
+        "latency_ms": latency_ms,
+        "validation": validation,
+        "machine_clean": bool(api_meta.get("used"))
+        and validation.get("pass") is True,
+        "local_repair_applied": False,
+        "api_retry_count": 0,
+    }
+
+
+def call_api_truth_first_single_scene_probe(
+    selected_claims: list[dict[str, Any]],
+    api_args: argparse.Namespace,
+    *,
+    topic: str,
+    setting: str,
+    speaker_roster: list[str],
+    canary_id: str,
+    max_tokens: int = 768,
+) -> dict[str, Any]:
+    """Run one variable-length, zero-retry live scene canary."""
+
+    contract = stage3_truth_first_discourse.build_live_single_scene_probe_contract(
+        selected_claims,
+        topic=topic,
+        setting=setting,
+        speaker_roster=speaker_roster,
+    )
+    prompt_payload = {
+        "mode": "stage3_truth_first_single_scene_live_canary_v2",
+        "canary_id": normalize_space(canary_id),
+        "api_contract": contract,
+        "probe_scope": {
+            "single_variable_length_scene": True,
+            "multi_scene_generation": False,
+            "complete_dialogue_generation": False,
+            "graph_generation": False,
+            "qa_generation": False,
+            "api_retries": 0,
+        },
+    }
+    started = time.monotonic()
+    response, api_meta = call_raw_json_api(
+        api_args,
+        prompt_payload,
+        system_prompt=(
+            "Write one short, coherent, natural direct conversation from the "
+            "supplied immutable facts. Return exactly one JSON object with only "
+            "turns and supports. turns contains variable-length speaker/text rows; "
+            "supports binds each opaque claim_ref to a zero-based turn_index and a "
+            "byte-for-byte exact_support_quote from that turn. Preserve all fact "
+            "semantics and never mention internal instructions or identifiers."
+        ),
+        required_keys=("turns", "supports"),
+        call_kind="api_truth_single_scene_probe",
+        max_tokens_override=max(256, int(max_tokens)),
+        max_retries_override=0,
+        temperature_override=float(
+            getattr(api_args, "challenger_temperature", 0.25) or 0.25
+        ),
+        include_raw_response=True,
+    )
+    latency_ms = int(round((time.monotonic() - started) * 1000))
+    validation = (
+        stage3_truth_first_discourse.validate_live_single_scene_probe_response(
+            contract,
+            response,
+            claims=selected_claims,
+        )
+    )
+    return {
+        "probe_kind": "single_scene_live_canary",
+        "canary_id": normalize_space(canary_id),
+        "contract_schema_version": contract["schema_version"],
+        "contract_sha256": contract["contract_sha256"],
+        "prompt_sha256": stage3_truth_first_discourse.canonical_sha256(
+            prompt_payload
+        ),
+        "prompt_payload": copy.deepcopy(prompt_payload),
+        "speaker_roster": list(speaker_roster),
+        "requested_claim_ids": [
+            normalize_space(claim.get("claim_id"))
+            for claim in selected_claims
+        ],
+        "requested_claim_count": len(selected_claims),
+        "response": copy.deepcopy(response),
+        "api_meta": copy.deepcopy(api_meta),
+        "latency_ms": latency_ms,
+        "validation": validation,
+        "machine_clean": bool(api_meta.get("used"))
+        and validation.get("pass") is True,
+        "local_repair_applied": False,
+        "api_retry_count": 0,
+    }
+
+
+def _validate_frozen_quote_scene_probe(
+    response: Any,
+    *,
+    selected_claims: list[dict[str, Any]],
+    frozen_quotes: list[str],
+) -> dict[str, Any]:
+    """Check only exact quote placement and hard semantic conflicts."""
+
+    issues: list[dict[str, Any]] = []
+    turns: list[dict[str, Any]] = []
+    if not isinstance(response, dict):
+        issues.append({"code": "frozen_quote_scene_response_not_object"})
+    else:
+        if set(response) != {"turns"}:
+            issues.append(
+                {
+                    "code": "frozen_quote_scene_turns_only_required",
+                    "actual_keys": sorted(response),
+                }
+            )
+        raw_turns = response.get("turns")
+        if not isinstance(raw_turns, list):
+            issues.append({"code": "frozen_quote_scene_turns_not_array"})
+        else:
+            turns = [row for row in raw_turns if isinstance(row, dict)]
+            if len(turns) != len(raw_turns):
+                issues.append({"code": "frozen_quote_scene_turn_not_object"})
+
+    texts = [str(row.get("text") or "") for row in turns]
+    quote_counts = {
+        f"Q{index + 1}": sum(text.count(quote) for text in texts)
+        for index, quote in enumerate(frozen_quotes)
+    }
+    for quote_ref, count in quote_counts.items():
+        if count != 1:
+            issues.append(
+                {
+                    "code": "frozen_quote_occurrence_mismatch",
+                    "quote_ref": quote_ref,
+                    "expected": 1,
+                    "actual": count,
+                }
+            )
+
+    hard_conflict_codes = {
+        "frozen_claim_surface_contradiction",
+        "frozen_claim_polarity_contradiction",
+        "frozen_claim_status_contradiction",
+        "frozen_claim_condition_contradiction",
+        "frozen_claim_condition_mismatch",
+        "frozen_claim_unexpected_condition",
+        "frozen_claim_scope_contradiction",
+        "frozen_claim_direction_contradiction",
+    }
+    for turn_index, text in enumerate(texts):
+        context = text
+        for quote in frozen_quotes:
+            context = context.replace(quote, " ")
+        if not normalize_space(context):
+            continue
+        for issue in stage3_dialogue_context_guard._claim_contradiction_issues(  # noqa: SLF001
+            context,
+            f"$.response.turns[{turn_index}].text",
+            selected_claims,
+        ):
+            if normalize_space(issue.get("code")) in hard_conflict_codes:
+                issues.append(copy.deepcopy(issue))
+
+    counts = Counter(normalize_space(row.get("code")) for row in issues)
+    return {
+        "schema_version": "stage3_truth_first_frozen_quote_scene_validation_v1",
+        "pass": not issues,
+        "issue_count": len(issues),
+        "issue_counts_by_code": dict(sorted(counts.items())),
+        "issues": issues,
+        "quote_occurrence_counts": quote_counts,
+        "turn_count": len(turns),
+        "word_count": sum(len(re.findall(r"[^\W_]+", text)) for text in texts),
+    }
+
+
+def call_api_truth_first_frozen_quote_scene_probe(
+    selected_claims: list[dict[str, Any]],
+    frozen_quotes: list[str],
+    api_args: argparse.Namespace,
+    *,
+    topic: str,
+    setting: str,
+    speaker_roster: list[str],
+    canary_id: str,
+    max_tokens: int = 768,
+) -> dict[str, Any]:
+    """Ask the API only to compose context around two frozen support quotes."""
+
+    if len(selected_claims) != 2 or len(frozen_quotes) != 2:
+        raise ValueError("the first frozen-quote scene probe requires two claims")
+    quote_rows = []
+    for index, (claim, quote) in enumerate(zip(selected_claims, frozen_quotes)):
+        canonical = claim.get("canonical_support_claim")
+        canonical = canonical if isinstance(canonical, dict) else {}
+        subject = normalize_space(canonical.get("subject")).casefold()
+        preferred_speaker = next(
+            (
+                speaker
+                for speaker in speaker_roster
+                if normalize_space(speaker).casefold() != subject
+            ),
+            speaker_roster[0],
+        )
+        quote_rows.append(
+            {
+                "quote_ref": f"Q{index + 1}",
+                "frozen_quote": quote,
+                "preferred_speaker": preferred_speaker,
+                "required_occurrences": 1,
+            }
+        )
+    prompt_payload = {
+        "mode": "stage3_truth_first_frozen_quote_scene_live_canary_v1",
+        "canary_id": normalize_space(canary_id),
+        "topic": normalize_space(topic),
+        "setting": normalize_space(setting),
+        "speaker_roster": list(speaker_roster),
+        "frozen_quotes": quote_rows,
+        "rules": [
+            "Write one natural direct conversation of 4-8 turns.",
+            "Return exactly one JSON object whose sole key is turns; do not return supports, evidence, or a sidecar.",
+            "Insert each frozen_quote byte-for-byte exactly once in a preferred_speaker turn; do not alter punctuation or wording.",
+            "Write only natural context around the frozen quotes. Do not restate, reinterpret, negate, update, or contradict either quote elsewhere.",
+        ],
+        "response_schema": {
+            "turns": [{"speaker": "speaker_roster value", "text": "visible dialogue"}]
+        },
+    }
+    started = time.monotonic()
+    response, api_meta = call_raw_json_api(
+        api_args,
+        prompt_payload,
+        system_prompt=(
+            "Compose a short natural conversation around two immutable sentences. "
+            "Copy each immutable sentence exactly once without changing any byte. "
+            "Return JSON with only a turns array and no evidence metadata."
+        ),
+        required_keys=("turns",),
+        call_kind="api_truth_single_scene_probe",
+        max_tokens_override=max(256, int(max_tokens)),
+        max_retries_override=0,
+        temperature_override=float(
+            getattr(api_args, "challenger_temperature", 0.25) or 0.25
+        ),
+        include_raw_response=True,
+    )
+    validation = _validate_frozen_quote_scene_probe(
+        response,
+        selected_claims=selected_claims,
+        frozen_quotes=frozen_quotes,
+    )
+    return {
+        "probe_kind": "frozen_quote_scene_live_canary",
+        "canary_id": normalize_space(canary_id),
+        "prompt_sha256": stage3_truth_first_discourse.canonical_sha256(
+            prompt_payload
+        ),
+        "prompt_payload": copy.deepcopy(prompt_payload),
+        "speaker_roster": list(speaker_roster),
+        "requested_claim_ids": [
+            normalize_space(claim.get("claim_id")) for claim in selected_claims
+        ],
+        "requested_claim_count": 2,
+        "frozen_quotes": list(frozen_quotes),
+        "response": copy.deepcopy(response),
+        "api_meta": copy.deepcopy(api_meta),
+        "latency_ms": int(round((time.monotonic() - started) * 1000)),
+        "validation": validation,
+        "machine_clean": bool(api_meta.get("used"))
+        and validation.get("pass") is True,
+        "local_repair_applied": False,
+        "api_retry_count": 0,
+    }
+
+
+def call_api_truth_first_discourse_generation(
+    current_event_plan: dict[str, Any],
+    pre_claim_ir: dict[str, Any],
+    api_args: argparse.Namespace,
+    *,
+    parent_context: dict[str, Any],
+    parent_dialogue_turns: list[dict[str, Any]],
+    min_added_turns: int,
+    min_added_tokens: int,
+    prior_failure_context: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Generate a complete dialogue in validated contiguous beat segments.
+
+    Truth, support, QA and turn topology remain frozen in one local plan.  The
+    API receives one beat at a time so a 4k-token contract is not compressed
+    into a handful of essay-length rows; only the failed segment is retried
+    with an exact local deficit. Later segments see only the already validated API-neutral tail,
+    never locally inserted support text.
+    """
+
+    materialized = current_event_plan.get("_truth_first_materialized")
+    if not isinstance(materialized, dict) or not isinstance(
+        materialized.get("graph"), dict
+    ):
+        raise NativeGraphDialogueReject(
+            "Truth-first discourse is missing the admitted constructor graph"
+        )
+    frozen_parent_context = _truth_first_discourse_parent_context(
+        current_event_plan,
+        parent_context,
+        parent_dialogue_turns,
+    )
+    discourse_plan = stage3_truth_first_discourse.build_discourse_plan(
+        materialized["graph"],
+        pre_claim_ir,
+        frozen_parent_context,
+        minimum_turns=max(1, int(min_added_turns or 0)),
+        target_dialogue_tokens=max(1, int(min_added_tokens or 0)),
+    )
+    segment_ids = stage3_truth_first_discourse.discourse_segment_ids(
+        discourse_plan
+    )
+    try:
+        max_segment_attempts = max(
+            1, int(getattr(api_args, "max_llm_retries", 1) or 0) + 1
+        )
+    except (TypeError, ValueError):
+        max_segment_attempts = 2
+    accepted_raw_turns: list[dict[str, Any]] = []
+    segment_attempt_reports: list[dict[str, Any]] = []
+    aggregate_usage = {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+    }
+    api_call_count = 0
+    overflow_suffix_normalized_count = 0
+    overflow_suffix_row_count = 0
+    last_api_meta: dict[str, Any] = {}
+    outer_retry_feedback: dict[str, Any] = {}
+    if isinstance(prior_failure_context, dict):
+        prior_meta = (
+            prior_failure_context.get("dialogue_meta")
+            if isinstance(prior_failure_context.get("dialogue_meta"), dict)
+            else {}
+        )
+        prior_validation = (
+            prior_meta.get("discourse_validation")
+            if isinstance(prior_meta.get("discourse_validation"), dict)
+            else {}
+        )
+        outer_retry_feedback = {
+            "previous_full_dialogue_failure": normalize_space(
+                prior_meta.get("reason")
+                or prior_failure_context.get("previous_error")
+            ),
+            "issue_counts_by_code": copy.deepcopy(
+                prior_validation.get("issue_counts_by_code") or {}
+            ),
+            "instruction": (
+                "This is a fresh regeneration after the prior complete dialogue failed. "
+                "Avoid the reported global repetition, topic, or semantic defects."
+            ),
+        }
+
+    for segment_index, segment_id in enumerate(segment_ids):
+        segment_slots = stage3_truth_first_discourse.segment_turn_slots(
+            discourse_plan, segment_id
+        )
+        accepted_segment = False
+        retry_feedback: dict[str, Any] = (
+            copy.deepcopy(outer_retry_feedback) if segment_index == 0 else {}
+        )
+        for segment_attempt in range(1, max_segment_attempts + 1):
+            prefix_tail: list[dict[str, Any]] = []
+            prefix_start = max(
+                0,
+                len(accepted_raw_turns)
+                - stage3_truth_first_discourse.ACCEPTED_PREFIX_TAIL_TURNS,
+            )
+            for prefix_index in range(prefix_start, len(accepted_raw_turns)):
+                row = accepted_raw_turns[prefix_index]
+                slot = discourse_plan["turn_slots"][prefix_index]
+                prefix_tail.append(
+                    {
+                        "speaker": normalize_space(slot.get("speaker")),
+                        "context_sentences": copy.deepcopy(
+                            row.get("context_sentences") or []
+                        ),
+                    }
+                )
+            api_contract = stage3_truth_first_discourse.build_api_contract(
+                discourse_plan,
+                segment_id=segment_id,
+                accepted_prefix_tail=prefix_tail,
+                retry_feedback=retry_feedback,
+            )
+            minimum_segment_words = int(
+                api_contract["read_only_brief"]["generation_scope"].get(
+                    "minimum_segment_context_words"
+                )
+                or 0
+            )
+            prompt_payload = {
+                "mode": "stage3_truth_first_contiguous_segment_v5",
+                "segment_index": segment_index,
+                "segment_count": len(segment_ids),
+                "api_contract": api_contract,
+                # Raw parent turns and locally compiled support remain hidden.
+                # Only a previously admitted API-neutral tail may cross a segment
+                # boundary to make the conversation continuous.
+                "parent_context_exposure": (
+                    "redacted_topic_speaker_roster_and_validated_api_neutral_prefix_only"
+                ),
+                "length_contract": {
+                    "minimum_segment_context_words": minimum_segment_words,
+                    "complete_dialogue_target_tokens": max(
+                        1, int(min_added_tokens or 0)
+                    ),
+                    "instruction": (
+                        "Write this entire contiguous segment at its full budget. "
+                        "Do not compress later turn slots or replace dialogue with isolated facts."
+                    ),
+                },
+            }
+            response, api_meta = call_raw_json_api(
+                api_args,
+                prompt_payload,
+                system_prompt=(
+                    "Write the assigned contiguous segment of one continuous natural conversation. "
+                    "Return exactly one JSON object whose sole top-level key is turns; "
+                    "turns must be the complete ordered array required by response_schema. "
+                    "Never return a single turn row as the top-level object and never nest acts or beats. "
+                    "Do not expose or modify graph, proof, QA, gold, support, or reasoning fields."
+                ),
+                required_keys=("turns",),
+                call_kind="api_truth_discourse_segment_generation",
+                max_tokens_override=max(
+                    2048,
+                    int(
+                        getattr(api_args, "challenger_max_tokens", 8192)
+                        or 8192
+                    ),
+                ),
+                max_retries_override=0,
+                temperature_override=float(
+                    getattr(api_args, "challenger_temperature", 0.25) or 0.25
+                ),
+            )
+            api_call_count += 1
+            last_api_meta = copy.deepcopy(api_meta)
+            usage = api_meta.get("usage") if isinstance(api_meta, dict) else {}
+            if isinstance(usage, dict):
+                for key in aggregate_usage:
+                    aggregate_usage[key] += int(usage.get(key) or 0)
+            raw_response = copy.deepcopy(response)
+            overflow_normalization: dict[str, Any] = {}
+            if isinstance(response, dict):
+                response, overflow_normalization = (
+                    stage3_truth_first_discourse.normalize_api_response_segment_overflow(
+                        discourse_plan,
+                        response,
+                        segment_id=segment_id,
+                    )
+                )
+                if overflow_normalization.get("used") is True:
+                    overflow_suffix_normalized_count += 1
+                    overflow_suffix_row_count += int(
+                        overflow_normalization.get("overflow_suffix_count") or 0
+                    )
+            report: dict[str, Any] = {
+                "act_id": normalize_space(segment_slots[0].get("act_id")),
+                "segment_id": segment_id,
+                "segment_index": segment_index,
+                "attempt": segment_attempt,
+                "api_meta": copy.deepcopy(api_meta),
+                "response_sha256": (
+                    stage3_truth_first_discourse.canonical_sha256(raw_response)
+                    if isinstance(raw_response, dict)
+                    else None
+                ),
+                "normalized_response_sha256": (
+                    stage3_truth_first_discourse.canonical_sha256(response)
+                    if isinstance(response, dict)
+                    else None
+                ),
+                "overflow_normalization": copy.deepcopy(
+                    overflow_normalization
+                ),
+            }
+            if not api_meta.get("used") or not isinstance(response, dict):
+                report["pass"] = False
+                response_contract_failure = (
+                    isinstance(api_meta, dict)
+                    and api_meta.get("error_type")
+                    in {"invalid_json", "missing_required_keys"}
+                )
+                report["failure_stage"] = (
+                    "api_response_contract"
+                    if response_contract_failure
+                    else "api_or_transport"
+                )
+                segment_attempt_reports.append(report)
+                retry_feedback = {
+                    "previous_failure_stage": report["failure_stage"],
+                    "required_top_level_key": "turns",
+                    "expected_turn_count": len(segment_slots),
+                    "required_turn_slot_ids": [
+                        normalize_space(slot.get("turn_slot_id"))
+                        for slot in segment_slots
+                    ],
+                    "instruction": (
+                        "Return one valid JSON object whose only top-level key is turns. "
+                        "The turns array must contain every required row exactly once in "
+                        "the supplied order; never return a single row object."
+                    ),
+                }
+                continue
+            segment_validation = (
+                stage3_truth_first_discourse.validate_api_response_segment(
+                    discourse_plan,
+                    response,
+                    segment_id=segment_id,
+                    accepted_prefix_turns=accepted_raw_turns,
+                )
+            )
+            report["segment_validation"] = copy.deepcopy(segment_validation)
+            report["pass"] = segment_validation.get("pass") is True
+            if segment_validation.get("pass") is not True:
+                report["response_payload"] = copy.deepcopy(raw_response)
+                if overflow_normalization.get("used") is True:
+                    report["normalized_response_payload"] = copy.deepcopy(
+                        response
+                    )
+            segment_attempt_reports.append(report)
+            if segment_validation.get("pass") is not True:
+                retry_feedback = {
+                    "previous_failure_stage": "local_segment_validation",
+                    "issue_counts_by_code": copy.deepcopy(
+                        segment_validation.get("issue_counts_by_code") or {}
+                    ),
+                    "context_word_deficit": int(
+                        segment_validation.get("context_word_deficit") or 0
+                    ),
+                    "minimum_context_words": int(
+                        segment_validation.get("minimum_context_word_count")
+                        or 0
+                    ),
+                    "previous_context_words": int(
+                        segment_validation.get("actual_context_word_count") or 0
+                    ),
+                    "instruction": (
+                        "Regenerate this entire segment from zero. Correct every listed "
+                        "generic issue and meet the full minimum_context_words budget; "
+                        "the deficit is diagnostic only, not the new total target. Keep "
+                        "all required slot IDs and do not copy the accepted neutral prefix."
+                    ),
+                }
+                continue
+            raw_segment_turns = response.get("turns")
+            if not isinstance(raw_segment_turns, list):
+                raise RuntimeError(
+                    "passed Truth-first segment validation without a turns array"
+                )
+            accepted_raw_turns.extend(copy.deepcopy(raw_segment_turns))
+            accepted_segment = True
+            break
+        if not accepted_segment:
+            last_failure_stage = normalize_space(
+                segment_attempt_reports[-1].get("failure_stage")
+                if segment_attempt_reports
+                else ""
+            )
+            failure_reason = (
+                "truth_first_discourse_segment_response_contract_failed"
+                if last_failure_stage == "api_response_contract"
+                else "truth_first_discourse_segment_validation_failed"
+            )
+            return {
+                "failed_segment_id": segment_id,
+                "accepted_prefix_turns": copy.deepcopy(accepted_raw_turns),
+            }, {
+                **last_api_meta,
+                "used": False,
+                "reason": failure_reason,
+                "dialogue_protocol": "truth_first_segmented_discourse_plan_v6",
+                "discourse_plan_sha256": discourse_plan["plan_sha256"],
+                "segment_count": len(segment_ids),
+                "segment_api_call_count": api_call_count,
+                "segment_attempt_reports": segment_attempt_reports,
+                "overflow_suffix_normalized_count": (
+                    overflow_suffix_normalized_count
+                ),
+                "overflow_suffix_row_count": overflow_suffix_row_count,
+                "usage": aggregate_usage,
+            }
+
+    response = {"turns": accepted_raw_turns}
+    api_meta = {
+        **last_api_meta,
+        "used": True,
+        "call_kind": "api_truth_discourse_segment_generation",
+        "attempts": api_call_count,
+        "usage": aggregate_usage,
+        "segment_count": len(segment_ids),
+        "segment_api_call_count": api_call_count,
+        "segment_attempt_reports": segment_attempt_reports,
+        "overflow_suffix_normalized_count": overflow_suffix_normalized_count,
+        "overflow_suffix_row_count": overflow_suffix_row_count,
+    }
+    normalized_response, response_normalization = (
+        stage3_truth_first_discourse.normalize_api_response_envelope(
+            discourse_plan, response
+        )
+    )
+    response_audit = {
+        "api_response_raw_body_sha256": (
+            stage3_truth_first_discourse.canonical_sha256(response)
+        ),
+        "normalized_response_sha256": (
+            stage3_truth_first_discourse.canonical_sha256(normalized_response)
+        ),
+        "response_envelope_normalization": copy.deepcopy(
+            response_normalization
+        ),
+        "response_envelope_correlation_source": (
+            "live_request_scoped_discourse_plan"
+        ),
+    }
+    if response_normalization.get("pass") is not True:
+        return response, {
+            **api_meta,
+            **response_audit,
+            "used": False,
+            "reason": "truth_first_discourse_body_normalization_failed",
+            "dialogue_protocol": "truth_first_segmented_discourse_plan_v6",
+            "discourse_plan_sha256": discourse_plan["plan_sha256"],
+            "segment_count": len(segment_ids),
+            "segment_api_call_count": api_call_count,
+            "segment_attempt_reports": segment_attempt_reports,
+        }
+    validation = stage3_truth_first_discourse.validate_api_response(
+        discourse_plan,
+        normalized_response,
+        frozen_graph=materialized["graph"],
+        frozen_claim_bundle=pre_claim_ir,
+        parent_context=frozen_parent_context,
+    )
+    if validation.get("pass") is not True:
+        return response, {
+            **api_meta,
+            **response_audit,
+            "used": False,
+            "reason": "truth_first_discourse_validation_failed",
+            "dialogue_protocol": "truth_first_segmented_discourse_plan_v6",
+            "discourse_plan_sha256": discourse_plan["plan_sha256"],
+            "discourse_validation": validation,
+            "segment_count": len(segment_ids),
+            "segment_api_call_count": api_call_count,
+            "segment_attempt_reports": segment_attempt_reports,
+        }
+    turns, claim_alignment = _flatten_truth_first_discourse_response(
+        normalized_response,
+        discourse_plan,
+        pre_claim_ir,
+        current_event_plan,
+    )
+    proposal = {
+        "appended_dialogue_turns": turns,
+        "event_alignment_proposal": None,
+        "dialogue_style_rationale": (
+            "locally validated contiguous-segment discourse-plan realization"
+        ),
+        "truth_first_claim_alignment": claim_alignment,
+        "truth_first_discourse_plan": discourse_plan,
+        "truth_first_discourse_validation": validation,
+    }
+    return proposal, {
+        **api_meta,
+        **response_audit,
+        "used": True,
+        "dialogue_protocol": "truth_first_segmented_discourse_plan_v6",
+        "discourse_plan_sha256": discourse_plan["plan_sha256"],
+        "discourse_validation": validation,
+        "api_call_count": api_call_count,
+        "segment_count": len(segment_ids),
+        "segment_api_call_count": api_call_count,
+        "segment_attempt_reports": segment_attempt_reports,
+        "fact_only_chunk_count": 0,
+        "continuation_call_count": 0,
+        "visible_claim_append_repair_count": 0,
+    }
+
+
+def _filter_claim_first_semantic_qas(
+    compiled: dict[str, Any],
+    claim_ir: dict[str, Any],
+    *,
+    dialogue: dict[str, Any] | list[dict[str, Any]] | None,
+    phase: str,
+) -> dict[str, Any]:
+    """Filter siblings independently with the separate lightweight semantic gate."""
+
+    result = copy.deepcopy(compiled)
+    input_qas = [
+        copy.deepcopy(qa)
+        for qa in compiled.get("qas") or []
+        if isinstance(qa, dict)
+    ]
+    reports: dict[str, dict[str, Any]] = {}
+    accepted: list[dict[str, Any]] = []
+    rejects: list[dict[str, Any]] = []
+    for qa in input_qas:
+        qa_id = normalize_space(qa.get("qa_id"))
+        report = stage3_claim_semantic_validator.validate_qa_semantics(
+            claim_ir,
+            qa,
+            dialogue,
+        )
+        reports[qa_id] = copy.deepcopy(report)
+        if report.get("pass") is True:
+            qa["semantic_validation_report"] = copy.deepcopy(report)
+            accepted.append(qa)
+        else:
+            rejects.append(
+                {
+                    "qa_id": qa_id,
+                    "stage": f"{phase}_semantic_validation",
+                    "reason": "independent_semantic_validator_rejected_qa",
+                    "semantic_validator_report": copy.deepcopy(report),
+                    "qa": qa,
+                }
+            )
+    result["compiler_qa_count"] = int(
+        compiled.get("compiler_qa_count") or len(input_qas)
+    )
+    result["qas"] = accepted
+    result["qa_count"] = len(accepted)
+    result["qa_operation_counts"] = dict(
+        sorted(
+            Counter(
+                normalize_space(qa.get("qa_operation")) or "unknown"
+                for qa in accepted
+            ).items()
+        )
+    )
+    result["qa_subtype_counts"] = dict(
+        sorted(
+            Counter(
+                normalize_space(qa.get("qa_subtype")) or "unknown"
+                for qa in accepted
+            ).items()
+        )
+    )
+    result[f"{phase}_semantic_input_qa_count"] = len(input_qas)
+    result[f"{phase}_semantic_pass_qa_count"] = len(accepted)
+    result[f"{phase}_semantic_reject_qa_count"] = len(rejects)
+    result[f"{phase}_semantic_reports"] = reports
+    result[f"{phase}_semantic_rejects"] = rejects
+    result[f"{phase}_semantic_gate_pass"] = not rejects
+    result["semantic_validator_schema_version"] = (
+        stage3_claim_semantic_validator.SCHEMA_VERSION
+    )
+    target_qa_id = normalize_space(result.get("target_fulfillment_qa_id"))
+    if target_qa_id:
+        retained_ids = {
+            normalize_space(qa.get("qa_id")) for qa in accepted
+        }
+        result["target_fulfillment_status"] = (
+            f"semantic_{phase}_pass"
+            if target_qa_id in retained_ids
+            else f"semantic_{phase}_rejected"
+        )
+    return result
+
+
+def _claim_first_frozen_qa_semantics(qa: dict[str, Any]) -> dict[str, Any]:
+    """Exclude natural-language surfaces while hashing truth/gold/path identity."""
+
+    return {
+        "qa_id": qa.get("qa_id"),
+        "qa_operation": qa.get("qa_operation"),
+        "qa_subtype": qa.get("qa_subtype"),
+        "reasoning_subtype": qa.get("reasoning_subtype"),
+        "reasoning_template": qa.get("reasoning_template"),
+        "hop_count": qa.get("hop_count"),
+        "hard_negative_strategy": qa.get("hard_negative_strategy"),
+        "forbid_max_time_shortcut": qa.get("forbid_max_time_shortcut"),
+        "answer_type": qa.get("answer_type"),
+        "gold": copy.deepcopy(qa.get("gold")),
+        "gold_answer_text": qa.get("gold_answer_text"),
+        "option_truth": [
+            {
+                "id": option.get("id"),
+                "truth_value": option.get("truth_value"),
+                "source_claim_id": option.get("source_claim_id"),
+                "source_event_instance_id": option.get(
+                    "source_event_instance_id"
+                ),
+                "anchor_ref": option.get("anchor_ref"),
+                "anchor_kind": option.get("anchor_kind"),
+            }
+            for option in qa.get("options") or []
+            if isinstance(option, dict)
+        ],
+        "proof": copy.deepcopy(qa.get("proof")),
+        "operation_proof_view": copy.deepcopy(qa.get("operation_proof_view")),
+        "operation_specific_target": copy.deepcopy(
+            qa.get("operation_specific_target")
+        ),
+        "query_plan": copy.deepcopy(qa.get("query_plan")),
+        "claim_event_map": copy.deepcopy(qa.get("claim_event_map")),
+        "event_claim_map": copy.deepcopy(qa.get("event_claim_map")),
+        "fulfills_immutable_stage64_target": qa.get(
+            "fulfills_immutable_stage64_target"
+        ),
+        "immutable_stage64_target": copy.deepcopy(
+            qa.get("immutable_stage64_target")
+        ),
+        "target_fulfillment_match": copy.deepcopy(
+            qa.get("target_fulfillment_match")
+        ),
+        "evidence_claim_ids": copy.deepcopy(qa.get("evidence_claim_ids")),
+        "frozen_claim_bundle_hash": qa.get("frozen_claim_bundle_hash"),
+        "frozen_graph_snapshot_hash": qa.get("frozen_graph_snapshot_hash"),
+    }
+
+
+def bind_validate_claim_first_multiqa(
+    *,
+    current_event_plan: dict[str, Any],
+    current_alignment: dict[str, Any],
+    final_dialogue: dict[str, Any],
+    pre_claim_ir: dict[str, Any],
+    precompiled: dict[str, Any],
+    min_qas: int = 3,
+) -> dict[str, Any]:
+    """Bind exact quotes and independently validate each QA, preserving siblings."""
+
+    post_claim_ir = stage3_claim_ir.compile_claim_ir(
+        current_event_plan,
+        current_alignment=current_alignment,
+        dialogue_turns=final_dialogue,
+    )
+    pre_hash = normalize_space(pre_claim_ir.get("claim_bundle_hash"))
+    post_hash = normalize_space(post_claim_ir.get("claim_bundle_hash"))
+    if not pre_hash or pre_hash != post_hash:
+        raise NativeGraphDialogueReject(
+            "claim-first frozen claim_bundle_hash changed after dialogue alignment"
+        )
+    bound = stage3_claim_proof_compiler.bind_compiled_qas_to_support(
+        precompiled, post_claim_ir
+    )
+    pre_qas_by_id = {
+        normalize_space(item.get("qa_id")): item
+        for item in precompiled.get("qas") or []
+        if isinstance(item, dict) and normalize_space(item.get("qa_id"))
+    }
+    pre_semantic_hashes = {
+        qa_id: stage3_claim_ir.canonical_json_sha256(
+            _claim_first_frozen_qa_semantics(item)
+        )
+        for qa_id, item in pre_qas_by_id.items()
+    }
+    qa_rejects: list[dict[str, Any]] = copy.deepcopy(
+        precompiled.get("pre_dialogue_semantic_rejects") or []
+    )
+    for reject in bound.get("qa_support_rejects") or []:
+        qa_id = normalize_space(reject.get("qa_id"))
+        qa_rejects.append(
+            {
+                "qa_id": qa_id,
+                "stage": "support_binding",
+                "reason": normalize_space(reject.get("reason"))
+                or "required_claim_support_missing",
+                "details": copy.deepcopy(reject),
+                "qa": copy.deepcopy(pre_qas_by_id.get(qa_id)),
+            }
+        )
+    accepted_qas: list[dict[str, Any]] = []
+    reports: dict[str, dict[str, Any]] = {}
+    semantic_reports: dict[str, dict[str, Any]] = {}
+    for candidate in bound.get("qas") or []:
+        qa = copy.deepcopy(candidate)
+        qa_id = normalize_space(qa.get("qa_id"))
+        post_semantic_hash = stage3_claim_ir.canonical_json_sha256(
+            _claim_first_frozen_qa_semantics(qa)
+        )
+        if post_semantic_hash != pre_semantic_hashes.get(qa_id):
+            raise NativeGraphDialogueReject(
+                f"claim-first frozen QA semantics changed during support binding: {qa_id}"
+            )
+        report = stage3_claim_validator.validation_report(
+            {
+                "claims": copy.deepcopy(post_claim_ir.get("claims") or []),
+                "proof": copy.deepcopy(qa.get("proof") or {}),
+                "support_ledger": copy.deepcopy(
+                    post_claim_ir.get("support_ledger") or {}
+                ),
+                "dialogue": copy.deepcopy(final_dialogue),
+            }
+        )
+        reports[qa_id] = copy.deepcopy(report)
+        qa["independent_validation_report"] = copy.deepcopy(report)
+        if report.get("pass") is not True:
+            qa_rejects.append(
+                {
+                    "qa_id": qa_id,
+                    "stage": "independent_claim_validation",
+                    "reason": "claim_validator_rejected_qa",
+                    "validator_report": copy.deepcopy(report),
+                    "qa": qa,
+                }
+            )
+            continue
+        semantic_report = stage3_claim_semantic_validator.validate_qa_semantics(
+            post_claim_ir,
+            qa,
+            final_dialogue,
+        )
+        semantic_reports[qa_id] = copy.deepcopy(semantic_report)
+        qa["semantic_validation_report"] = copy.deepcopy(semantic_report)
+        if semantic_report.get("pass") is True:
+            accepted_qas.append(qa)
+        else:
+            qa_rejects.append(
+                {
+                    "qa_id": qa_id,
+                    "stage": "independent_semantic_validation",
+                    "reason": "independent_semantic_validator_rejected_qa",
+                    "semantic_validator_report": copy.deepcopy(
+                        semantic_report
+                    ),
+                    "qa": qa,
+                }
+            )
+    result = copy.deepcopy(bound)
+    accepted_operation_counts = dict(
+        sorted(
+            Counter(
+                normalize_space(qa.get("qa_operation")) or "unknown"
+                for qa in accepted_qas
+            ).items()
+        )
+    )
+    accepted_subtype_counts = dict(
+        sorted(
+            Counter(
+                normalize_space(qa.get("qa_subtype")) or "unknown"
+                for qa in accepted_qas
+            ).items()
+        )
+    )
+    target_qa_id = normalize_space(
+        precompiled.get("target_fulfillment_qa_id")
+    )
+    accepted_qa_ids = {
+        normalize_space(qa.get("qa_id")) for qa in accepted_qas
+    }
+    target_fulfillment_pass = bool(
+        not target_qa_id or target_qa_id in accepted_qa_ids
+    )
+    proof_ready = bool(
+        len(accepted_qas) >= int(min_qas) and target_fulfillment_pass
+    )
+    result.update(
+        {
+            "native_schema_version": CLAIM_FIRST_MULTIQA_SCHEMA_VERSION,
+            "claim_ir": post_claim_ir,
+            "claim_bundle_hash": post_hash,
+            "pre_dialogue_claim_bundle_hash": pre_hash,
+            "post_dialogue_claim_bundle_hash": post_hash,
+            "claim_bundle_hash_stable": pre_hash == post_hash,
+            "compiler_qa_count": int(
+                precompiled.get("compiler_qa_count")
+                or len(precompiled.get("qas") or [])
+            ),
+            "pre_dialogue_qa_count": len(precompiled.get("qas") or []),
+            "pre_dialogue_semantic_pass_qa_count": int(
+                precompiled.get("pre_dialogue_semantic_pass_qa_count")
+                or len(precompiled.get("qas") or [])
+            ),
+            "pre_dialogue_semantic_reject_qa_count": int(
+                precompiled.get("pre_dialogue_semantic_reject_qa_count") or 0
+            ),
+            "support_bound_qa_count": len(bound.get("qas") or []),
+            "validator_pass_qa_count": len(accepted_qas),
+            "validator_reject_qa_count": sum(
+                reject.get("stage") == "independent_claim_validation"
+                for reject in qa_rejects
+            ),
+            "semantic_validator_pass_qa_count": len(accepted_qas),
+            "semantic_validator_reject_qa_count": sum(
+                reject.get("stage")
+                == "independent_semantic_validation"
+                for reject in qa_rejects
+            ),
+            "semantic_validator_schema_version": (
+                stage3_claim_semantic_validator.SCHEMA_VERSION
+            ),
+            "qa_reject_count": len(qa_rejects),
+            "qa_rejects": qa_rejects,
+            "qas": accepted_qas,
+            "qa_count": len(accepted_qas),
+            "qa_operation_counts": accepted_operation_counts,
+            "qa_subtype_counts": accepted_subtype_counts,
+            "independent_validation_reports": reports,
+            "independent_semantic_validation_reports": semantic_reports,
+            "proof_ids": [
+                normalize_space((qa.get("proof") or {}).get("proof_id"))
+                for qa in accepted_qas
+            ],
+            "proof_sha256_by_qa_id": {
+                normalize_space(qa.get("qa_id")): stage3_claim_ir.canonical_json_sha256(
+                    qa.get("proof") or {}
+                )
+                for qa in accepted_qas
+            },
+            "pre_dialogue_qa_semantic_sha256_by_qa_id": pre_semantic_hashes,
+            "post_dialogue_qa_semantic_sha256_by_qa_id": {
+                normalize_space(qa.get("qa_id")): stage3_claim_ir.canonical_json_sha256(
+                    _claim_first_frozen_qa_semantics(qa)
+                )
+                for qa in accepted_qas
+            },
+            "qa_semantics_hash_stable": True,
+            "minimum_required_qa_count": int(min_qas),
+            "proof_ready": proof_ready,
+            "target_fulfillment_qa_id": target_qa_id or None,
+            "target_fulfillment_pass": target_fulfillment_pass,
+            "target_fulfillment_status": (
+                "validated"
+                if target_qa_id and target_fulfillment_pass
+                else "validator_rejected"
+                if target_qa_id
+                else "not_applicable"
+            ),
+            "dialogue_retained_when_sibling_qa_rejected": True,
+            "question_surface_source": "local_frozen_skeleton",
+            "semantic_contract_frozen": True,
+            "api_qa_calls_made": 0,
+        }
+    )
+    return result
+
+
+def bind_validate_truth_first_multiqa(
+    *,
+    current_event_plan: dict[str, Any],
+    claim_alignment: dict[str, Any],
+    final_dialogue: dict[str, Any],
+    pre_claim_ir: dict[str, Any],
+    precompiled: dict[str, Any],
+    discourse_validation: dict[str, Any] | None,
+    min_qas: int,
+) -> dict[str, Any]:
+    """Bind Truth-first claim quotes while rejecting siblings independently."""
+
+    materialized = current_event_plan.get("_truth_first_materialized")
+    if not isinstance(materialized, dict) or not isinstance(
+        materialized.get("graph"), dict
+    ):
+        raise NativeGraphDialogueReject(
+            "Truth-first support binding is missing its constructor materialization"
+        )
+    if not isinstance(claim_alignment, dict):
+        raise NativeGraphDialogueReject(
+            "Truth-first discourse returned no claim_id support alignment"
+        )
+    post_claim_ir = stage3_claim_ir.compile_claim_ir(
+        materialized["graph"],
+        current_alignment=claim_alignment,
+        dialogue_turns=final_dialogue,
+    )
+    pre_hash = normalize_space(pre_claim_ir.get("claim_bundle_hash"))
+    post_hash = normalize_space(post_claim_ir.get("claim_bundle_hash"))
+    if not pre_hash or pre_hash != post_hash:
+        raise NativeGraphDialogueReject(
+            "Truth-first frozen claim bundle changed during dialogue realization"
+        )
+    ledger = (
+        post_claim_ir.get("support_ledger")
+        if isinstance(post_claim_ir.get("support_ledger"), dict)
+        else {}
+    )
+    entry_by_claim = {
+        normalize_space(entry.get("claim_id")): entry
+        for entry in ledger.get("entries") or []
+        if isinstance(entry, dict) and normalize_space(entry.get("claim_id"))
+    }
+    claim_by_id = {
+        normalize_space(claim.get("claim_id")): claim
+        for claim in post_claim_ir.get("claims") or []
+        if isinstance(claim, dict) and normalize_space(claim.get("claim_id"))
+    }
+    accepted: list[dict[str, Any]] = []
+    rejects: list[dict[str, Any]] = []
+    proof_reports: dict[str, Any] = {}
+    semantic_reports: dict[str, Any] = {}
+    for raw_qa in precompiled.get("qas") or []:
+        if not isinstance(raw_qa, dict):
+            continue
+        qa = copy.deepcopy(raw_qa)
+        qa_id = normalize_space(qa.get("qa_id"))
+        proof_report = stage3_truth_qa_compiler.validate_compiled_qa(
+            qa,
+            materialized,
+            pre_claim_ir,
+        )
+        proof_reports[qa_id] = copy.deepcopy(proof_report)
+        required_claim_ids = list(
+            (qa.get("proof") or {}).get("required_claim_ids") or []
+        )
+        evidence: list[dict[str, Any]] = []
+        support_issues: list[dict[str, Any]] = []
+        for claim_id in required_claim_ids:
+            entry = entry_by_claim.get(normalize_space(claim_id))
+            claim = claim_by_id.get(normalize_space(claim_id))
+            if not isinstance(entry, dict) or not normalize_space(
+                entry.get("turn_id")
+            ) or not str(entry.get("exact_support_quote") or ""):
+                support_issues.append(
+                    {
+                        "code": "required_claim_support_missing",
+                        "claim_id": claim_id,
+                    }
+                )
+                continue
+            if not isinstance(claim, dict):
+                support_issues.append(
+                    {"code": "required_claim_missing", "claim_id": claim_id}
+                )
+                continue
+            quote = str(entry["exact_support_quote"])
+            support_path = f"$.qas[{qa_id}].support[{claim_id}]"
+            try:
+                typed_support_record = (
+                    stage3_truth_support.compile_typed_frozen_support(claim)
+                )
+            except stage3_truth_support.TruthSupportError as error:
+                support_issues.append(
+                    {
+                        "code": "typed_support_compile_failed",
+                        "path": support_path,
+                        "message": normalize_space(str(error))
+                        or "Locally frozen typed support compilation failed",
+                    }
+                )
+                continue
+            candidate_support_record = copy.deepcopy(typed_support_record)
+            candidate_support_record["quote"] = quote
+            # Retain the original signature so an altered quote is rejected by
+            # both the record-integrity and independent semantic checks.
+            typed_support_report = (
+                stage3_truth_support.validate_typed_frozen_support(
+                    claim, candidate_support_record
+                )
+            )
+            for issue in typed_support_report.get("issues") or []:
+                if not isinstance(issue, dict):
+                    continue
+                support_issues.append(
+                    {
+                        "code": f"typed_support_{normalize_space(issue.get('code')) or 'invalid'}",
+                        "path": support_path,
+                        "message": normalize_space(issue.get("message"))
+                        or "Independent typed support validation failed",
+                        "typed_semantic_path": issue.get("path"),
+                        "details": copy.deepcopy(issue.get("details")),
+                    }
+                )
+            if (
+                typed_support_report.get("pass") is not True
+                and not typed_support_report.get("issues")
+            ):
+                support_issues.append(
+                    {
+                        "code": "typed_support_invalid",
+                        "path": support_path,
+                        "message": "Independent typed support validation failed",
+                    }
+                )
+            evidence.append(copy.deepcopy(entry))
+        semantic_report = {
+            "schema_version": "stage3_truth_first_text_fidelity_v1",
+            "support_validator": "independent_typed_truth_support",
+            "support_validator_schema_version": (
+                stage3_truth_support.VALIDATION_SCHEMA_VERSION
+            ),
+            "pass": not support_issues
+            and bool(
+                isinstance(discourse_validation, dict)
+                and discourse_validation.get("pass") is True
+            ),
+            "issue_count": len(support_issues),
+            "issues": support_issues,
+            "discourse_validation_pass": bool(
+                isinstance(discourse_validation, dict)
+                and discourse_validation.get("pass") is True
+            ),
+        }
+        semantic_reports[qa_id] = copy.deepcopy(semantic_report)
+        qa["independent_validation_report"] = copy.deepcopy(proof_report)
+        qa["independent_semantic_validation_report"] = copy.deepcopy(
+            semantic_report
+        )
+        qa["semantic_validation_report"] = copy.deepcopy(semantic_report)
+        qa["evidence_ledger"] = evidence
+        qa["evidence_claim_ids"] = required_claim_ids
+        qa["support_binding_status"] = (
+            "bound" if not support_issues else "rejected"
+        )
+        if proof_report.get("pass") is True and semantic_report["pass"] is True:
+            accepted.append(qa)
+        else:
+            rejects.append(
+                {
+                    "qa_id": qa_id,
+                    "stage": "truth_first_independent_validation",
+                    "proof_report": proof_report,
+                    "semantic_report": semantic_report,
+                    "dialogue_retained": True,
+                }
+            )
+    target_qa_id = normalize_space(precompiled.get("target_fulfillment_qa_id"))
+    accepted_ids = {normalize_space(qa.get("qa_id")) for qa in accepted}
+    target_pass = bool(target_qa_id and target_qa_id in accepted_ids)
+    proof_ready = bool(len(accepted) >= int(min_qas) and target_pass)
+    operation_counts = dict(
+        Counter(normalize_space(qa.get("qa_operation")) for qa in accepted)
+    )
+    result = copy.deepcopy(precompiled)
+    result.update(
+        {
+            "native_schema_version": CLAIM_FIRST_MULTIQA_SCHEMA_VERSION,
+            "truth_first_generate_by_construction": True,
+            "claim_ir": post_claim_ir,
+            "claim_bundle_hash": post_hash,
+            "pre_dialogue_claim_bundle_hash": pre_hash,
+            "post_dialogue_claim_bundle_hash": post_hash,
+            "claim_bundle_hash_stable": True,
+            "support_bound_qa_count": len(accepted),
+            "validator_pass_qa_count": len(accepted),
+            "validator_reject_qa_count": len(rejects),
+            "semantic_validator_pass_qa_count": len(accepted),
+            "semantic_validator_reject_qa_count": len(rejects),
+            "semantic_validator_schema_version": (
+                "stage3_truth_first_text_fidelity_v1"
+            ),
+            "qas": accepted,
+            "qa_count": len(accepted),
+            "qa_operation_counts": operation_counts,
+            "qa_subtype_counts": dict(
+                Counter(normalize_space(qa.get("qa_subtype")) for qa in accepted)
+            ),
+            "qa_reject_count": len(rejects),
+            "qa_rejects": rejects,
+            "independent_validation_reports": proof_reports,
+            "independent_semantic_validation_reports": semantic_reports,
+            "minimum_required_qa_count": int(min_qas),
+            "proof_ready": proof_ready,
+            "target_fulfillment_pass": target_pass,
+            "target_fulfillment_status": (
+                "validated" if target_pass else "validator_rejected"
+            ),
+            "qa_semantics_hash_stable": True,
+            "semantic_contract_frozen": True,
+            "question_surface_source": "local_truth_qa_compiler",
+            "dialogue_retained_when_sibling_qa_rejected": True,
+            "api_qa_calls_made": 0,
+            "discourse_validation": copy.deepcopy(discourse_validation),
+        }
+    )
+    return result
+
+
+def _claim_first_target_match_issues(
+    qa: dict[str, Any],
+    stage64_target: dict[str, Any],
+) -> list[str]:
+    """Return generic immutable-target mismatches for one Claim-first QA."""
+
+    try:
+        reasoning_contract = _stage64_reasoning_contract_from_target(
+            stage64_target
+        )
+    except NativeGraphDialogueReject as exc:
+        return [f"invalid_immutable_target:{exc}"]
+    if reasoning_contract is None:
+        return ["immutable_target_missing_reasoning_contract"]
+    query_plan = (
+        qa.get("query_plan")
+        if isinstance(qa.get("query_plan"), dict)
+        else {}
+    )
+    expected: dict[str, Any] = {
+        "qa_operation": normalize_space(stage64_target.get("qa_operation")),
+        "answer_type": normalize_space(
+            stage64_target.get("preferred_answer_type")
+        ),
+        **{
+            field: copy.deepcopy(reasoning_contract.get(field))
+            for field in STAGE64_REASONING_TARGET_FIELDS
+        },
+        "forbid_max_time_shortcut": bool(
+            reasoning_contract.get("forbid_max_time_shortcut", False)
+        ),
+    }
+    issues: list[str] = []
+    for field, expected_value in expected.items():
+        if qa.get(field) != expected_value:
+            issues.append(
+                f"qa.{field}={qa.get(field)!r} expected {expected_value!r}"
+            )
+        query_field = "qa_operation" if field == "qa_operation" else field
+        if field != "answer_type" and query_plan.get(query_field) != expected_value:
+            issues.append(
+                "qa.query_plan."
+                f"{query_field}={query_plan.get(query_field)!r} "
+                f"expected {expected_value!r}"
+            )
+    if qa.get("fulfills_immutable_stage64_target") is not True:
+        issues.append("qa.fulfills_immutable_stage64_target is not true")
+    if qa.get("immutable_stage64_target") != stage64_target:
+        issues.append("qa.immutable_stage64_target differs from allocation target")
+    required_mapping_fields = (
+        "resolved_reasoning_event_instance_ids",
+        "resolved_required_event_instance_ids",
+        "resolved_supporting_event_instance_ids",
+        "resolved_gold_event_instance_ids",
+        "claim_id_to_event_instance_id",
+        "event_instance_id_to_claim_id",
+    )
+    for field in required_mapping_fields:
+        if not query_plan.get(field):
+            issues.append(f"qa.query_plan.{field} is empty")
+    return issues
+
+
+def select_claim_first_primary_qa(
+    bundle: dict[str, Any],
+    stage64_target: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Select the unique immutable-target QA, or a deterministic legacy fallback."""
+
+    qas = [qa for qa in bundle.get("qas") or [] if isinstance(qa, dict)]
+    if not qas:
+        raise NativeGraphDialogueReject("claim-first bundle has no validator-pass QA")
+    target_qa_id = normalize_space(bundle.get("target_fulfillment_qa_id"))
+    bundle_target = bundle.get("immutable_stage64_target")
+    immutable_target = (
+        stage64_target
+        if isinstance(stage64_target, dict)
+        else bundle_target
+        if isinstance(bundle_target, dict)
+        else None
+    )
+    if isinstance(stage64_target, dict) and isinstance(bundle_target, dict):
+        if stage64_target != bundle_target:
+            raise NativeGraphDialogueReject(
+                "claim-first precompiled target differs from allocation target"
+            )
+    if target_qa_id or immutable_target is not None:
+        matches = [
+            qa
+            for qa in qas
+            if normalize_space(qa.get("qa_id")) == target_qa_id
+        ]
+        if len(matches) != 1 or immutable_target is None:
+            raise NativeGraphDialogueReject(
+                "claim-first bundle lacks one surviving immutable-target QA"
+            )
+        issues = _claim_first_target_match_issues(matches[0], immutable_target)
+        if issues:
+            raise NativeGraphDialogueReject(
+                "claim-first primary does not fulfill immutable Stage64 target: "
+                f"{issues[:8]}"
+            )
+        return copy.deepcopy(matches[0])
+    target_operation = normalize_space((stage64_target or {}).get("qa_operation"))
+    return copy.deepcopy(
+        min(
+            qas,
+            key=lambda qa: (
+                0
+                if target_operation
+                and normalize_space(qa.get("qa_operation")) == target_operation
+                else 1,
+                -int(qa.get("hop_count") or 0),
+                normalize_space(qa.get("qa_id")),
+            ),
+        )
+    )
+
+
+def render_claim_first_primary_qa(
+    primary: dict[str, Any],
+    claim_ir: dict[str, Any],
+    hashes: dict[str, str],
+) -> dict[str, Any]:
+    """Render one frozen skeleton into the legacy clean-sample QA envelope."""
+
+    ledger = claim_ir.get("support_ledger") if isinstance(claim_ir.get("support_ledger"), dict) else {}
+    entries = ledger.get("entries") if isinstance(ledger.get("entries"), list) else []
+    turn_ids_by_claim = {
+        normalize_space(entry.get("claim_id")): normalize_turn_ids(
+            entry.get("turn_id")
+        )
+        for entry in entries
+        if isinstance(entry, dict) and normalize_space(entry.get("claim_id"))
+    }
+    evidence_turn_ids = sorted(
+        {
+            normalize_space(row.get("turn_id"))
+            for row in primary.get("evidence_ledger") or []
+            if isinstance(row, dict) and normalize_space(row.get("turn_id"))
+        },
+        key=turn_sort_key,
+    )
+    options: list[dict[str, Any]] = []
+    gold = [normalize_space(value) for value in primary.get("gold") or []]
+    for option in primary.get("options") or []:
+        if not isinstance(option, dict):
+            continue
+        option_id = normalize_space(option.get("id"))
+        claim_id = normalize_space(option.get("source_claim_id"))
+        options.append(
+            {
+                **copy.deepcopy(option),
+                "id": option_id,
+                "option_id": option_id,
+                "text": normalize_space(option.get("text")),
+                "turn_ids": copy.deepcopy(turn_ids_by_claim.get(claim_id) or []),
+                "is_gold": option_id in set(gold),
+                "source_event_instance_id": normalize_space(
+                    option.get("source_event_instance_id")
+                )
+                or None,
+                "anchor_ref": normalize_space(
+                    option.get("anchor_ref")
+                    or option.get("source_event_instance_id")
+                )
+                or None,
+            }
+        )
+    proof = primary.get("proof") if isinstance(primary.get("proof"), dict) else {}
+    return {
+        "question_type": "single_choice",
+        "question": normalize_space(primary.get("question_text_draft")),
+        "question_text": normalize_space(primary.get("question_text_draft")),
+        "question_surface_source": "local_frozen_skeleton",
+        "options": options,
+        "gold": gold,
+        "gold_source": "claim_first_local_truth_compiler",
+        "gold_answer_text": primary.get("gold_answer_text"),
+        "normalized_gold_answer": primary.get("gold_answer_text"),
+        "evidence_turn_ids": evidence_turn_ids,
+        "qa_operation": primary.get("qa_operation"),
+        "qa_subtype": primary.get("qa_subtype"),
+        "reasoning_subtype": primary.get("reasoning_subtype"),
+        "reasoning_template": primary.get("reasoning_template"),
+        "hop_count": primary.get("hop_count"),
+        "hard_negative_strategy": primary.get("hard_negative_strategy"),
+        "forbid_max_time_shortcut": bool(
+            primary.get("forbid_max_time_shortcut")
+        ),
+        "answer_type": primary.get("answer_type"),
+        "answer_format": "option_id",
+        "qa_id": primary.get("qa_id"),
+        "proof": copy.deepcopy(proof),
+        "proof_id": proof.get("proof_id"),
+        "operation_proof_view": copy.deepcopy(primary.get("operation_proof_view")),
+        "operation_specific_target": copy.deepcopy(primary.get("operation_specific_target")),
+        "query_plan": copy.deepcopy(primary.get("query_plan")),
+        "claim_event_map": copy.deepcopy(primary.get("claim_event_map")),
+        "event_claim_map": copy.deepcopy(primary.get("event_claim_map")),
+        "evidence_claim_ids": copy.deepcopy(primary.get("evidence_claim_ids")),
+        "fulfills_immutable_stage64_target": primary.get(
+            "fulfills_immutable_stage64_target"
+        ),
+        "immutable_stage64_target": copy.deepcopy(
+            primary.get("immutable_stage64_target")
+        ),
+        "target_fulfillment_match": copy.deepcopy(
+            primary.get("target_fulfillment_match")
+        ),
+        "claim_bundle_hash": normalize_space(claim_ir.get("claim_bundle_hash")),
+        "frozen_claim_bundle_hash": normalize_space(
+            primary.get("frozen_claim_bundle_hash")
+            or claim_ir.get("claim_bundle_hash")
+        ),
+        "frozen_graph_snapshot_hash": normalize_space(
+            primary.get("frozen_graph_snapshot_hash")
+            or claim_ir.get("graph_snapshot_hash")
+        ),
+        "semantic_contract_frozen": True,
+        "graph_validation_pass": True,
+        "generated_by_api_stage64_schema": False,
+        **_deps(hashes),
+    }
+
+
+def _is_claim_first_sample(sample: dict[str, Any]) -> bool:
+    bundle = sample.get("claim_first_multiqa_bundle")
+    return bool(
+        isinstance(bundle, dict)
+        and bundle.get("native_schema_version") == CLAIM_FIRST_MULTIQA_SCHEMA_VERSION
+        and bundle.get("semantic_contract_frozen") is True
+    )
+
+
 def _validate_stage64_sample_target_provenance(
     sample: dict[str, Any],
     canonical_targets: list[dict[str, Any]],
@@ -18991,6 +26820,74 @@ def _validate_stage64_sample_target_provenance(
             "formal Stage64 resume target payload is missing or stale; start a fresh run: "
             f"sample={sample_id!r}, target_index={target_index}"
         )
+    # Claim-first now compiles one truthful, uniquely identified fulfillment QA
+    # for the immutable Stage64 target. Siblings may fail independently, but the
+    # target QA and its lossless query plan are mandatory for acceptance/resume.
+    if _is_claim_first_sample(sample):
+        bundle = sample["claim_first_multiqa_bundle"]
+        qa = sample.get("qa") if isinstance(sample.get("qa"), dict) else {}
+        target_qa_id = normalize_space(bundle.get("target_fulfillment_qa_id"))
+        primary_qa_id = normalize_space(
+            sample.get("claim_first_primary_qa_id") or qa.get("qa_id")
+        )
+        if (
+            bundle.get("proof_ready") is not True
+            or bundle.get("target_fulfillment_pass") is not True
+            or bundle.get("qa_semantics_hash_stable") is not True
+            or normalize_space(bundle.get("claim_bundle_hash"))
+            != normalize_space(bundle.get("post_dialogue_claim_bundle_hash"))
+            or int(bundle.get("qa_count") or 0)
+            < int(bundle.get("minimum_required_qa_count") or 1)
+            or int(bundle.get("semantic_validator_pass_qa_count") or 0)
+            < int(bundle.get("minimum_required_qa_count") or 1)
+            or not target_qa_id
+            or target_qa_id != primary_qa_id
+            or target_qa_id != normalize_space(qa.get("qa_id"))
+            or bundle.get("immutable_stage64_target")
+            != expected["stage64_target"]
+        ):
+            raise RuntimeError(
+                "formal Stage64 Claim-first sample has an invalid frozen multi-QA bundle: "
+                f"sample={sample_id!r}"
+            )
+        target_reports = bundle.get("independent_semantic_validation_reports")
+        target_report = (
+            target_reports.get(target_qa_id)
+            if isinstance(target_reports, dict)
+            else None
+        )
+        if not isinstance(target_report, dict) or target_report.get("pass") is not True:
+            raise RuntimeError(
+                "formal Stage64 Claim-first target QA lacks a passing independent "
+                f"semantic report: sample={sample_id!r}"
+            )
+        target_issues = _claim_first_target_match_issues(
+            qa, expected["stage64_target"]
+        )
+        if target_issues:
+            raise RuntimeError(
+                "formal Stage64 Claim-first primary does not match its immutable "
+                f"target: sample={sample_id!r}, issues={target_issues[:8]}"
+            )
+        frozen_target_qas = [
+            item
+            for item in bundle.get("qas") or []
+            if isinstance(item, dict)
+            and normalize_space(item.get("qa_id")) == target_qa_id
+        ]
+        if len(frozen_target_qas) != 1 or (
+            stage3_claim_ir.canonical_json_sha256(
+                _claim_first_frozen_qa_semantics(qa)
+            )
+            != stage3_claim_ir.canonical_json_sha256(
+                _claim_first_frozen_qa_semantics(frozen_target_qas[0])
+            )
+        ):
+            raise RuntimeError(
+                "formal Stage64 Claim-first rendered primary drifted from its "
+                f"frozen bundle QA: sample={sample_id!r}"
+            )
+        return generation_slot_id, target_index
     qa = sample.get("qa") if isinstance(sample.get("qa"), dict) else {}
     final_operation = normalize_space(sample.get("qa_operation") or qa.get("qa_operation"))
     expected_operation = normalize_space(expected["stage64_target"].get("qa_operation"))
@@ -19169,29 +27066,70 @@ class _Stage64TargetLedger:
         accepted_hard_negative_strategies: Counter[str] = Counter()
         identity_match_count = 0
         reasoning_target_match_count = 0
+        reasoning_target_applicable_count = 0
         preferred_answer_type_match_count = 0
+        preferred_answer_type_applicable_count = 0
+        claim_first_target_allocation_count = 0
+        claim_first_multiqa_operations: Counter[str] = Counter()
         summarized_target_indices: set[int] = set()
         for sample in rows:
             qa = sample.get("qa") if isinstance(sample.get("qa"), dict) else {}
+            claim_first_sample = _is_claim_first_sample(sample)
+            allocation_target = (
+                sample.get("stage64_target")
+                if claim_first_sample and isinstance(sample.get("stage64_target"), dict)
+                else {}
+            )
             accepted_operations[
-                str(sample.get("qa_operation") or qa.get("qa_operation") or "unknown")
+                str(
+                    allocation_target.get("qa_operation")
+                    or sample.get("qa_operation")
+                    or qa.get("qa_operation")
+                    or "unknown"
+                )
             ] += 1
             accepted_reasoning_subtypes[
-                str(sample.get("reasoning_subtype") or qa.get("reasoning_subtype") or "unknown")
+                str(
+                    allocation_target.get("reasoning_subtype")
+                    or sample.get("reasoning_subtype")
+                    or qa.get("reasoning_subtype")
+                    or "unknown"
+                )
             ] += 1
             accepted_reasoning_templates[
-                str(sample.get("reasoning_template") or qa.get("reasoning_template") or "unknown")
+                str(
+                    allocation_target.get("reasoning_template")
+                    or sample.get("reasoning_template")
+                    or qa.get("reasoning_template")
+                    or "unknown"
+                )
             ] += 1
             accepted_hop_counts[
-                str(sample.get("hop_count") or qa.get("hop_count") or "unknown")
+                str(
+                    allocation_target.get("hop_count")
+                    or sample.get("hop_count")
+                    or qa.get("hop_count")
+                    or "unknown"
+                )
             ] += 1
             accepted_hard_negative_strategies[
                 str(
+                    allocation_target.get("hard_negative_strategy")
+                    or
                     sample.get("hard_negative_strategy")
                     or qa.get("hard_negative_strategy")
                     or "unknown"
                 )
             ] += 1
+            if claim_first_sample:
+                claim_first_target_allocation_count += 1
+                for sibling in (
+                    sample.get("claim_first_multiqa_bundle", {}).get("qas") or []
+                ):
+                    if isinstance(sibling, dict):
+                        claim_first_multiqa_operations[
+                            str(sibling.get("qa_operation") or "unknown")
+                        ] += 1
             try:
                 _slot, target_index = _validate_stage64_sample_target_provenance(
                     sample,
@@ -19216,8 +27154,13 @@ class _Stage64TargetLedger:
                 sample.get("answer_type") or qa.get("answer_type")
             )
             preferred_answer_type_match_count += int(
-                bool(preferred) and final_answer_type == preferred
+                bool(preferred)
+                and final_answer_type == preferred
             )
+        # Every accepted Claim-first row now contains a target-fulfillment
+        # primary; it is therefore fully applicable to the same target metrics.
+        reasoning_target_applicable_count = len(rows)
+        preferred_answer_type_applicable_count = reasoning_target_applicable_count
         operation_keys = sorted(set(target_operations) | set(accepted_operations))
         shortfall = {
             operation: max(0, target_operations[operation] - accepted_operations[operation])
@@ -19271,17 +27214,41 @@ class _Stage64TargetLedger:
             "stage64_target_identity_match_rate": (
                 round(identity_match_count / len(rows), 6) if rows else 0.0
             ),
+            **(
+                {
+                    "stage64_claim_first_target_allocation_count": claim_first_target_allocation_count,
+                    "claim_first_multiqa_operation_counts": dict(
+                        sorted(claim_first_multiqa_operations.items())
+                    ),
+                    "stage64_reasoning_target_applicable_count": reasoning_target_applicable_count,
+                    "stage64_reasoning_target_not_applicable_count": 0,
+                    "stage64_preferred_answer_type_applicable_count": preferred_answer_type_applicable_count,
+                    "stage64_preferred_answer_type_not_applicable_count": 0,
+                }
+                if claim_first_target_allocation_count
+                else {}
+            ),
             "stage64_reasoning_target_match_count": reasoning_target_match_count,
             "stage64_reasoning_target_mismatch_count": (
-                len(rows) - reasoning_target_match_count
+                reasoning_target_applicable_count - reasoning_target_match_count
             ),
             "stage64_reasoning_target_match_rate": (
-                round(reasoning_target_match_count / len(rows), 6) if rows else 0.0
+                round(
+                    reasoning_target_match_count
+                    / reasoning_target_applicable_count,
+                    6,
+                )
+                if reasoning_target_applicable_count
+                else 0.0
             ),
             "stage64_preferred_answer_type_match_count": preferred_answer_type_match_count,
             "stage64_preferred_answer_type_match_rate": (
-                round(preferred_answer_type_match_count / len(rows), 6)
-                if rows
+                round(
+                    preferred_answer_type_match_count
+                    / preferred_answer_type_applicable_count,
+                    6,
+                )
+                if preferred_answer_type_applicable_count
                 else 0.0
             ),
             "stage64_skipped_slot_count": self.skipped_slot_count,
@@ -20873,6 +28840,70 @@ def normalize_stage64_missing_query_plan_from_unique_contract(
     existing_query_plan = (
         qa_proposal["query_plan"] if query_plan_was_present else {}
     )
+    # The operation identity is frozen before the final-QA API call.  When the
+    # API omits the top-level aliases together with the whole query_plan, the
+    # unique-contract compiler below cannot select a contract to verify the
+    # question, options, gold, and anchors.  Complete only those absent aliases
+    # from the immutable target, after checking that the current graph has the
+    # same operation.  Explicit API values are never rewritten.
+    #
+    # This bootstrap intentionally applies only when query_plan is wholly
+    # absent.  With an API-provided query_plan, the later schema normalizer has
+    # that independent evidence and remains the only completion path.
+    top_level_completed_fields: list[str] = []
+    if not query_plan_was_present:
+        target_operation_for_bootstrap = normalize_space(
+            (stage64_target or {}).get("qa_operation")
+            if isinstance(stage64_target, dict)
+            else ""
+        )
+        plan_operation_for_bootstrap = normalize_space(
+            current_event_plan.get("operation")
+        )
+        graph_operation_present_for_bootstrap = "operation" in graph_update
+        graph_operation_for_bootstrap = (
+            normalize_space(graph_update.get("operation"))
+            if graph_operation_present_for_bootstrap
+            else ""
+        )
+        canonical_subtype_for_bootstrap = normalize_space(
+            STAGE64_CANONICAL_QA_SUBTYPES.get(target_operation_for_bootstrap)
+        )
+        immutable_operation_evidence_matches = (
+            target_operation_for_bootstrap in {
+                "comparison",
+                "count",
+                "temporal_state_update",
+            }
+            and bool(canonical_subtype_for_bootstrap)
+            and plan_operation_for_bootstrap == target_operation_for_bootstrap
+            and (
+                not graph_operation_present_for_bootstrap
+                or graph_operation_for_bootstrap
+                == target_operation_for_bootstrap
+            )
+        )
+        proposal_operation_for_bootstrap = normalize_space(
+            qa_proposal.get("qa_operation")
+        )
+        completed_identity: dict[str, str] = {}
+        if (
+            "qa_operation" not in qa_proposal
+            and immutable_operation_evidence_matches
+        ):
+            completed_identity["qa_operation"] = target_operation_for_bootstrap
+            proposal_operation_for_bootstrap = target_operation_for_bootstrap
+        if (
+            "qa_subtype" not in qa_proposal
+            and immutable_operation_evidence_matches
+            and proposal_operation_for_bootstrap == target_operation_for_bootstrap
+        ):
+            completed_identity["qa_subtype"] = canonical_subtype_for_bootstrap
+        if completed_identity:
+            qa_proposal = copy.deepcopy(qa_proposal)
+            qa_proposal.update(completed_identity)
+            top_level_completed_fields.extend(completed_identity)
+            existing_query_plan = {}
     missing_query_plan_fields = sorted(
         required_query_plan_fields - set(existing_query_plan)
     )
@@ -20881,7 +28912,12 @@ def normalize_stage64_missing_query_plan_from_unique_contract(
         for field in existing_query_plan
         if field.startswith("resolved_")
     )
-    if query_plan_was_present and not missing_query_plan_fields and not explicit_resolved_fields:
+    if (
+        query_plan_was_present
+        and not top_level_completed_fields
+        and not missing_query_plan_fields
+        and not explicit_resolved_fields
+    ):
         query_operation = normalize_space(existing_query_plan.get("qa_operation"))
         operation_evidence = [
             normalize_space((stage64_target or {}).get("qa_operation")),
@@ -20958,6 +28994,7 @@ def normalize_stage64_missing_query_plan_from_unique_contract(
         query_plan_was_present
         and query_operation_hint in STAGE64_QA_OPERATIONS
         and query_operation_hint not in unique_contract_operations
+        and not top_level_completed_fields
         and missing_query_plan_fields
         and set(missing_query_plan_fields).issubset(generic_missing_ref_fields)
     ):
@@ -21128,7 +29165,6 @@ def normalize_stage64_missing_query_plan_from_unique_contract(
     # A few API rows omitted schema fields whose values are independently fixed
     # before the unique-contract query plan can be derived.  These completions
     # are fail-closed and never replace an explicit top-level value.
-    top_level_completed_fields: list[str] = []
     prerequisite_options = qa_proposal.get("options")
     four_object_options = (
         isinstance(prerequisite_options, list)
@@ -21700,6 +29736,55 @@ def normalize_stage64_missing_query_plan_from_unique_contract(
         "gold_anchor_refs": gold_ids,
         "distractor_anchor_refs": distractor_ids,
     }
+    # ``reasoning_anchor_path`` is the evidence path used to answer the
+    # question.  ``dependency_closure_refs`` is a separate, stricter contract:
+    # it must name every graph node required by the frozen reasoning template.
+    # For the three unique-contract operations handled here the graph-derived
+    # contract above already gives that closure.  Do not ask the final QA call
+    # to repeat this deterministic bookkeeping; when it omits the whole query
+    # plan, complete it from the same immutable contract as the other fields.
+    #
+    # A comparison target can require time-matched contrast nodes in addition
+    # to its primary pair.  Keep this in lock-step with
+    # ``_validate_stage64_reasoning_target_binding`` so a completed plan is
+    # accepted by the final target validator rather than failing later.
+    dependency_closure_ids = list(reasoning_ids)
+    if (
+        proposal_operation == "comparison"
+        and stage64_reasoning_contract is not None
+        and normalize_space(stage64_reasoning_contract.get("reasoning_template"))
+        == "select_time_matched_pair_then_compare"
+    ):
+        primary_entities = {
+            stage64_quality.normalized_option_text(entity)
+            for entity in contract["entities"]
+        }
+        primary_slot = contract["normalized_slot"]
+        primary_ids = set(reasoning_ids)
+        for event in current_event_plan.get("events") or []:
+            if not isinstance(event, dict):
+                continue
+            event_id = normalize_space(
+                event.get("event_instance_id") or event.get("event_id")
+            )
+            if (
+                event_id
+                and event_id not in primary_ids
+                and stage64_quality.normalized_option_text(event.get("entity"))
+                in primary_entities
+                and stage64_quality.normalized_option_text(event.get("slot"))
+                == primary_slot
+                and event_id not in dependency_closure_ids
+            ):
+                dependency_closure_ids.append(event_id)
+
+    answer_projection = STAGE64_ANSWER_PROJECTION_BY_OPERATION.get(
+        proposal_operation
+    )
+    if not answer_projection:
+        raise NativeGraphDialogueReject(
+            f"{reject_prefix} has no answer projection for {proposal_operation!r}"
+        )
     anchor_expectations = {
         "support": reasoning_ids,
         "gold": gold_ids,
@@ -21739,10 +29824,15 @@ def normalize_stage64_missing_query_plan_from_unique_contract(
         ),
         "answer_type": answer_type,
         **copy.deepcopy(expected_reference_groups),
+        "dependency_closure_refs": dependency_closure_ids,
+        "answer_projection": answer_projection,
         "gold_answer": raw_gold_answer,
         "normalized_gold_answer": normalize_text(raw_gold_answer),
     }
-    reference_fields = set(expected_reference_groups)
+    reference_fields = {
+        *expected_reference_groups,
+        "dependency_closure_refs",
+    }
     resolved_reference_expectations = {
         "resolved_reasoning_event_instance_ids": reasoning_ids,
         "resolved_required_event_instance_ids": reasoning_ids,
@@ -21762,7 +29852,11 @@ def normalize_stage64_missing_query_plan_from_unique_contract(
             )
             matches = _stage64_query_plan_completion_exact_refs(
                 actual_value,
-                expected_reference_groups[field],
+                (
+                    dependency_closure_ids
+                    if field == "dependency_closure_refs"
+                    else expected_reference_groups[field]
+                ),
                 alias_to_event_id,
                 ordered=ordered,
             )
@@ -21815,6 +29909,8 @@ def normalize_stage64_missing_query_plan_from_unique_contract(
             {"gold": raw_gold, "gold_answer_text": raw_gold_answer}
         ),
         "anchor_refs_sha256": _stage64_json_sha256(anchor_refs),
+        "dependency_closure_refs": list(dependency_closure_ids),
+        "answer_projection": answer_projection,
         "contract_schema_version": contract_schema_version,
         "contract_sha256": contract_sha256,
         "question_validated": True,
@@ -22318,6 +30414,7 @@ def _build_stage64_api_qa_from_proposal(
     option_text_to_labels: dict[str, list[str]] = {}
     normalized_options: list[dict[str, Any]] = []
     option_source_event_ids: dict[str, str] = {}
+    synthetic_distractor_labels: set[str] = set()
     for index, option in enumerate(options_raw):
         if not isinstance(option, dict):
             raise NativeGraphDialogueReject("stage64 API QA option must be object")
@@ -22342,11 +30439,26 @@ def _build_stage64_api_qa_from_proposal(
             or option.get("anchor_ref")
         )
         source_event_id = _resolve_stage64_ref(source_ref, alias_to_event_id)
-        if not source_event_id:
-            raise NativeGraphDialogueReject(f"stage64 API QA option {label} has unresolved graph reference: {source_ref!r}")
-        turn_ids = event_id_to_turn_ids.get(source_event_id) or sorted(normalize_turn_ids(option.get("turn_ids")), key=turn_sort_key)
-        if not turn_ids:
-            raise NativeGraphDialogueReject(f"stage64 API QA option {label} has no aligned evidence turns")
+        distractor_origin = normalize_space(option.get("distractor_origin"))
+        synthetic_distractor = (
+            distractor_origin == "synthetic_same_type"
+            and answer_type != "YesNo"
+            and not source_ref
+        )
+        if not source_event_id and not synthetic_distractor:
+            raise NativeGraphDialogueReject(
+                f"stage64 API QA option {label} has unresolved graph reference: {source_ref!r}"
+            )
+        turn_ids = (
+            event_id_to_turn_ids.get(source_event_id)
+            or sorted(normalize_turn_ids(option.get("turn_ids")), key=turn_sort_key)
+            if source_event_id
+            else []
+        )
+        if source_event_id and not turn_ids:
+            raise NativeGraphDialogueReject(
+                f"stage64 API QA option {label} has no aligned evidence turns"
+            )
         normalized_option = copy.deepcopy(option)
         normalized_option["id"] = label
         normalized_option["option_id"] = label
@@ -22354,12 +30466,18 @@ def _build_stage64_api_qa_from_proposal(
         normalized_option["answer_type"] = answer_type
         normalized_option["source_event_instance_id"] = source_event_id
         normalized_option["turn_ids"] = turn_ids
-        if not normalize_space(normalized_option.get("anchor_ref")):
+        if synthetic_distractor:
+            normalized_option["distractor_origin"] = "synthetic_same_type"
+            normalized_option["anchor_ref"] = None
+            normalized_option["anchor_kind"] = "synthetic_distractor"
+            synthetic_distractor_labels.add(label)
+        elif not normalize_space(normalized_option.get("anchor_ref")):
             normalized_option["anchor_ref"] = source_ref or source_event_id
         if not normalize_space(normalized_option.get("anchor_kind")):
             normalized_option["anchor_kind"] = "event"
         normalized_options.append(normalized_option)
-        option_source_event_ids[label] = source_event_id
+        if source_event_id:
+            option_source_event_ids[label] = source_event_id
         option_text_to_labels.setdefault(stage64_quality.normalized_option_text(text), []).append(label)
 
     normalized_option_texts = [_option_text_norm(option.get("text")) for option in normalized_options]
@@ -22367,6 +30485,10 @@ def _build_stage64_api_qa_from_proposal(
         raise NativeGraphDialogueReject("stage64 API QA exact duplicate option text")
 
     gold = _stage64_gold_from_api(qa_proposal, raw_id_to_label, option_text_to_labels, options_raw)
+    if gold[0] in synthetic_distractor_labels:
+        raise NativeGraphDialogueReject(
+            "stage64 API QA gold option must be graph-grounded, not a synthetic distractor"
+        )
     for option in normalized_options:
         is_gold = option["id"] in gold
         option["is_gold"] = is_gold
@@ -23304,6 +31426,134 @@ def apply_top_level_qa_compat_fields(sample: dict[str, Any]) -> dict[str, Any]:
     return sample
 
 
+def enrich_compiled_child_graph_for_inherited_reader(
+    graph_update: dict[str, Any],
+    final_dialogue: dict[str, Any],
+) -> dict[str, Any]:
+    """Attach exact accepted-alignment evidence to the durable child atoms.
+
+    The graph remains child-only.  This additive evidence contract makes its
+    events admissible when the separate combined lineage is promoted as the
+    next round's semantic parent.
+    """
+
+    durable = copy.deepcopy(graph_update)
+    turns = (
+        final_dialogue.get("turns")
+        if isinstance(final_dialogue.get("turns"), list)
+        else []
+    )
+    turn_text_by_id = {
+        normalize_space(turn.get("turn_id") or turn.get("id") or turn.get("dia_id")): normalize_space(
+            turn.get("text") or turn.get("content") or turn.get("utterance")
+        )
+        for turn in turns
+        if isinstance(turn, dict)
+        and normalize_space(turn.get("turn_id") or turn.get("id") or turn.get("dia_id"))
+    }
+    for event in durable.get("events") or []:
+        if not isinstance(event, dict):
+            continue
+        evidence_turn_ids = normalize_turn_ids(event.get("evidence_turn_ids"))
+        exact_evidence = [
+            turn_text_by_id[turn_id]
+            for turn_id in evidence_turn_ids
+            if turn_id in turn_text_by_id and turn_text_by_id[turn_id]
+        ]
+        if not exact_evidence:
+            # Fail closed: the next-round admission gate will exclude this
+            # child instead of fabricating evidence.
+            continue
+        supporting_span = min(exact_evidence, key=lambda value: (len(value), value))
+        event.setdefault("node_type", "canonical_event")
+        event.setdefault("memory_text", None)
+        event.setdefault("supporting_span", supporting_span)
+        event.setdefault("supporting_spans", [supporting_span])
+        provenance = (
+            copy.deepcopy(event.get("provenance"))
+            if isinstance(event.get("provenance"), dict)
+            else {}
+        )
+        provenance.setdefault("source", "stage3_verified_dialogue_alignment")
+        provenance.setdefault("supporting_span", supporting_span)
+        provenance.setdefault("verified_turn_ids_exist", True)
+        provenance.setdefault("qa_used", False)
+        provenance.setdefault(
+            "evidence_contract", "accepted_current_graph_dialogue_alignment_v1"
+        )
+        event["provenance"] = provenance
+    return durable
+
+
+def build_clean_combined_lineage_graph(
+    seed_row: dict[str, Any],
+    current_event_plan: dict[str, Any],
+    graph_update: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist the full inherited parent plus compiled child without schema coercion."""
+
+    parent_graph = copy.deepcopy(_semantic_parent_graph_from_seed(seed_row))
+    parent_events = [
+        copy.deepcopy(event)
+        for event in parent_graph.get("events") or []
+        if isinstance(event, dict)
+    ]
+    child_events = [
+        copy.deepcopy(event)
+        for event in graph_update.get("events") or []
+        if isinstance(event, dict)
+    ]
+    combined_events = copy.deepcopy(parent_events) + copy.deepcopy(child_events)
+    parent_graph_sha256 = canonical_json_sha256(parent_graph)
+    child_graph_update_sha256 = canonical_json_sha256(graph_update)
+    lineage_basis = {
+        "parent_graph_id": normalize_space(parent_graph.get("graph_id")),
+        "child_graph_id": normalize_space(
+            current_event_plan.get("graph_id")
+            or current_event_plan.get("graph_snapshot_id")
+        ),
+        "parent_graph_sha256": parent_graph_sha256,
+        "child_graph_update_sha256": child_graph_update_sha256,
+        "parent_event_count": len(parent_events),
+        "child_event_count": len(child_events),
+    }
+    combined_sha256 = canonical_json_sha256(lineage_basis)
+    return {
+        "schema_version": "stage3_lineage_graph_v2",
+        "graph_id": f"stage3_lineage:{combined_sha256[:24]}",
+        "parent_graph_id": normalize_space(parent_graph.get("graph_id")),
+        "child_graph_id": normalize_space(
+            current_event_plan.get("graph_id")
+            or current_event_plan.get("graph_snapshot_id")
+        ),
+        "parent_graph_schema_version": normalize_space(
+            parent_graph.get("schema_version")
+        ),
+        "parent_event_count": len(parent_events),
+        "child_event_count": len(child_events),
+        "event_count": len(combined_events),
+        "parent_graph_sha256": parent_graph_sha256,
+        "child_graph_update_sha256": child_graph_update_sha256,
+        "combined_lineage_sha256": combined_sha256,
+        "parent_max_global_time_index": (
+            stage3_parent_continuity.parent_max_global_time_index(parent_events)
+        ),
+        "parent_events": parent_events,
+        "child_events": child_events,
+        # This canonical field is what the explicit inherited-graph reader
+        # promotes in the next round.  The child-only graph_update is retained
+        # separately for Stage64 validators.
+        "events": combined_events,
+        "edges": copy.deepcopy(parent_graph.get("edges") or []),
+        "parent_continuity": copy.deepcopy(
+            graph_update.get("parent_continuity") or {}
+        ),
+        "parent_event_retrieval": copy.deepcopy(
+            graph_update.get("parent_event_retrieval") or {}
+        ),
+    }
+
+
 def build_clean_sample(
     *,
     sample_index: int,
@@ -23334,6 +31584,15 @@ def build_clean_sample(
         or (seed_source or {}).get("source_lineage_key")
         or (seed_source or {}).get("parent_sample_id")
         or seed_row.get("sample_id")
+    )
+    durable_graph_update = enrich_compiled_child_graph_for_inherited_reader(
+        graph_update,
+        final_dialogue,
+    )
+    combined_lineage_graph = build_clean_combined_lineage_graph(
+        seed_row,
+        current_event_plan,
+        durable_graph_update,
     )
     sample = {
         "sample_id": sample_id,
@@ -23370,7 +31629,27 @@ def build_clean_sample(
         },
         "dialogue": {"turns": final_dialogue.get("turns") or [], "dialogue_hash": final_dialogue.get("dialogue_hash")},
         "expanded_dialogue_text": expanded_dialogue_text,
-        "graph_update": graph_update,
+        "graph_update": durable_graph_update,
+        "combined_lineage_graph": combined_lineage_graph,
+        "semantic_inherited_graph": copy.deepcopy(combined_lineage_graph),
+        "parent_graph_lineage": {
+            "schema_version": "stage3_parent_graph_lineage_v1",
+            "parent_graph_id": combined_lineage_graph["parent_graph_id"],
+            "parent_graph_schema_version": combined_lineage_graph[
+                "parent_graph_schema_version"
+            ],
+            "parent_event_count": combined_lineage_graph["parent_event_count"],
+            "parent_graph_sha256": combined_lineage_graph[
+                "parent_graph_sha256"
+            ],
+            "combined_lineage_graph_id": combined_lineage_graph["graph_id"],
+            "semantic_inherited_graph_schema_version": combined_lineage_graph[
+                "schema_version"
+            ],
+            "combined_lineage_sha256": combined_lineage_graph[
+                "combined_lineage_sha256"
+            ],
+        },
         "qa": qa,
         "metadata": {
             "method": "current_method_graph_conditioned_api_dialogue",
@@ -23388,6 +31667,19 @@ def build_clean_sample(
             "graph_validation_pass": bool(qa.get("graph_validation_pass")) if qa.get("question_type") == "single_choice" else True,
             "qa_generated_after_alignment": True,
             "old_qa_reused": False,
+            "parent_continuity": copy.deepcopy(
+                durable_graph_update.get("parent_continuity") or {}
+            ),
+            "parent_event_retrieval": copy.deepcopy(
+                durable_graph_update.get("parent_event_retrieval") or {}
+            ),
+            "combined_lineage_graph_id": combined_lineage_graph["graph_id"],
+            "combined_lineage_sha256": combined_lineage_graph[
+                "combined_lineage_sha256"
+            ],
+            "inherited_parent_event_count": combined_lineage_graph[
+                "parent_event_count"
+            ],
             "chained_qa_diagnostics": copy.deepcopy(qa.get("chained_qa_diagnostics"))
             if isinstance(qa.get("chained_qa_diagnostics"), dict)
             else None,
@@ -23528,6 +31820,11 @@ def _empty_summary() -> dict[str, Any]:
         "length_retry_count": 0,
         "length_reject_count": 0,
         "too_short_count": 0,
+        "length_continuation_attempt_count": 0,
+        "length_continuation_success_count": 0,
+        "length_continuation_failed_count": 0,
+        "length_continuation_added_turn_count": 0,
+        "length_continuation_cap_shortfall_accept_count": 0,
         "length_guard_enabled": False,
         "min_length_delta_tokens": 0,
         "length_guard_parent_baseline_tokens": 0,
@@ -23561,6 +31858,7 @@ def _empty_summary() -> dict[str, Any]:
         "graph_cache_reuse_for_dialogue_retry_count": 0,
         "graph_cache_invalidated_count": 0,
         "graph_calls_saved_estimate": 0,
+        "fixed_stage3_graph_artifact_hit_count": 0,
         "query_conditioned_graph_expansion": False,
         "query_conditioned_graph_objective_created_count": 0,
         "query_conditioned_graph_plan_pass_count": 0,
@@ -23637,6 +31935,8 @@ def _empty_summary() -> dict[str, Any]:
         "dialogue_alignment_reject_count": 0,
         "unsupported_alignment_count": 0,
         "parse_failure_count": 0,
+        "dialogue_truncated_json_recovery_count": 0,
+        "dialogue_truncated_json_recovered_turn_count": 0,
         "timeout_count": 0,
         "anchor_leak_reject_count": 0,
         "dialogue_api_prompt_tokens_estimate_mean": None,
@@ -23650,6 +31950,8 @@ def _empty_summary() -> dict[str, Any]:
         "formal_mining_scaffold_reject_count": 0,
         "formal_mining_api_native_dialogue_accept_count": 0,
         "formal_mining_local_padding_accept_count": 0,
+        "formal_mining_local_evidence_compiler_accept_count": 0,
+        "formal_mining_local_evidence_compiler_turn_count": 0,
         "formal_mining_segmented_dialogue_accept_count": 0,
         "formal_mining_prefix_hash_chain_verified_count": 0,
         "formal_mining_parent_context_schema_version": (
@@ -23808,6 +32110,12 @@ def _update_summary_for_accept(summary: dict[str, Any], sample: dict[str, Any], 
     )
     summary["formal_mining_local_padding_accept_count"] += int(
         metadata.get("dialogue_local_padding_used") is True
+    )
+    summary["formal_mining_local_evidence_compiler_accept_count"] += int(
+        metadata.get("formal_mining_local_evidence_compiler") is True
+    )
+    summary["formal_mining_local_evidence_compiler_turn_count"] += int(
+        metadata.get("formal_mining_local_evidence_compiler_turn_count") or 0
     )
     native_contract = sample.get("native_contract") if isinstance(sample.get("native_contract"), dict) else {}
     summary["formal_mining_segmented_dialogue_accept_count"] += int(
@@ -24443,6 +32751,241 @@ def _compat_summary_from_samples(samples: list[dict[str, Any]]) -> dict[str, Any
     }
 
 
+def expand_truth_first_multiqa_dataset(
+    dialogue_samples: list[dict[str, Any]],
+    dialogue_marked_samples: list[dict[str, Any]],
+    *,
+    min_qas: int = 3,
+    max_qas: int = 6,
+    eval_per_mille: int = 100,
+) -> dict[str, Any]:
+    """Expand accepted dialogue envelopes without changing resume semantics."""
+
+    marked_by_sample_id: dict[str, dict[str, Any]] = {}
+    for envelope in dialogue_marked_samples:
+        clean = (
+            envelope.get("clean_sample")
+            if isinstance(envelope, dict)
+            and isinstance(envelope.get("clean_sample"), dict)
+            else {}
+        )
+        sample_id = normalize_space(clean.get("sample_id"))
+        if not sample_id:
+            raise RuntimeError(
+                "Truth-first marked dialogue envelope lacks clean_sample.sample_id"
+            )
+        if sample_id in marked_by_sample_id:
+            raise RuntimeError(
+                f"Duplicate Truth-first marked dialogue sample_id: {sample_id}"
+            )
+        marked_by_sample_id[sample_id] = envelope
+
+    qa_rows: list[dict[str, Any]] = []
+    marked_qa_rows: list[dict[str, Any]] = []
+    qa_rejects: list[dict[str, Any]] = []
+    family_summaries: list[dict[str, Any]] = []
+    lineage_splits: dict[str, str] = {}
+    seen_dialogue_ids: set[str] = set()
+    for sample in dialogue_samples:
+        sample_id = normalize_space(sample.get("sample_id"))
+        if not sample_id or sample_id in seen_dialogue_ids:
+            raise RuntimeError(
+                "Truth-first dialogue sample ids must be non-empty and unique"
+            )
+        seen_dialogue_ids.add(sample_id)
+        source_envelope = marked_by_sample_id.get(sample_id)
+        if source_envelope is None:
+            raise RuntimeError(
+                f"Truth-first dialogue lacks matching marked envelope: {sample_id}"
+            )
+        envelope = copy.deepcopy(source_envelope)
+        envelope["clean_sample"] = copy.deepcopy(sample)
+        result = stage3_multiqa_rows.expand_accepted_dialogue(
+            envelope,
+            min_qas=min_qas,
+            max_qas=max_qas,
+            eval_per_mille=eval_per_mille,
+        )
+        if result.get("family_ready") is not True:
+            raise RuntimeError(
+                "Truth-first accepted dialogue did not retain the required sibling "
+                f"QA count: sample_id={sample_id} summary={result.get('summary')}"
+            )
+        lineage_id = normalize_space(result.get("canonical_parent_lineage_id"))
+        split = normalize_space(result.get("split"))
+        prior_split = lineage_splits.setdefault(lineage_id, split)
+        if prior_split != split:
+            raise RuntimeError(
+                f"Truth-first parent lineage crossed dataset splits: {lineage_id}"
+            )
+        family_rows = copy.deepcopy(result.get("qa_rows") or [])
+        family_marked_rows = copy.deepcopy(result.get("marked_qa_rows") or [])
+        if len(family_rows) != len(family_marked_rows):
+            raise RuntimeError(
+                f"Truth-first clean/marked QA row count mismatch: {sample_id}"
+            )
+        for local_index, (row, marked_row) in enumerate(
+            zip(family_rows, family_marked_rows)
+        ):
+            expanded_index = len(qa_rows)
+            source_target_index = sample.get("target_index")
+            row["source_dialogue_target_index"] = source_target_index
+            row["expanded_dataset_row_index"] = expanded_index
+            row["qa_row_index"] = local_index
+            marked_row["source_dialogue_target_index"] = source_target_index
+            marked_row["expanded_dataset_row_index"] = expanded_index
+            if isinstance(marked_row.get("clean_sample"), dict):
+                marked_row["clean_sample"] = copy.deepcopy(row)
+            qa_rows.append(row)
+            marked_qa_rows.append(marked_row)
+        for reject in result.get("qa_rejects") or []:
+            if isinstance(reject, dict):
+                qa_rejects.append(
+                    {
+                        "source_dialogue_sample_id": sample_id,
+                        "dialogue_family_id": result.get("dialogue_family_id"),
+                        **copy.deepcopy(reject),
+                    }
+                )
+        family_summaries.append(copy.deepcopy(result["summary"]))
+
+    unexpected_marked = sorted(set(marked_by_sample_id) - seen_dialogue_ids)
+    if unexpected_marked:
+        raise RuntimeError(
+            "Truth-first marked dialogue artifacts have no clean dialogue: "
+            f"{unexpected_marked[:5]}"
+        )
+    derived_target_rows = [
+        row
+        for row in qa_rows
+        if row.get("source_dialogue_target_preserved") is not True
+    ]
+    derived_target_plan = {
+        "schema_version": "stage3_truth_first_expanded_target_plan_v1",
+        "target_count": len(derived_target_rows),
+        "targets": [
+            {
+                "expanded_dataset_row_index": row.get(
+                    "expanded_dataset_row_index"
+                ),
+                "source_dialogue_sample_id": row.get(
+                    "source_dialogue_sample_id"
+                ),
+                "qa_id": row.get("qa_id"),
+                "stage64_target": copy.deepcopy(row.get("stage64_target")),
+            }
+            for row in derived_target_rows
+        ],
+    }
+    derived_target_plan_sha256 = canonical_json_sha256(derived_target_plan)
+    marked_by_row_id = {
+        normalize_space(row.get("qa_row_id")): row
+        for row in marked_qa_rows
+        if isinstance(row, dict) and normalize_space(row.get("qa_row_id"))
+    }
+    derived_index = 0
+    for row in qa_rows:
+        if row.get("source_dialogue_target_preserved") is True:
+            target_index = row.get("target_index")
+            target_plan_sha256 = normalize_space(
+                row.get("stage64_target_plan_sha256")
+            )
+            target_identity = normalize_space(
+                row.get("stage64_target_identity")
+            )
+        else:
+            target_index = derived_index
+            derived_index += 1
+            target_plan_sha256 = derived_target_plan_sha256
+            target_identity = _stage64_target_identity(
+                target_index,
+                row["stage64_target"],
+                target_plan_sha256,
+            )
+            row.update(
+                {
+                    "target_index": target_index,
+                    "stage64_target_plan_sha256": target_plan_sha256,
+                    "stage64_target_identity": target_identity,
+                    "stage64_target_id": target_identity,
+                }
+            )
+        if (
+            not isinstance(target_index, int)
+            or isinstance(target_index, bool)
+            or target_index < 0
+            or target_identity
+            != _stage64_target_identity(
+                target_index,
+                row["stage64_target"],
+                target_plan_sha256,
+            )
+        ):
+            raise RuntimeError(
+                f"Truth-first QA row has invalid target provenance: {row.get('sample_id')}"
+            )
+        metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        metadata.update(
+            {
+                "stage64_target_index": target_index,
+                "stage64_target_identity": target_identity,
+                "stage64_target_id": target_identity,
+                "stage64_target_plan_sha256": target_plan_sha256,
+                "qa_operation": row.get("qa_operation"),
+                "attack_skill": row.get("qa_operation"),
+            }
+        )
+        row["metadata"] = metadata
+        row["attack_skill"] = row.get("qa_operation")
+        attack_plan = (
+            row.get("attack_plan")
+            if isinstance(row.get("attack_plan"), dict)
+            else {}
+        )
+        attack_plan.update(
+            {
+                "attack_skill": row.get("qa_operation"),
+                "qa_operation": row.get("qa_operation"),
+            }
+        )
+        row["attack_plan"] = attack_plan
+        marked = marked_by_row_id.get(normalize_space(row.get("sample_id")))
+        if marked is None:
+            raise RuntimeError(
+                f"Truth-first QA row lacks marked audit row: {row.get('sample_id')}"
+            )
+        marked.update(
+            {
+                "target_index": target_index,
+                "stage64_target": copy.deepcopy(row["stage64_target"]),
+                "stage64_target_plan_sha256": target_plan_sha256,
+                "stage64_target_identity": target_identity,
+                "stage64_target_id": target_identity,
+                "clean_sample": copy.deepcopy(row),
+            }
+        )
+    row_ids = [normalize_space(row.get("sample_id")) for row in qa_rows]
+    if any(not row_id for row_id in row_ids) or len(row_ids) != len(set(row_ids)):
+        raise RuntimeError("Truth-first QA row ids must be non-empty and unique")
+    return {
+        "schema_version": "stage3_truth_first_multiqa_dataset_v1",
+        "dialogue_count": len(dialogue_samples),
+        "qa_row_count": len(qa_rows),
+        "marked_qa_row_count": len(marked_qa_rows),
+        "rejected_sibling_qa_count": len(qa_rejects),
+        "minimum_qas_per_dialogue": min_qas,
+        "maximum_qas_per_dialogue": max_qas,
+        "lineage_split_group_count": len(lineage_splits),
+        "derived_target_count": len(derived_target_rows),
+        "derived_target_plan_sha256": derived_target_plan_sha256,
+        "all_families_ready": len(family_summaries) == len(dialogue_samples),
+        "qa_rows": qa_rows,
+        "marked_qa_rows": marked_qa_rows,
+        "qa_rejects": qa_rejects,
+        "family_summaries": family_summaries,
+    }
+
+
 def _write_generation_files(
     output: Path,
     clean_samples: list[dict[str, Any]],
@@ -24450,6 +32993,11 @@ def _write_generation_files(
     raw_records: list[dict[str, Any]],
     rejects: list[dict[str, Any]],
     summary: dict[str, Any],
+    *,
+    truth_first_mode: bool = False,
+    claim_first_min_qas: int = 3,
+    claim_first_max_qas: int = 6,
+    claim_first_eval_per_mille: int = 100,
 ) -> None:
     summary["audit_marked_sample_count"] = len(marked_samples)
     summary["audit_raw_record_count"] = len(raw_records)
@@ -24470,6 +33018,50 @@ def _write_generation_files(
     summary.update(_length_summary_from_samples(clean_samples))
     summary.update(_prompt_context_summary_from_records(raw_records))
     summary.update(_compat_summary_from_samples(clean_samples))
+    if truth_first_mode:
+        expansion = expand_truth_first_multiqa_dataset(
+            clean_samples,
+            marked_samples,
+            min_qas=claim_first_min_qas,
+            max_qas=claim_first_max_qas,
+            eval_per_mille=claim_first_eval_per_mille,
+        )
+        summary.update(
+            {
+                "generated_dialogue_count": expansion["dialogue_count"],
+                "expanded_qa_row_count": expansion["qa_row_count"],
+                "marked_qa_row_count": expansion["marked_qa_row_count"],
+                "rejected_sibling_qa_count": expansion[
+                    "rejected_sibling_qa_count"
+                ],
+                "multiqa_lineage_split_group_count": expansion[
+                    "lineage_split_group_count"
+                ],
+                "multiqa_all_families_ready": expansion[
+                    "all_families_ready"
+                ],
+            }
+        )
+        write_jsonl(output / "dialogue_samples.jsonl", clean_samples)
+        write_jsonl(output / "dialogue_marked_samples.jsonl", marked_samples)
+        write_jsonl(
+            output / "claim_first_qa_rows.jsonl", expansion["qa_rows"]
+        )
+        write_jsonl(
+            output / "claim_first_marked_qa_rows.jsonl",
+            expansion["marked_qa_rows"],
+        )
+        write_jsonl(
+            output / "claim_first_qa_rejects.jsonl", expansion["qa_rejects"]
+        )
+        write_json(
+            output / "claim_first_multiqa_expansion_summary.json",
+            {
+                key: value
+                for key, value in expansion.items()
+                if key not in {"qa_rows", "marked_qa_rows", "qa_rejects"}
+            },
+        )
     write_jsonl(output / "samples.jsonl", clean_samples)
     write_jsonl(output / "valid_samples.jsonl", valid_samples)
     write_jsonl(output / "clean_samples.jsonl", solver_clean_samples)
@@ -24500,13 +33092,54 @@ def generate_graph_conditioned_api_dialogue_samples(
     if not seed_rows:
         raise ValueError("No seed rows supplied for graph_conditioned_api_dialogue generation.")
 
+    truth_first_mode_requested = truth_first_generate_by_construction_enabled(
+        api_args
+    )
+    partial_path = (
+        Path(partial_samples)
+        if partial_samples
+        else output / "samples.partial.jsonl"
+    )
+    if truth_first_mode_requested:
+        if not no_resume:
+            raise ValueError(
+                "Truth-first generation requires no_resume=True before any state is read"
+            )
+        if normalize_space(
+            getattr(api_args, "fixed_stage3_graph_artifact", None)
+        ):
+            raise ValueError(
+                "Truth-first generation forbids fixed_stage3_graph_artifact"
+            )
+        if bool(getattr(api_args, "graph_proposal_cache", False)):
+            raise ValueError(
+                "Truth-first generation forbids graph_proposal_cache; immutable "
+                "run-local constructor artifacts provide retry reuse"
+            )
+        prior_state_paths = [
+            partial_path,
+            output / "samples.jsonl",
+            output / "dialogue_samples.jsonl",
+            output / "marked_samples.jsonl",
+            output / "graph_conditioned_api_dialogue_raw.jsonl",
+            output / "generation_summary.json",
+        ]
+        graph_artifact_dir = output / "graph_artifacts"
+        if graph_artifact_dir.exists() and any(graph_artifact_dir.iterdir()):
+            prior_state_paths.append(graph_artifact_dir)
+        existing_state = [str(path) for path in prior_state_paths if path.exists()]
+        if existing_state:
+            raise ValueError(
+                "Truth-first generation requires an empty fresh output and refuses "
+                f"old partial/artifact state: {existing_state}"
+            )
+
     # ---- resume: recover already-accepted clean samples so a re-run continues instead of
     # regenerating from scratch. The partial file is the crash-safe append log; if it is
     # missing/empty we fall back to a completed samples.jsonl from a prior finished run.
     # Accepted rows come from the crash-safe partial log. Existing audit artifacts are loaded
     # separately below and preserved as historical records; missing accepted audits stay missing
     # and are diagnosed rather than reconstructed.
-    partial_path = Path(partial_samples) if partial_samples else output / "samples.partial.jsonl"
     resumed_clean_samples: list[dict[str, Any]] = []
     if not no_resume:
         resumed_clean_samples = read_jsonl_if_exists(partial_path)
@@ -24563,7 +33196,31 @@ def generate_graph_conditioned_api_dialogue_samples(
         )
     except (TypeError, ValueError):
         stage64_qa_repair_max_attempts = 3
+    claim_first_settings = claim_first_multiqa_settings(api_args)
+    claim_first_multiqa = bool(claim_first_settings["enabled"])
+    truth_first_mode = truth_first_mode_requested
+    if truth_first_mode and not claim_first_multiqa:
+        raise ValueError(
+            "truth_first_generate_by_construction requires claim_first_multiqa"
+        )
     summary = _empty_summary()
+    if claim_first_multiqa:
+        summary.update(
+            {
+                "claim_first_multiqa": True,
+                "claim_first_min_qas": claim_first_settings["min_qas"],
+                "claim_first_max_qas": claim_first_settings["max_qas"],
+                "claim_first_precompile_pass_count": 0,
+                "claim_first_precompile_reject_count": 0,
+                "claim_first_post_bind_pass_count": 0,
+                "claim_first_post_bind_reject_count": 0,
+                "claim_first_validator_pass_qa_count": 0,
+                "claim_first_validator_reject_qa_count": 0,
+                "claim_first_primary_operation_counts": {},
+                "claim_first_multiqa_operation_counts": {},
+            }
+        )
+    summary["truth_first_generate_by_construction"] = truth_first_mode
     summary["native_curriculum_mode"] = curriculum_mode or "default"
     summary["chained_qa_dependency_targeting"] = bool(base_policy.get("chained_qa_dependency_targeting"))
     summary["boundary_aware_qa_diagnostics"] = bool(base_policy.get("boundary_aware_qa_diagnostics"))
@@ -24638,6 +33295,40 @@ def generate_graph_conditioned_api_dialogue_samples(
     )
     summary["api_yield_normalizers"] = bool(getattr(api_args, "api_yield_normalizers", False))
     summary["graph_cache_enabled"] = bool(getattr(api_args, "graph_proposal_cache", False))
+    fixed_stage3_graph_artifact = load_fixed_stage3_graph_artifact(api_args)
+    summary["fixed_stage3_graph_artifact_enabled"] = bool(
+        fixed_stage3_graph_artifact
+    )
+    summary["fixed_stage3_graph_artifact_id"] = (
+        normalize_space(fixed_stage3_graph_artifact.get("artifact_id"))
+        if fixed_stage3_graph_artifact
+        else None
+    )
+    summary["fixed_stage3_graph_artifact_hit_count"] = 0
+    # A production batch has one inherited child graph per immutable target.
+    # Keep those graph artifacts in a first-class directory so a later dialogue
+    # retry never regenerates (or changes) its G3.  The explicit CLI artifact
+    # above remains a single-item smoke/replay override.
+    materialized_graph_artifact_dir = output / "graph_artifacts"
+    summary["stage3_graph_artifact_dir"] = str(materialized_graph_artifact_dir)
+    summary["stage3_graph_artifact_materialized_count"] = 0
+    summary["stage3_graph_artifact_reused_count"] = 0
+    stage3_dialogue_protocol = normalize_space(
+        getattr(api_args, "stage3_dialogue_protocol", "segmented")
+    ) or "segmented"
+    if stage3_dialogue_protocol not in {
+        "long_form",
+        "segmented",
+        "discourse_plan",
+    }:
+        raise ValueError(
+            "stage3_dialogue_protocol must be 'long_form', 'segmented', or 'discourse_plan'"
+        )
+    if truth_first_mode and stage3_dialogue_protocol != "discourse_plan":
+        raise ValueError(
+            "Truth-first generation requires stage3_dialogue_protocol='discourse_plan'"
+        )
+    summary["stage3_dialogue_protocol"] = stage3_dialogue_protocol
     summary["query_conditioned_graph_expansion"] = bool(base_policy.get("query_conditioned_graph_expansion"))
     graph_cache_dir = graph_cache_dir_from_args(api_args, output)
     length_tokenizer_path = normalize_space(
@@ -24835,7 +33526,9 @@ def generate_graph_conditioned_api_dialogue_samples(
     )
 
     max_api_failures = int(getattr(api_args, "max_api_failures", 50))
-    max_attempts = max(n_samples + max_api_failures, n_samples * 3)
+    # This is the historical global safety ceiling.  A caller may further tighten it
+    # with --max-attempts-per-sample below (notably for one-item smoke tests).
+    unbounded_max_attempts = max(n_samples + max_api_failures, n_samples * 3)
     min_length_added_turns, min_length_added_tokens = length_guard_thresholds(api_args)
     summary["length_min_added_turns"] = min_length_added_turns
     summary["length_min_added_tokens"] = min_length_added_tokens
@@ -24881,6 +33574,17 @@ def generate_graph_conditioned_api_dialogue_samples(
     except (TypeError, ValueError):
         max_attempts_per_sample = 0
     per_sample_attempt_cap_enabled = max_attempts_per_sample > 0
+    # The per-slot cap used to prevent a *single slot* from retrying indefinitely,
+    # but it still allowed the scheduler to move on to fresh physical slots after a
+    # reject.  That is sensible for a large production run, but surprising and
+    # wasteful for an explicitly capped smoke run (n=1, cap=1).  Bound the total
+    # physical submissions as well: with n samples and cap C, at most n*C API
+    # attempts can be launched.  The default (cap disabled) remains unchanged.
+    max_attempts = (
+        min(unbounded_max_attempts, n_samples * max_attempts_per_sample)
+        if per_sample_attempt_cap_enabled
+        else unbounded_max_attempts
+    )
     slot_attempt_counts: dict[int, int] = {}
     slot_accepted: set[int] = set()
     skipped_slots: set[int] = set()
@@ -24889,6 +33593,7 @@ def generate_graph_conditioned_api_dialogue_samples(
     attempts_for_accepted: list[int] = []
     summary["max_attempts_per_sample"] = max_attempts_per_sample
     summary["per_sample_attempt_cap_enabled"] = per_sample_attempt_cap_enabled
+    summary["maximum_physical_attempt_count"] = max_attempts
     attempts = 0
 
     # Worker: produce ONE sample attempt as a pure function (no shared-state mutation).
@@ -24935,7 +33640,47 @@ def generate_graph_conditioned_api_dialogue_samples(
                 raise RuntimeError("formal Stage64 worker received an invalid target record")
             policy_local["stage64_target"] = stage64_target
         policy = policy_local  # body below references `policy`; keep the name
-        seed_row = seed_rows[rng.randrange(len(seed_rows))]
+        graph_artifact_for_attempt = fixed_stage3_graph_artifact
+        graph_artifact_source = "explicit_fixed" if graph_artifact_for_attempt else None
+        materialized_artifact_path: Path | None = None
+        if (
+            graph_artifact_for_attempt is None
+            and formal_stage64_mode
+            and target_identity
+        ):
+            materialized_artifact_path = stage3_graph_artifact_path(
+                materialized_graph_artifact_dir,
+                target_identity=target_identity,
+            )
+            if materialized_artifact_path.exists():
+                graph_artifact_for_attempt = load_stage3_graph_artifact(
+                    materialized_artifact_path
+                )
+                graph_artifact_source = "materialized_reuse"
+                summary["stage3_graph_artifact_reused_count"] = int(
+                    summary.get("stage3_graph_artifact_reused_count") or 0
+                ) + 1
+        if graph_artifact_for_attempt is not None:
+            fixed_seed_id = normalize_space(
+                graph_artifact_for_attempt.get("seed_sample_id")
+            )
+            matching_seed_rows = [
+                row
+                for row in seed_rows
+                if normalize_space(row.get("sample_id") or row.get("source_id"))
+                == fixed_seed_id
+            ]
+            if len(matching_seed_rows) != 1:
+                raise RuntimeError(
+                    "fixed Stage3 graph artifact requires exactly one matching parent "
+                    f"seed row; found {len(matching_seed_rows)} for {fixed_seed_id!r}"
+                )
+            # An immutable G3 is bound to one parent.  Dialogue retries must
+            # keep that lineage rather than drawing another parent from the
+            # pool.
+            seed_row = matching_seed_rows[0]
+        else:
+            seed_row = seed_rows[rng.randrange(len(seed_rows))]
         raw_parent_dialogue_turns, parent_dialogue_source = parent_dialogue_turns_from_row(seed_row)
         raw_record: dict[str, Any] = {
             "attempt": attempt_no,
@@ -24977,7 +33722,11 @@ def generate_graph_conditioned_api_dialogue_samples(
                 sample_index=sample_index,
                 round_id=round_id,
             )
-            graph_cache_entry = load_graph_cache_entry(graph_cache_dir, graph_cache_key) if graph_cache_enabled else None
+            graph_cache_entry = (
+                load_graph_cache_entry(graph_cache_dir, graph_cache_key)
+                if graph_cache_enabled and graph_artifact_for_attempt is None
+                else None
+            )
             stage64_target_for_cache = (
                 policy.get("stage64_target")
                 if isinstance(policy, dict) and isinstance(policy.get("stage64_target"), dict)
@@ -25025,7 +33774,54 @@ def generate_graph_conditioned_api_dialogue_samples(
                         }
                     )
                     graph_cache_entry = None
-            if graph_cache_entry is not None:
+            if graph_artifact_for_attempt is not None:
+                fixed_graph_issues = fixed_stage3_graph_artifact_issues(
+                    graph_artifact_for_attempt,
+                    seed_row=seed_row,
+                    stage64_target_identity=target_identity,
+                    stage64_target=stage64_target,
+                    truth_first_mode=truth_first_mode,
+                )
+                if fixed_graph_issues:
+                    raise NativeGraphDialogueReject(
+                        "fixed Stage3 graph artifact does not match this generation slot: "
+                        f"{fixed_graph_issues}"
+                    )
+                current_event_plan = copy.deepcopy(
+                    graph_artifact_for_attempt["current_event_plan"]
+                )
+                raw_graph = copy.deepcopy(
+                    graph_artifact_for_attempt["child_graph_delta"]
+                )
+                fixed_semantic_issues = semantic_graph_plan_quality_issues(
+                    current_event_plan,
+                    stage64_operation_for_cache,
+                    stage64_target_for_cache,
+                )
+                if fixed_semantic_issues:
+                    raise NativeGraphDialogueReject(
+                        "fixed Stage3 graph artifact failed current semantic validation: "
+                        f"{fixed_semantic_issues[:6]}"
+                    )
+                graph_meta = fixed_stage3_graph_artifact_reuse_graph_meta(
+                    graph_artifact_for_attempt,
+                    expected_operation=stage64_operation_for_cache,
+                    artifact_source=graph_artifact_source,
+                    artifact_path=(
+                        materialized_artifact_path
+                        if materialized_artifact_path is not None
+                        else normalize_space(
+                            getattr(api_args, "fixed_stage3_graph_artifact", None)
+                        )
+                    ),
+                    truth_first_mode=truth_first_mode,
+                )
+                summary["fixed_stage3_graph_artifact_hit_count"] += 1
+                summary["graph_calls_saved_estimate"] += 1
+                raw_record["fixed_stage3_graph_artifact_id"] = graph_meta[
+                    "artifact_id"
+                ]
+            elif graph_cache_entry is not None:
                 summary["graph_cache_hit_count"] += 1
                 summary["graph_cache_reuse_for_dialogue_retry_count"] += 1
                 summary["graph_calls_saved_estimate"] += 1
@@ -25091,7 +33887,172 @@ def generate_graph_conditioned_api_dialogue_samples(
                 )
                 raise NativeGraphDialogueReject(f"api graph expansion failed: {graph_meta}")
 
-            current_event_plan = assign_current_alignment_anchors(current_event_plan, rng)
+            # Final graph-to-dialogue collision barrier.  It deliberately runs
+            # after every graph source (fresh API, cache, or immutable artifact)
+            # and before anchors are assigned, an artifact is written, or any
+            # dialogue API can observe the plan.
+            visibility_pre_dialogue_gate = normalized_visibility_pre_dialogue_gate(
+                current_event_plan
+            )
+            graph_meta["normalized_visibility_pre_dialogue_gate"] = copy.deepcopy(
+                visibility_pre_dialogue_gate
+            )
+            raw_record["normalized_visibility_pre_dialogue_gate"] = copy.deepcopy(
+                visibility_pre_dialogue_gate
+            )
+            if visibility_pre_dialogue_gate["pass"] is not True:
+                if graph_cache_enabled:
+                    invalidate_graph_cache_entry(graph_cache_dir, graph_cache_key)
+                    summary["graph_cache_invalidated_count"] += 1
+                raise NativeGraphDialogueReject(
+                    "normalized visibility collision gate failed before dialogue API: "
+                    f"{visibility_pre_dialogue_gate['issues'][:6]}"
+                )
+
+            pre_claim_ir: dict[str, Any] | None = None
+            precompiled_claim_first: dict[str, Any] | None = None
+            if graph_artifact_for_attempt is None:
+                current_event_plan = assign_current_alignment_anchors(
+                    current_event_plan, rng
+                )
+            if claim_first_multiqa:
+                try:
+                    if truth_first_mode:
+                        pre_claim_ir, precompiled_claim_first = (
+                            precompile_truth_first_multiqa(
+                                current_event_plan,
+                                seed_row,
+                                min_qas=int(claim_first_settings["min_qas"]),
+                                max_qas=int(claim_first_settings["max_qas"]),
+                                immutable_stage64_target=copy.deepcopy(
+                                    stage64_target
+                                ),
+                            )
+                        )
+                    else:
+                        pre_claim_ir, precompiled_claim_first = (
+                            precompile_claim_first_multiqa(
+                            current_event_plan,
+                            seed_row,
+                            min_qas=int(claim_first_settings["min_qas"]),
+                            max_qas=int(claim_first_settings["max_qas"]),
+                            eval_per_mille=int(
+                                claim_first_settings["eval_per_mille"]
+                            ),
+                            immutable_stage64_target=(
+                                copy.deepcopy(stage64_target)
+                                if isinstance(stage64_target, dict)
+                                else None
+                            ),
+                            )
+                        )
+                except Exception as claim_exc:
+                    _bump_summary_counter(
+                        summary, "claim_first_precompile_reject_count"
+                    )
+                    graph_cache_invalidated = False
+                    if graph_cache_enabled and graph_artifact_for_attempt is None:
+                        invalidate_graph_cache_entry(graph_cache_dir, graph_cache_key)
+                        summary["graph_cache_invalidated_count"] += 1
+                        graph_cache_invalidated = True
+                    raw_record["claim_first_pre_dialogue"] = {
+                        "pass": False,
+                        "stage": "pre_dialogue_truth_compile",
+                        "error_type": type(claim_exc).__name__,
+                        "error": str(claim_exc),
+                        "dialogue_api_called": False,
+                        "fresh_graph_artifact_committed": False,
+                        "graph_cache_invalidated": graph_cache_invalidated,
+                    }
+                    raw_record["final_reject_reason"] = (
+                        "claim_first_pre_dialogue_compile"
+                    )
+                    raise NativeGraphDialogueReject(
+                        "claim-first truth/proof compile failed before dialogue API: "
+                        f"{claim_exc}"
+                    ) from claim_exc
+                _bump_summary_counter(summary, "claim_first_precompile_pass_count")
+                raw_record["claim_first_pre_dialogue"] = {
+                    "pass": True,
+                    "stage": "pre_dialogue_truth_compile",
+                    "claim_bundle_hash": pre_claim_ir.get("claim_bundle_hash"),
+                    "graph_snapshot_hash": pre_claim_ir.get(
+                        "graph_snapshot_hash"
+                    ),
+                    "dialogue_family_id": precompiled_claim_first.get(
+                        "dialogue_family_id"
+                    ),
+                    "qa_count": precompiled_claim_first.get("qa_count"),
+                    "compiler_qa_count": precompiled_claim_first.get(
+                        "compiler_qa_count"
+                    ),
+                    "semantic_pass_qa_count": precompiled_claim_first.get(
+                        "pre_dialogue_semantic_pass_qa_count"
+                    ),
+                    "semantic_reject_qa_count": precompiled_claim_first.get(
+                        "pre_dialogue_semantic_reject_qa_count"
+                    ),
+                    "semantic_rejects": copy.deepcopy(
+                        precompiled_claim_first.get(
+                            "pre_dialogue_semantic_rejects"
+                        )
+                        or []
+                    ),
+                    "target_fulfillment_qa_id": precompiled_claim_first.get(
+                        "target_fulfillment_qa_id"
+                    ),
+                    "target_fulfillment_status": precompiled_claim_first.get(
+                        "target_fulfillment_status"
+                    ),
+                    "proof_ids": [
+                        (qa.get("proof") or {}).get("proof_id")
+                        for qa in precompiled_claim_first.get("qas") or []
+                        if isinstance(qa, dict)
+                    ],
+                    "dialogue_api_called": False,
+                }
+            if graph_artifact_for_attempt is None:
+                # Claim-first precompilation is deliberately above this commit:
+                # an under-specified fresh G3 must not be frozen and reused on
+                # every retry. Explicit fixed/reused artifacts are immutable and
+                # still pass through the same pre-dialogue proof gate.
+                if formal_stage64_mode and target_identity:
+                    if materialized_artifact_path is None:
+                        materialized_artifact_path = stage3_graph_artifact_path(
+                            materialized_graph_artifact_dir,
+                            target_identity=target_identity,
+                        )
+                    materialized_artifact = build_stage3_graph_artifact(
+                        seed_row=seed_row,
+                        current_event_plan=current_event_plan,
+                        child_graph_delta=(
+                            raw_graph if isinstance(raw_graph, dict) else {}
+                        ),
+                        stage64_target=(
+                            stage64_target if isinstance(stage64_target, dict) else {}
+                        ),
+                        stage64_target_identity=target_identity,
+                        source_graph_meta=graph_meta,
+                    )
+                    write_json_atomic(
+                        materialized_artifact_path,
+                        materialized_artifact,
+                    )
+                    graph_meta["materialized_artifact_id"] = materialized_artifact[
+                        "artifact_id"
+                    ]
+                    graph_meta["materialized_artifact_path"] = str(
+                        materialized_artifact_path
+                    )
+                    raw_record["materialized_stage3_graph_artifact_id"] = (
+                        materialized_artifact["artifact_id"]
+                    )
+                    raw_record["materialized_stage3_graph_artifact_path"] = str(
+                        materialized_artifact_path
+                    )
+                    summary["stage3_graph_artifact_materialized_count"] = int(
+                        summary.get("stage3_graph_artifact_materialized_count") or 0
+                    ) + 1
             event_to_anchor = current_event_plan.get("current_event_instance_to_anchor") or {}
             anchor_to_event = current_event_plan.get("current_anchor_to_event_instance_id") or {}
             summary["current_anchor_assigned_count"] += len(anchor_to_event)
@@ -25127,9 +34088,103 @@ def generate_graph_conditioned_api_dialogue_samples(
             stage64_formal_mining = bool(
                 isinstance(policy, dict) and policy.get("qa_operation_answer_type_diversification")
             )
+            use_segmented_stage3_dialogue = bool(
+                stage64_formal_mining
+                and stage3_dialogue_protocol == "segmented"
+            )
+            use_truth_first_discourse = bool(
+                truth_first_mode
+                and stage3_dialogue_protocol == "discourse_plan"
+            )
+            if use_truth_first_discourse:
+                # Segment-local retries are owned inside the Truth-first generator.
+                # Re-entering the outer dialogue loop would discard an already
+                # admitted segment prefix and pay to generate it again.
+                max_dialogue_retries = 1
+            try:
+                max_length_continuations = max(
+                    0,
+                    int(getattr(api_args, "stage3_max_length_continuations", 3)),
+                )
+            except (TypeError, ValueError):
+                max_length_continuations = 1
+            length_continuations_used = 0
+            if use_truth_first_discourse:
+                max_length_continuations = 0
+            summary["stage3_max_length_continuations"] = max_length_continuations
+            # Long-form Stage3 is API-authored end to end.  The local evidence
+            # compiler is retained only for backwards-compatible inspection of
+            # historical runs; it must not insert solver-visible text into a
+            # newly generated dialogue.
+            use_long_form_local_evidence = False
+            local_evidence_turns: list[dict[str, Any]] = []
+            local_evidence_diagnostics: dict[str, Any] = {}
+            long_form_fact_chunk_count = (
+                max(1, 1 + max_length_continuations)
+                if stage64_formal_mining and not use_segmented_stage3_dialogue
+                else 1
+            )
+            long_form_fact_checklist = [
+                {
+                    "event_instance_id": normalize_space(
+                        event.get("event_instance_id")
+                    ),
+                    "marker": normalize_space(
+                        event.get("alignment_anchor")
+                        or event_to_anchor.get(
+                            normalize_space(event.get("event_instance_id"))
+                        )
+                    ),
+                    "natural_support_claim_to_include": normalize_space(
+                        event.get("dialogue_support_claim")
+                    ),
+                }
+                for event in current_event_plan.get("events") or []
+                if isinstance(event, dict)
+                and event.get("required_for_dialogue") is not False
+            ]
+            use_fact_only_evidence_protocol = bool(
+                stage64_formal_mining
+                and not use_segmented_stage3_dialogue
+                and not use_truth_first_discourse
+                and not use_long_form_local_evidence
+            )
+            if use_long_form_local_evidence:
+                local_evidence_turns, local_evidence_diagnostics = (
+                    compile_long_form_local_evidence_turns(
+                        current_event_plan,
+                        parent_dialogue_turns,
+                    )
+                )
+                if local_evidence_diagnostics.get("pass") is not True:
+                    raise NativeGraphDialogueReject(
+                        "fixed graph evidence compiler could not cover every required child fact: "
+                        f"{local_evidence_diagnostics}"
+                    )
+                raw_record["long_form_local_evidence_compiler"] = copy.deepcopy(
+                    local_evidence_diagnostics
+                )
             for dialogue_attempt in range(1, max_dialogue_retries + 1):
-                summary["api_dialogue_called_count"] += 1
-                if stage64_formal_mining:
+                if not use_truth_first_discourse:
+                    summary["api_dialogue_called_count"] += 1
+                if use_truth_first_discourse:
+                    if not isinstance(pre_claim_ir, dict):
+                        raise RuntimeError(
+                            "Truth-first dialogue requires the frozen pre-dialogue Claim IR"
+                        )
+                    dialogue_proposal, dialogue_meta = (
+                        call_api_truth_first_discourse_generation(
+                            current_event_plan,
+                            pre_claim_ir,
+                            api_args,
+                            parent_context=parent_context,
+                            parent_dialogue_turns=parent_dialogue_turns,
+                            min_added_turns=min_length_added_turns,
+                            min_added_tokens=min_length_added_tokens,
+                            prior_failure_context=retry_context,
+                        )
+                    )
+                elif use_segmented_stage3_dialogue:
                     dialogue_proposal, dialogue_meta = call_api_formal_segmented_dialogue_expansion(
                         current_event_plan,
                         seed_row,
@@ -25146,32 +34201,83 @@ def generate_graph_conditioned_api_dialogue_samples(
                             compact_formal_dialogue_retry_context(retry_context)
                         ),
                     )
+                else:
+                    if use_fact_only_evidence_protocol:
+                        initial_fact_event_ids = _long_form_chunk_fact_event_ids(
+                            long_form_fact_checklist,
+                            chunk_index=0,
+                            chunk_count=long_form_fact_chunk_count,
+                        )
+                        dialogue_proposal, dialogue_meta = (
+                            call_api_visible_claim_append_repair(
+                                current_event_plan,
+                                initial_fact_event_ids,
+                                api_args,
+                                total_turn_count=len(initial_fact_event_ids),
+                            )
+                        )
+                        dialogue_meta["dialogue_protocol"] = (
+                            "fact_only_initial_api_chunk"
+                        )
+                        dialogue_meta["fact_chunk_index"] = 0
+                        dialogue_meta["fact_chunk_count"] = (
+                            long_form_fact_chunk_count
+                        )
+                    else:
+                        dialogue_proposal, dialogue_meta = call_api_graph_conditioned_dialogue_expansion(
+                            current_event_plan,
+                            seed_row,
+                            legacy,
+                            policy,
+                            api_args,
+                            parent_context=parent_context,
+                            parent_dialogue_source=parent_dialogue_source,
+                            parent_turn_count=len(parent_dialogue_turns),
+                            min_added_turns=min_length_added_turns,
+                            min_added_tokens=min_length_added_tokens,
+                            length_guard_parent_baseline_tokens=length_guard_parent_baseline_tokens,
+                            retry_context=retry_context,
+                            local_evidence_compiler=use_long_form_local_evidence,
+                            fact_chunk_index=0,
+                            fact_chunk_count=long_form_fact_chunk_count,
+                        )
+                if use_truth_first_discourse:
                     summary["api_dialogue_called_count"] += max(
                         0,
-                        int(dialogue_meta.get("segment_api_call_count") or 0) - 1,
+                        int(dialogue_meta.get("segment_api_call_count") or 0),
                     )
-                else:
-                    dialogue_proposal, dialogue_meta = call_api_graph_conditioned_dialogue_expansion(
-                        current_event_plan,
-                        seed_row,
-                        legacy,
-                        policy,
-                        api_args,
-                        parent_context=parent_context,
-                        parent_dialogue_source=parent_dialogue_source,
-                        parent_turn_count=len(parent_dialogue_turns),
-                        min_added_turns=min_length_added_turns,
-                        min_added_tokens=min_length_added_tokens,
-                        length_guard_parent_baseline_tokens=length_guard_parent_baseline_tokens,
-                        retry_context=retry_context,
+                elif use_segmented_stage3_dialogue:
+                    summary["api_dialogue_called_count"] += max(
+                        0,
+                        int(dialogue_meta.get("segment_api_call_count") or 0)
+                        - 1,
                     )
                 raw_record.setdefault("api_dialogue_attempts", []).append(
                     {"attempt": dialogue_attempt, "meta": dialogue_meta, "payload": dialogue_proposal}
                 )
                 _record_api_meta_retry_diagnostics(summary, dialogue_meta)
+                partial_recovery = (
+                    dialogue_meta.get("partial_json_recovery")
+                    if isinstance(dialogue_meta.get("partial_json_recovery"), dict)
+                    else {}
+                )
+                if partial_recovery.get("used") is True:
+                    summary["dialogue_truncated_json_recovery_count"] += 1
+                    summary["dialogue_truncated_json_recovered_turn_count"] += int(
+                        partial_recovery.get("recovered_turn_count") or 0
+                )
                 if not dialogue_meta.get("used") or not isinstance(dialogue_proposal, dict):
-                    retry_context = (
-                        compact_formal_dialogue_retry_context(
+                    if use_truth_first_discourse:
+                        diagnostic_reason = normalize_space(
+                            dialogue_meta.get("reason")
+                        ) or "truth_first_discourse_failure"
+                        retry_context = {
+                            "previous_error": diagnostic_reason,
+                            "dialogue_meta": dialogue_meta,
+                        }
+                    elif use_segmented_stage3_dialogue:
+                        diagnostic_reason = "parse_or_api_failure"
+                        retry_context = compact_formal_dialogue_retry_context(
                             {
                                 "previous_error": (
                                     "dialogue API did not return a valid JSON proposal"
@@ -25179,25 +34285,75 @@ def generate_graph_conditioned_api_dialogue_samples(
                                 "dialogue_meta": dialogue_meta,
                             }
                         )
-                        if stage64_formal_mining
-                        else {
+                    else:
+                        diagnostic_reason = "parse_or_api_failure"
+                        retry_context = {
                             "previous_error": (
                                 "dialogue API did not return a valid JSON proposal"
                             ),
                             "dialogue_meta": dialogue_meta,
                         }
-                    )
                     raw_record.setdefault("dialogue_retry_diagnostics", []).append(
                         {
                             "dialogue_attempt": dialogue_attempt,
-                            "reason": "parse_or_api_failure",
+                            "reason": diagnostic_reason,
                             "retry_context": copy.deepcopy(retry_context),
                         }
                     )
                     continue
+                if (
+                    stage64_formal_mining
+                    and not use_segmented_stage3_dialogue
+                    and not use_truth_first_discourse
+                    and not use_long_form_local_evidence
+                ):
+                    dialogue_proposal, quote_normalization = (
+                        normalize_long_form_sidecar_support_quotes(
+                            dialogue_proposal,
+                            anchor_to_event=anchor_to_event,
+                            current_event_plan=current_event_plan,
+                        )
+                    )
+                    dialogue_meta["long_form_sidecar_quote_normalization"] = (
+                        quote_normalization
+                    )
+                    # Keep the raw attempt record aligned with the exact
+                    # sidecar-only normalized proposal used downstream.
+                    raw_record["api_dialogue_attempts"][-1]["payload"] = (
+                        copy.deepcopy(dialogue_proposal)
+                    )
                 if isinstance(dialogue_proposal.get("qa_proposal"), dict):
                     summary["api_qa_proposal_count"] += 1
                 api_appended_dialogue = list(_as_dialogue_list(appended_dialogue_from_proposal(dialogue_proposal)))
+                if use_long_form_local_evidence:
+                    raw_record["api_dialogue_attempts"][-1]["api_neutral_turns"] = (
+                        copy.deepcopy(api_appended_dialogue)
+                    )
+                    stripped_neutral_sidecar_turn_count = 0
+                    neutral_turns: list[dict[str, Any]] = []
+                    for turn in api_appended_dialogue:
+                        normalized_turn = copy.deepcopy(turn)
+                        if normalized_turn.get("alignment_anchors") or normalized_turn.get(
+                            "support_quotes"
+                        ):
+                            stripped_neutral_sidecar_turn_count += 1
+                        normalized_turn["alignment_anchors"] = []
+                        normalized_turn["support_quotes"] = {}
+                        neutral_turns.append(normalized_turn)
+                    raw_record["api_dialogue_attempts"][-1][
+                        "stripped_api_neutral_sidecar_turn_count"
+                    ] = stripped_neutral_sidecar_turn_count
+                    api_appended_dialogue = interleave_formal_local_evidence_turns(
+                        neutral_turns,
+                        local_evidence_turns,
+                    )
+                    dialogue_proposal = copy.deepcopy(dialogue_proposal)
+                    dialogue_proposal["appended_dialogue_turns"] = copy.deepcopy(
+                        api_appended_dialogue
+                    )
+                    raw_record["api_dialogue_attempts"][-1]["payload"] = (
+                        copy.deepcopy(dialogue_proposal)
+                    )
                 deterministic_scaffold_used = not stage64_formal_mining
                 appended_dialogue = (
                     current_event_scaffold_turns(current_event_plan) + api_appended_dialogue
@@ -25221,11 +34377,20 @@ def generate_graph_conditioned_api_dialogue_samples(
                     require_evidence_dispersion=stage64_formal_mining,
                     deterministic_scaffold_used=deterministic_scaffold_used,
                     formal_mining=stage64_formal_mining,
+                    local_evidence_compiler_used=use_long_form_local_evidence,
                 )
                 raw_alignment_proposal = candidate.get("raw_alignment_proposal")
                 final_dialogue = candidate.get("final_dialogue")
                 length_metadata = candidate.get("length_metadata") or {}
                 length_metadata["parent_dialogue_source"] = parent_dialogue_source
+                length_metadata["formal_mining_local_evidence_compiler"] = bool(
+                    use_long_form_local_evidence
+                )
+                length_metadata["formal_mining_local_evidence_compiler_turn_count"] = (
+                    len(local_evidence_turns)
+                    if use_long_form_local_evidence
+                    else 0
+                )
                 if deterministic_scaffold_used and candidate.get("ignored_event_alignment_proposal"):
                     summary["deterministic_scaffold_alignment_count"] += 1
                 if candidate.get("reason") == "deterministic_scaffold_not_mining_eligible":
@@ -25251,22 +34416,314 @@ def generate_graph_conditioned_api_dialogue_samples(
                     summary["too_short_count"] += 1
                     summary["length_guard_retry_count"] += 1
                     summary["length_guard_reject_count"] += 1
-                    retry_context = {
-                        "previous_error": "append-only dialogue failed length guard",
-                        "length_guard": length_metadata,
-                        "instruction": (
-                            "Return appended_dialogue_turns only, with at least 24 substantive new turns and a clear token margin above the length guard. "
-                            "Do not rewrite or include the parent dialogue."
-                        ),
-                    }
-                    raw_record.setdefault("dialogue_retry_diagnostics", []).append(
-                        {
+                    # Do not throw away a valid, graph-grounded long prefix merely
+                    # because the API stopped before the final +4k guard.  Keep
+                    # asking for an append-only tail until the guard passes or the
+                    # explicitly bounded continuation budget is exhausted.  The
+                    # graph and every already accepted prefix turn are immutable;
+                    # no local text is inserted.
+                    continuation_recovered_length = False
+                    while (
+                        candidate.get("reason") == "length"
+                        and not use_segmented_stage3_dialogue
+                        and not use_truth_first_discourse
+                        and length_continuations_used < max_length_continuations
+                        and stage64_formal_mining
+                    ):
+                        observed_delta = int(
+                            length_metadata.get("length_guard_effective_delta_tokens")
+                            or length_metadata.get("length_delta_tokens")
+                            or 0
+                        )
+                        required_delta = int(
+                            length_metadata.get("min_added_tokens")
+                            or min_length_added_tokens
+                            or 0
+                        )
+                        missing_delta = max(1, required_delta - observed_delta)
+                        length_continuations_used += 1
+                        summary["length_continuation_attempt_count"] += 1
+                        continuation_proposal, continuation_meta = (
+                            call_api_graph_conditioned_dialogue_continuation(
+                                api_appended_dialogue,
+                                api_args,
+                                required_additional_tokens=missing_delta,
+                                parent_context=parent_context,
+                                required_fact_turn_assignments=(
+                                    []
+                                    if use_fact_only_evidence_protocol
+                                    else _long_form_chunk_fact_assignments(
+                                        long_form_fact_checklist,
+                                        chunk_index=length_continuations_used,
+                                        chunk_count=long_form_fact_chunk_count,
+                                        turn_count=max(
+                                            16,
+                                            (
+                                                min(
+                                                    max(
+                                                        800,
+                                                        int(getattr(
+                                                            api_args,
+                                                            "stage3_api_dialogue_chunk_tokens",
+                                                            800,
+                                                        )),
+                                                    ),
+                                                    max(1, missing_delta) + 256,
+                                                )
+                                                + 49
+                                            )
+                                            // 50,
+                                        ),
+                                    )
+                                    if stage64_formal_mining
+                                    else []
+                                ),
+                                fact_chunk_index=length_continuations_used,
+                                fact_chunk_count=long_form_fact_chunk_count,
+                            )
+                        )
+                        summary["api_dialogue_called_count"] += 1
+                        _record_api_meta_retry_diagnostics(summary, continuation_meta)
+                        continuation_audit = {
                             "dialogue_attempt": dialogue_attempt,
-                            "reason": "length",
-                            "retry_context": copy.deepcopy(retry_context),
+                            "prefix_turn_count": len(api_appended_dialogue),
+                            "observed_token_delta": observed_delta,
+                            "required_token_delta": required_delta,
+                            "missing_token_delta": missing_delta,
+                            "meta": copy.deepcopy(continuation_meta),
+                            "payload": copy.deepcopy(continuation_proposal),
                         }
-                    )
-                    continue
+                        raw_record.setdefault("api_dialogue_continuations", []).append(
+                            continuation_audit
+                        )
+                        raw_record["api_dialogue_attempts"][-1].setdefault(
+                            "length_continuations", []
+                        ).append(copy.deepcopy(continuation_audit))
+                        continuation_turns = list(
+                            _as_dialogue_list(
+                                appended_dialogue_from_proposal(
+                                    continuation_proposal
+                                    if isinstance(continuation_proposal, dict)
+                                    else {}
+                                )
+                            )
+                        )
+                        if not continuation_meta.get("used") or not continuation_turns:
+                            break
+                        # In local-evidence mode, the frozen compiler is the sole
+                        # authority for graph-fact sidecars.  A continuation is
+                        # neutral tail text, so discard accidental API sidecars
+                        # before the normal semantic validators inspect it.
+                        stripped_continuation_sidecars = 0
+                        if use_long_form_local_evidence:
+                            normalized_continuation_turns: list[dict[str, Any]] = []
+                            for continuation_turn in continuation_turns:
+                                normalized_turn = copy.deepcopy(continuation_turn)
+                                if normalized_turn.get("alignment_anchors") or normalized_turn.get(
+                                    "support_quotes"
+                                ):
+                                    stripped_continuation_sidecars += 1
+                                normalized_turn["alignment_anchors"] = []
+                                normalized_turn["support_quotes"] = {}
+                                normalized_continuation_turns.append(normalized_turn)
+                            continuation_turns = normalized_continuation_turns
+                        continuation_audit[
+                            "stripped_continuation_sidecar_turn_count"
+                        ] = stripped_continuation_sidecars
+                        summary["length_continuation_added_turn_count"] += len(
+                            continuation_turns
+                        )
+                        dialogue_proposal = copy.deepcopy(dialogue_proposal)
+                        dialogue_proposal["appended_dialogue_turns"] = (
+                            copy.deepcopy(api_appended_dialogue)
+                            + copy.deepcopy(continuation_turns)
+                        )
+                        if not normalize_space(
+                            dialogue_proposal.get("dialogue_style_rationale")
+                        ):
+                            dialogue_proposal["dialogue_style_rationale"] = (
+                                "API-generated long-form dialogue followed by one or more API-generated continuations."
+                            )
+                        api_appended_dialogue = list(
+                            _as_dialogue_list(
+                                appended_dialogue_from_proposal(dialogue_proposal)
+                            )
+                        )
+                        if use_fact_only_evidence_protocol:
+                            scheduled_fact_event_ids = (
+                                _long_form_chunk_fact_event_ids(
+                                    long_form_fact_checklist,
+                                    chunk_index=length_continuations_used,
+                                    chunk_count=long_form_fact_chunk_count,
+                                )
+                            )
+                            if scheduled_fact_event_ids:
+                                fact_proposal, fact_meta = (
+                                    call_api_visible_claim_append_repair(
+                                        current_event_plan,
+                                        scheduled_fact_event_ids,
+                                        api_args,
+                                        total_turn_count=len(
+                                            scheduled_fact_event_ids
+                                        ),
+                                    )
+                                )
+                                summary["api_dialogue_called_count"] += 1
+                                summary[
+                                    "api_fact_only_evidence_chunk_count"
+                                ] = int(
+                                    summary.get(
+                                        "api_fact_only_evidence_chunk_count"
+                                    )
+                                    or 0
+                                ) + 1
+                                _record_api_meta_retry_diagnostics(
+                                    summary, fact_meta
+                                )
+                                fact_turns = list(
+                                    _as_dialogue_list(
+                                        appended_dialogue_from_proposal(
+                                            fact_proposal
+                                            if isinstance(fact_proposal, dict)
+                                            else {}
+                                        )
+                                    )
+                                )
+                                raw_record.setdefault(
+                                    "api_fact_only_evidence_chunks", []
+                                ).append(
+                                    {
+                                        "dialogue_attempt": dialogue_attempt,
+                                        "fact_chunk_index": (
+                                            length_continuations_used
+                                        ),
+                                        "event_instance_ids": (
+                                            scheduled_fact_event_ids
+                                        ),
+                                        "meta": copy.deepcopy(fact_meta),
+                                        "payload": copy.deepcopy(fact_proposal),
+                                    }
+                                )
+                                if fact_meta.get("used") and fact_turns:
+                                    api_appended_dialogue = (
+                                        copy.deepcopy(api_appended_dialogue)
+                                        + copy.deepcopy(fact_turns)
+                                    )
+                                    dialogue_proposal[
+                                        "appended_dialogue_turns"
+                                    ] = copy.deepcopy(api_appended_dialogue)
+                                else:
+                                    raw_record.setdefault(
+                                        "dialogue_retry_diagnostics", []
+                                    ).append(
+                                        {
+                                            "dialogue_attempt": dialogue_attempt,
+                                            "reason": (
+                                                "fact_only_evidence_chunk_failed_"
+                                                "during_length_topup"
+                                            ),
+                                            "fact_chunk_index": (
+                                                length_continuations_used
+                                            ),
+                                            "event_instance_ids": (
+                                                scheduled_fact_event_ids
+                                            ),
+                                            "length_topup_continued": True,
+                                            "meta": copy.deepcopy(fact_meta),
+                                        }
+                                    )
+                        appended_dialogue = api_appended_dialogue
+                        candidate = validate_appended_dialogue_candidate(
+                            appended_dialogue_marked=appended_dialogue,
+                            event_alignment_proposal=dialogue_proposal.get(
+                                "event_alignment_proposal"
+                            ),
+                            current_event_plan=current_event_plan,
+                            anchor_to_event=anchor_to_event,
+                            parent_dialogue_turns=parent_dialogue_turns,
+                            known_anchors=known_anchors,
+                            sample_index=sample_index,
+                            min_added_turns=min_length_added_turns,
+                            min_added_tokens=min_length_added_tokens,
+                            tokenizer_path=length_tokenizer_path,
+                            parent_baseline_tokens=length_guard_parent_baseline_tokens,
+                            fallback_min_added_tokens=fallback_delta,
+                            emergency_min_added_tokens=emergency_floor,
+                            require_evidence_dispersion=stage64_formal_mining,
+                            deterministic_scaffold_used=False,
+                            formal_mining=stage64_formal_mining,
+                            local_evidence_compiler_used=use_long_form_local_evidence,
+                        )
+                        raw_alignment_proposal = candidate.get(
+                            "raw_alignment_proposal"
+                        )
+                        final_dialogue = candidate.get("final_dialogue")
+                        length_metadata = candidate.get("length_metadata") or {}
+                        length_metadata["parent_dialogue_source"] = (
+                            parent_dialogue_source
+                        )
+                        length_metadata["formal_mining_local_evidence_compiler"] = bool(
+                            use_long_form_local_evidence
+                        )
+                        length_metadata["formal_mining_local_evidence_compiler_turn_count"] = (
+                            len(local_evidence_turns)
+                            if use_long_form_local_evidence
+                            else 0
+                        )
+                        if candidate.get("reason") != "length":
+                            continuation_recovered_length = True
+                            summary["length_continuation_success_count"] += 1
+                    if not continuation_recovered_length:
+                        summary["length_continuation_failed_count"] += 1
+                    if continuation_recovered_length:
+                        # The combined candidate is now handled by the ordinary
+                        # meta-leak/alignment/acceptance logic below.
+                        pass
+                    else:
+                        # The user-selected continuation budget is exhausted.
+                        # Preserve the same graph and dialogue prefix, but run
+                        # the ordinary semantic/alignment checks one final time
+                        # with a *reported* (never hidden) length shortfall.
+                        candidate = validate_appended_dialogue_candidate(
+                            appended_dialogue_marked=api_appended_dialogue,
+                            event_alignment_proposal=dialogue_proposal.get(
+                                "event_alignment_proposal"
+                            ),
+                            current_event_plan=current_event_plan,
+                            anchor_to_event=anchor_to_event,
+                            parent_dialogue_turns=parent_dialogue_turns,
+                            known_anchors=known_anchors,
+                            sample_index=sample_index,
+                            min_added_turns=min_length_added_turns,
+                            min_added_tokens=min_length_added_tokens,
+                            tokenizer_path=length_tokenizer_path,
+                            parent_baseline_tokens=length_guard_parent_baseline_tokens,
+                            fallback_min_added_tokens=fallback_delta,
+                            emergency_min_added_tokens=emergency_floor,
+                            require_evidence_dispersion=stage64_formal_mining,
+                            deterministic_scaffold_used=False,
+                            formal_mining=stage64_formal_mining,
+                            local_evidence_compiler_used=use_long_form_local_evidence,
+                            allow_length_shortfall=True,
+                        )
+                        raw_alignment_proposal = candidate.get(
+                            "raw_alignment_proposal"
+                        )
+                        final_dialogue = candidate.get("final_dialogue")
+                        length_metadata = candidate.get("length_metadata") or {}
+                        length_metadata["parent_dialogue_source"] = (
+                            parent_dialogue_source
+                        )
+                        length_metadata[
+                            "formal_mining_local_evidence_compiler"
+                        ] = bool(use_long_form_local_evidence)
+                        length_metadata[
+                            "formal_mining_local_evidence_compiler_turn_count"
+                        ] = (
+                            len(local_evidence_turns)
+                            if use_long_form_local_evidence
+                            else 0
+                        )
                 if candidate.get("reason") == "meta_leak":
                     meta_details = candidate.get("meta_details") or {}
                     summary["meta_leak_reject_count"] += 1
@@ -25301,6 +34758,10 @@ def generate_graph_conditioned_api_dialogue_samples(
                     accepted_alignment_invalid_count = int(alignment_result.get("current_anchor_invalid_count") or 0)
                     accepted_evidence_dispersion = copy.deepcopy(candidate.get("evidence_dispersion") or {})
                     accepted_length_metadata = length_metadata
+                    if length_metadata.get("length_guard_exemption_used") is True:
+                        summary[
+                            "length_continuation_cap_shortfall_accept_count"
+                        ] += 1
                     accepted_appended_dialogue_marked = copy.deepcopy(_as_dialogue_list(appended_dialogue))
                     break
                 if not isinstance(alignment_result, dict):
@@ -25329,6 +34790,160 @@ def generate_graph_conditioned_api_dialogue_samples(
                     )
                     if int(alignment_result.get("anchor_leakage_count") or 0):
                         _bump_summary_counter(summary, "anchor_leak_reject_count")
+                missing_event_ids = list(
+                    alignment_result.get("missing_required_event_instance_ids")
+                    or []
+                )
+                required_event_count = int(
+                    evidence_dispersion.get("required_event_count") or 0
+                )
+                tail_event_count = int(
+                    evidence_dispersion.get("tail_evidence_event_count") or 0
+                )
+                # The API may omit a small number of fact turns from the
+                # ordinary long append.  Recover them in at most three
+                # append-only API blocks of two facts each, with neutral turns
+                # between facts.  This keeps evidence dispersed instead of
+                # appending one tail fact list, and never rewrites graph,
+                # parent, or prefix.
+                visible_repair_allowed = bool(
+                    stage64_formal_mining
+                    and not use_segmented_stage3_dialogue
+                    and not use_truth_first_discourse
+                    and not use_long_form_local_evidence
+                    and 0 < len(missing_event_ids) <= 6
+                    and required_event_count > 0
+                )
+                if visible_repair_allowed:
+                    remaining_missing_event_ids = list(missing_event_ids)
+                    visible_repair_succeeded = False
+                    for visible_repair_index in range(3):
+                        if not remaining_missing_event_ids:
+                            break
+                        repair_event_ids = remaining_missing_event_ids[:2]
+                        visible_repair, visible_repair_meta = (
+                            call_api_visible_claim_append_repair(
+                                current_event_plan,
+                                repair_event_ids,
+                                api_args,
+                                total_turn_count=16,
+                            )
+                        )
+                        summary["api_dialogue_called_count"] += 1
+                        summary["api_visible_claim_append_repair_count"] = int(
+                            summary.get("api_visible_claim_append_repair_count") or 0
+                        ) + 1
+                        _record_api_meta_retry_diagnostics(
+                            summary, visible_repair_meta
+                        )
+                        visible_repair_turns = list(
+                            _as_dialogue_list(
+                                appended_dialogue_from_proposal(
+                                    visible_repair
+                                    if isinstance(visible_repair, dict)
+                                    else {}
+                                )
+                            )
+                        )
+                        raw_record.setdefault(
+                            "api_visible_claim_append_repairs", []
+                        ).append(
+                            {
+                                "dialogue_attempt": dialogue_attempt,
+                                "repair_index": visible_repair_index,
+                                "missing_event_instance_ids": repair_event_ids,
+                                "meta": copy.deepcopy(visible_repair_meta),
+                                "payload": copy.deepcopy(visible_repair),
+                            }
+                        )
+                        if not (
+                            visible_repair_meta.get("used")
+                            and visible_repair_turns
+                        ):
+                            break
+                        api_appended_dialogue = (
+                            copy.deepcopy(api_appended_dialogue)
+                            + copy.deepcopy(visible_repair_turns)
+                        )
+                        appended_dialogue = api_appended_dialogue
+                        dialogue_proposal = copy.deepcopy(dialogue_proposal)
+                        dialogue_proposal["appended_dialogue_turns"] = (
+                            copy.deepcopy(api_appended_dialogue)
+                        )
+                        candidate = validate_appended_dialogue_candidate(
+                            appended_dialogue_marked=appended_dialogue,
+                            event_alignment_proposal=dialogue_proposal.get(
+                                "event_alignment_proposal"
+                            ),
+                            current_event_plan=current_event_plan,
+                            anchor_to_event=anchor_to_event,
+                            parent_dialogue_turns=parent_dialogue_turns,
+                            known_anchors=known_anchors,
+                            sample_index=sample_index,
+                            min_added_turns=min_length_added_turns,
+                            min_added_tokens=min_length_added_tokens,
+                            tokenizer_path=length_tokenizer_path,
+                            parent_baseline_tokens=length_guard_parent_baseline_tokens,
+                            fallback_min_added_tokens=fallback_delta,
+                            emergency_min_added_tokens=emergency_floor,
+                            require_evidence_dispersion=True,
+                            deterministic_scaffold_used=False,
+                            formal_mining=True,
+                            local_evidence_compiler_used=False,
+                            allow_length_shortfall=bool(
+                                length_metadata.get("length_guard_exemption_used")
+                            ),
+                        )
+                        raw_alignment_proposal = candidate.get(
+                            "raw_alignment_proposal"
+                        )
+                        final_dialogue = candidate.get("final_dialogue")
+                        length_metadata = candidate.get("length_metadata") or {}
+                        length_metadata["parent_dialogue_source"] = (
+                            parent_dialogue_source
+                        )
+                        alignment_result = candidate.get("alignment_result")
+                        missing_anchors = set(
+                            candidate.get("missing_anchors") or set()
+                        )
+                        remaining_missing_event_ids = list(
+                            (alignment_result or {}).get(
+                                "missing_required_event_instance_ids"
+                            )
+                            or []
+                        )
+                        if candidate.get("pass") is True and isinstance(
+                            alignment_result, dict
+                        ):
+                            visible_repair_succeeded = True
+                            break
+                    if visible_repair_succeeded:
+                        summary[
+                            "api_visible_claim_append_repair_success_count"
+                        ] = int(
+                            summary.get(
+                                "api_visible_claim_append_repair_success_count"
+                            )
+                            or 0
+                        ) + 1
+                        accepted_seen_anchors = set(candidate.get("seen") or set())
+                        accepted_invalid_anchors = set(candidate.get("invalid") or set())
+                        accepted_missing_anchors = set(missing_anchors)
+                        accepted_alignment_invalid_count = int(
+                            alignment_result.get("current_anchor_invalid_count") or 0
+                        )
+                        accepted_evidence_dispersion = copy.deepcopy(
+                            candidate.get("evidence_dispersion") or {}
+                        )
+                        accepted_length_metadata = length_metadata
+                        if length_metadata.get("length_guard_exemption_used") is True:
+                            summary[
+                                "length_continuation_cap_shortfall_accept_count"
+                            ] += 1
+                        accepted_appended_dialogue_marked = copy.deepcopy(
+                            _as_dialogue_list(appended_dialogue)
+                        )
+                        break
                 retry_context = {
                     "missing_event_instance_ids": alignment_result.get("missing_required_event_instance_ids"),
                     "missing_anchors": sorted(missing_anchors),
@@ -25472,6 +35087,198 @@ def generate_graph_conditioned_api_dialogue_samples(
                 alignment_result["current_alignment"],
                 hashes,
             )
+            claim_first_bundle: dict[str, Any] | None = None
+            claim_first_primary: dict[str, Any] | None = None
+            claim_first_primary_qa: dict[str, Any] | None = None
+            if claim_first_multiqa:
+                if not isinstance(pre_claim_ir, dict) or not isinstance(
+                    precompiled_claim_first, dict
+                ):
+                    raise RuntimeError(
+                        "claim-first pre-dialogue artifacts unexpectedly missing"
+                    )
+                try:
+                    if truth_first_mode:
+                        frozen_claim_alignment = (
+                            remap_truth_first_claim_alignment_to_frozen_dialogue(
+                                copy.deepcopy(
+                                    (dialogue_proposal or {}).get(
+                                        "truth_first_claim_alignment"
+                                    )
+                                    or {}
+                                ),
+                                final_dialogue,
+                            )
+                        )
+                        claim_first_bundle = bind_validate_truth_first_multiqa(
+                            current_event_plan=current_event_plan,
+                            claim_alignment=frozen_claim_alignment,
+                            final_dialogue=final_dialogue,
+                            pre_claim_ir=pre_claim_ir,
+                            precompiled=precompiled_claim_first,
+                            discourse_validation=copy.deepcopy(
+                                (dialogue_proposal or {}).get(
+                                    "truth_first_discourse_validation"
+                                )
+                            ),
+                            min_qas=int(claim_first_settings["min_qas"]),
+                        )
+                    else:
+                        claim_first_bundle = bind_validate_claim_first_multiqa(
+                            current_event_plan=current_event_plan,
+                            current_alignment=alignment_result[
+                                "current_alignment"
+                            ],
+                            final_dialogue=final_dialogue,
+                            pre_claim_ir=pre_claim_ir,
+                            precompiled=precompiled_claim_first,
+                            min_qas=int(claim_first_settings["min_qas"]),
+                        )
+                except Exception as claim_exc:
+                    _bump_summary_counter(
+                        summary, "claim_first_post_bind_reject_count"
+                    )
+                    raw_record["claim_first_post_alignment"] = {
+                        "pass": False,
+                        "stage": "post_alignment_support_validation",
+                        "error_type": type(claim_exc).__name__,
+                        "error": str(claim_exc),
+                        "legacy_final_qa_api_called": False,
+                    }
+                    raw_record["final_reject_reason"] = (
+                        "claim_first_post_alignment_validation"
+                    )
+                    raise NativeGraphDialogueReject(
+                        "claim-first support/proof validation failed after frozen alignment: "
+                        f"{claim_exc}"
+                    ) from claim_exc
+                raw_record["claim_first_multiqa_bundle"] = copy.deepcopy(
+                    claim_first_bundle
+                )
+                _bump_summary_counter(
+                    summary,
+                    "claim_first_validator_pass_qa_count",
+                    int(claim_first_bundle.get("validator_pass_qa_count") or 0),
+                )
+                _bump_summary_counter(
+                    summary,
+                    "claim_first_validator_reject_qa_count",
+                    int(claim_first_bundle.get("validator_reject_qa_count") or 0),
+                )
+                _bump_summary_counter(
+                    summary,
+                    "claim_first_semantic_validator_pass_qa_count",
+                    int(
+                        claim_first_bundle.get(
+                            "semantic_validator_pass_qa_count"
+                        )
+                        or 0
+                    ),
+                )
+                _bump_summary_counter(
+                    summary,
+                    "claim_first_semantic_validator_reject_qa_count",
+                    int(
+                        claim_first_bundle.get(
+                            "semantic_validator_reject_qa_count"
+                        )
+                        or 0
+                    ),
+                )
+                if claim_first_bundle.get("proof_ready") is not True:
+                    _bump_summary_counter(
+                        summary, "claim_first_post_bind_reject_count"
+                    )
+                    raw_record["claim_first_post_alignment"] = {
+                        "pass": False,
+                        "stage": "dialogue_proof_ready_gate",
+                        "validator_pass_qa_count": claim_first_bundle.get(
+                            "validator_pass_qa_count"
+                        ),
+                        "minimum_required_qa_count": claim_first_bundle.get(
+                            "minimum_required_qa_count"
+                        ),
+                        "semantic_validator_pass_qa_count": (
+                            claim_first_bundle.get(
+                                "semantic_validator_pass_qa_count"
+                            )
+                        ),
+                        "target_fulfillment_qa_id": claim_first_bundle.get(
+                            "target_fulfillment_qa_id"
+                        ),
+                        "target_fulfillment_pass": claim_first_bundle.get(
+                            "target_fulfillment_pass"
+                        ),
+                        "qa_rejects": copy.deepcopy(
+                            claim_first_bundle.get("qa_rejects") or []
+                        ),
+                        "legacy_final_qa_api_called": False,
+                    }
+                    raw_record["final_reject_reason"] = (
+                        "claim_first_insufficient_valid_qas"
+                    )
+                    raise NativeGraphDialogueReject(
+                        "claim-first dialogue has fewer than the minimum independent-validator-pass QAs"
+                    )
+                _bump_summary_counter(summary, "claim_first_post_bind_pass_count")
+                claim_first_primary = select_claim_first_primary_qa(
+                    claim_first_bundle,
+                    stage64_target if isinstance(stage64_target, dict) else None,
+                )
+                claim_first_primary_qa = render_claim_first_primary_qa(
+                    claim_first_primary,
+                    claim_first_bundle["claim_ir"],
+                    hashes,
+                )
+                primary_operation = normalize_space(
+                    claim_first_primary.get("qa_operation")
+                ) or "unknown"
+                primary_counts = summary.setdefault(
+                    "claim_first_primary_operation_counts", {}
+                )
+                primary_counts[primary_operation] = int(
+                    primary_counts.get(primary_operation) or 0
+                ) + 1
+                multiqa_counts = summary.setdefault(
+                    "claim_first_multiqa_operation_counts", {}
+                )
+                for operation, count in (
+                    claim_first_bundle.get("qa_operation_counts") or {}
+                ).items():
+                    multiqa_counts[str(operation)] = int(
+                        multiqa_counts.get(str(operation)) or 0
+                    ) + int(count or 0)
+                raw_record["claim_first_post_alignment"] = {
+                    "pass": True,
+                    "stage": "post_alignment_support_validation",
+                    "claim_bundle_hash": claim_first_bundle.get(
+                        "claim_bundle_hash"
+                    ),
+                    "dialogue_family_id": claim_first_bundle.get(
+                        "dialogue_family_id"
+                    ),
+                    "validator_pass_qa_count": claim_first_bundle.get(
+                        "validator_pass_qa_count"
+                    ),
+                    "validator_reject_qa_count": claim_first_bundle.get(
+                        "validator_reject_qa_count"
+                    ),
+                    "semantic_validator_pass_qa_count": claim_first_bundle.get(
+                        "semantic_validator_pass_qa_count"
+                    ),
+                    "semantic_validator_reject_qa_count": claim_first_bundle.get(
+                        "semantic_validator_reject_qa_count"
+                    ),
+                    "target_fulfillment_qa_id": claim_first_bundle.get(
+                        "target_fulfillment_qa_id"
+                    ),
+                    "target_fulfillment_pass": claim_first_bundle.get(
+                        "target_fulfillment_pass"
+                    ),
+                    "primary_qa_id": claim_first_primary.get("qa_id"),
+                    "primary_qa_operation": primary_operation,
+                    "legacy_final_qa_api_called": False,
+                }
             plan_qtype = normalize_space(current_event_plan.get("question_type"))
             if _is_easy_v2_curriculum(policy):
                 if plan_qtype not in EASY_V2_SUPPORTED_QUESTION_TYPES:
@@ -25480,7 +35287,7 @@ def generate_graph_conditioned_api_dialogue_samples(
             else:
                 qa_question_type = plan_qtype or "ordering"
             qa_proposal_for_build = dialogue_proposal.get("qa_proposal") if isinstance(dialogue_proposal, dict) else None
-            if stage64_formal_mining:
+            if stage64_formal_mining and not claim_first_multiqa:
                 summary["stage64_final_qa_attempt_count"] += 1
                 final_qa_payload, final_qa_meta = call_api_stage64_final_qa(
                     current_event_plan,
@@ -25514,7 +35321,12 @@ def generate_graph_conditioned_api_dialogue_samples(
                 summary["stage64_final_qa_success_count"] += 1
                 summary["api_qa_proposal_count"] += 1
             stage64_qa_repair_audit: dict[str, Any] = {}
-            if stage64_formal_mining:
+            if claim_first_multiqa:
+                if not isinstance(claim_first_primary_qa, dict):
+                    raise RuntimeError("claim-first compatible primary QA is missing")
+                qa = copy.deepcopy(claim_first_primary_qa)
+                qa_proposal_for_build = None
+            elif stage64_formal_mining:
                 try:
                     qa, qa_proposal_for_build = (
                         build_stage64_qa_with_local_repairs(
@@ -25607,6 +35419,90 @@ def generate_graph_conditioned_api_dialogue_samples(
                         "stage64_target_identity": target_identity,
                         "stage64_target_id": target_identity,
                         "stage64_target_plan_sha256": target_plan_sha256,
+                    }
+                )
+            if claim_first_multiqa:
+                if not isinstance(claim_first_bundle, dict) or not isinstance(
+                    claim_first_primary, dict
+                ):
+                    raise RuntimeError("claim-first accepted artifacts are missing")
+                clean_sample["claim_first_multiqa_bundle"] = copy.deepcopy(
+                    claim_first_bundle
+                )
+                clean_sample["claim_bundle_hash"] = claim_first_bundle.get(
+                    "claim_bundle_hash"
+                )
+                clean_sample["claim_proof_hashes"] = copy.deepcopy(
+                    claim_first_bundle.get("proof_sha256_by_qa_id") or {}
+                )
+                clean_sample["dialogue_family_id"] = claim_first_bundle.get(
+                    "dialogue_family_id"
+                )
+                clean_sample["dialogue_family_split"] = claim_first_bundle.get(
+                    "dialogue_family_split"
+                )
+                clean_sample["claim_first_qa_count"] = int(
+                    claim_first_bundle.get("qa_count") or 0
+                )
+                clean_sample["claim_first_primary_qa_id"] = (
+                    claim_first_primary.get("qa_id")
+                )
+                clean_sample["claim_first_target_fulfillment_qa_id"] = (
+                    claim_first_bundle.get("target_fulfillment_qa_id")
+                )
+                clean_sample["claim_first_target_fulfillment_pass"] = (
+                    claim_first_bundle.get("target_fulfillment_pass") is True
+                )
+                clean_sample["metadata"].update(
+                    {
+                        "claim_first_multiqa": True,
+                        "claim_first_truth_compiled_before_dialogue": True,
+                        "claim_first_claim_bundle_hash": claim_first_bundle.get(
+                            "claim_bundle_hash"
+                        ),
+                        "claim_first_claim_bundle_hash_stable": True,
+                        "claim_first_dialogue_family_id": claim_first_bundle.get(
+                            "dialogue_family_id"
+                        ),
+                        "claim_first_dialogue_family_split": claim_first_bundle.get(
+                            "dialogue_family_split"
+                        ),
+                        "claim_first_qa_count": claim_first_bundle.get("qa_count"),
+                        "claim_first_primary_qa_id": claim_first_primary.get(
+                            "qa_id"
+                        ),
+                        "claim_first_target_fulfillment_qa_id": (
+                            claim_first_bundle.get("target_fulfillment_qa_id")
+                        ),
+                        "claim_first_target_fulfillment_pass": (
+                            claim_first_bundle.get("target_fulfillment_pass")
+                        ),
+                        "claim_first_semantic_validator_pass_qa_count": (
+                            claim_first_bundle.get(
+                                "semantic_validator_pass_qa_count"
+                            )
+                        ),
+                        "claim_first_question_surface_source": (
+                            "local_frozen_skeleton"
+                        ),
+                        "qa_generated_by_api_stage64_schema": False,
+                        "qa_generated_by_local_claim_first_compiler": True,
+                        "truth_first_generate_by_construction": bool(
+                            truth_first_mode
+                        ),
+                        "stage64_target_role": (
+                            "graph_dialogue_allocation_and_primary_qa_fulfillment"
+                        ),
+                    }
+                )
+                clean_sample["attack_plan"].update(
+                    {
+                        "reasoning_mechanism": (
+                            "claim_first_pre_dialogue_truth_post_alignment_support_binding"
+                        ),
+                        "target_solver_weakness": (
+                            "long_dialogue_frozen_claim_proof_reasoning"
+                        ),
                     }
                 )
             validate_final_clean_sample(clean_sample, known_anchors, hashes)
@@ -25808,6 +35704,78 @@ def generate_graph_conditioned_api_dialogue_samples(
                 "current_graph_dialogue_alignment_pass": True,
                 "qa_generated_after_alignment": True,
                 "old_qa_reused": False,
+                "claim_first_multiqa": bool(claim_first_multiqa),
+                "truth_first_generate_by_construction": bool(truth_first_mode),
+                "truth_first_generation_contract": (
+                    TRUTH_FIRST_GENERATION_CONTRACT
+                    if truth_first_mode
+                    else None
+                ),
+                "claim_first_truth_compiled_before_dialogue": bool(
+                    claim_first_multiqa
+                    and isinstance(claim_first_bundle, dict)
+                    and claim_first_bundle.get("claim_bundle_hash_stable") is True
+                ),
+                "claim_first_semantics_frozen_before_dialogue": bool(
+                    claim_first_multiqa
+                    and isinstance(pre_claim_ir, dict)
+                    and isinstance(precompiled_claim_first, dict)
+                ),
+                "claim_first_support_bound_after_alignment": bool(
+                    claim_first_multiqa
+                    and isinstance(claim_first_bundle, dict)
+                    and int(claim_first_bundle.get("support_bound_qa_count") or 0)
+                    >= int(claim_first_bundle.get("qa_count") or 0)
+                ),
+                "claim_first_independent_validator_pass": bool(
+                    claim_first_multiqa
+                    and isinstance(claim_first_bundle, dict)
+                    and claim_first_bundle.get("proof_ready") is True
+                ),
+                "claim_first_question_surface_source": (
+                    "local_frozen_skeleton" if claim_first_multiqa else None
+                ),
+                "claim_first_qa_count": int(
+                    (claim_first_bundle or {}).get("qa_count") or 0
+                ),
+                "claim_first_validator_pass_qa_count": int(
+                    (claim_first_bundle or {}).get("validator_pass_qa_count") or 0
+                ),
+                "claim_first_validator_reject_qa_count": int(
+                    (claim_first_bundle or {}).get("validator_reject_qa_count") or 0
+                ),
+                "claim_first_semantic_validator_pass_qa_count": int(
+                    (claim_first_bundle or {}).get(
+                        "semantic_validator_pass_qa_count"
+                    )
+                    or 0
+                ),
+                "claim_first_semantic_validator_reject_qa_count": int(
+                    (claim_first_bundle or {}).get(
+                        "semantic_validator_reject_qa_count"
+                    )
+                    or 0
+                ),
+                "claim_first_primary_qa_id": (
+                    (claim_first_primary or {}).get("qa_id")
+                ),
+                "claim_first_target_fulfillment_qa_id": (
+                    (claim_first_bundle or {}).get("target_fulfillment_qa_id")
+                ),
+                "claim_first_target_fulfillment_pass": bool(
+                    claim_first_multiqa
+                    and isinstance(claim_first_bundle, dict)
+                    and claim_first_bundle.get("target_fulfillment_pass") is True
+                ),
+                "claim_first_legacy_final_qa_api_skipped": bool(
+                    claim_first_multiqa
+                ),
+                "claim_first_legacy_qa_repair_skipped": bool(
+                    claim_first_multiqa
+                ),
+                "qa_generated_by_api_stage64_schema": False
+                if claim_first_multiqa
+                else bool(qa.get("stage64_api_qa_schema_pass")),
                 "formal_mining_eligible": bool(alignment_result.get("formal_mining_eligible", True)),
                 "deterministic_scaffold_used": False if stage64_formal_mining else None,
                 "dialogue_local_padding_used": bool(
@@ -26016,26 +35984,45 @@ def generate_graph_conditioned_api_dialogue_samples(
                     )
                 ),
                 "formal_mining_qa_generated_after_frozen_alignment": bool(
-                    stage64_formal_mining
-                    and final_qa_meta.get("used") is True
-                    and final_qa_meta.get("frozen_dependencies") == hashes
-                    and stage64_qa_repair_audit.get(
-                        "frozen_dependencies"
-                    )
-                    == hashes
-                    and stage64_qa_repair_audit.get(
-                        "frozen_context_verified"
-                    )
+                    (
+                    claim_first_multiqa
+                    and isinstance(claim_first_bundle, dict)
+                    and claim_first_bundle.get("proof_ready") is True
+                    and claim_first_bundle.get("claim_bundle_hash_stable")
                     is True
-                    and bool(
-                        stage64_qa_repair_audit.get(
-                            "chosen_candidate_sha256"
+                    and claim_first_bundle.get("qa_semantics_hash_stable")
+                    is True
+                    and isinstance(claim_first_primary, dict)
+                        and bool(claim_first_primary.get("qa_id"))
+                    )
+                    or (
+                        not claim_first_multiqa
+                        and stage64_formal_mining
+                        and final_qa_meta.get("used") is True
+                        and final_qa_meta.get("frozen_dependencies") == hashes
+                        and stage64_qa_repair_audit.get(
+                            "frozen_dependencies"
+                        )
+                        == hashes
+                        and stage64_qa_repair_audit.get(
+                            "frozen_context_verified"
+                        )
+                        is True
+                        and bool(
+                            stage64_qa_repair_audit.get(
+                                "chosen_candidate_sha256"
+                            )
                         )
                     )
                 ),
                 "ordering_identity_gold": qa.get("question_type") == "ordering" and qa.get("gold") == list(LETTERS[: len(qa.get("gold") or [])]),
             }
             if stage64_formal_mining:
+                # Long-form and segmented protocols are both API-authored.
+                # Only the latter has a per-segment marker/prefix audit; do
+                # not reject a validated long-form append merely because it
+                # did not use that optional implementation protocol.
+                requires_segmented_protocol_audit = use_segmented_stage3_dialogue
                 if clean_sample["native_contract"]["dialogue_local_padding_used"]:
                     raise NativeGraphDialogueReject(
                         "formal Stage64 mining rejects locally padded dialogue"
@@ -26044,15 +36031,23 @@ def generate_graph_conditioned_api_dialogue_samples(
                     raise NativeGraphDialogueReject(
                         "formal Stage64 mining requires API-native appended dialogue"
                     )
-                if clean_sample["native_contract"]["formal_mining_segmented_dialogue"] is not True:
+                if (
+                    requires_segmented_protocol_audit
+                    and clean_sample["native_contract"]["formal_mining_segmented_dialogue"]
+                    is not True
+                ):
                     raise NativeGraphDialogueReject(
                         "formal Stage64 mining requires segmented API-native appended dialogue"
                     )
-                if clean_sample["native_contract"]["formal_mining_prefix_hash_chain_verified"] is not True:
+                if (
+                    requires_segmented_protocol_audit
+                    and clean_sample["native_contract"]["formal_mining_prefix_hash_chain_verified"]
+                    is not True
+                ):
                     raise NativeGraphDialogueReject(
                         "formal Stage64 mining requires a verified immutable prefix hash chain"
                     )
-                if (
+                if requires_segmented_protocol_audit and (
                     clean_sample["native_contract"].get(
                         "formal_mining_parent_context_schema_version"
                     )
@@ -26101,7 +36096,7 @@ def generate_graph_conditioned_api_dialogue_samples(
                     raise NativeGraphDialogueReject(
                         "formal Stage64 mining requires zero parent-verbatim prompt exposure and full-parent output duplicate auditing"
                     )
-                if (
+                if requires_segmented_protocol_audit and (
                     clean_sample["native_contract"].get(
                         "formal_mining_accepted_prefix_context_schema_version"
                     )
@@ -26150,11 +36145,15 @@ def generate_graph_conditioned_api_dialogue_samples(
                     raise NativeGraphDialogueReject(
                         "formal Stage64 mining requires zero accepted-prefix-verbatim prompt exposure"
                     )
-                if clean_sample["native_contract"]["formal_mining_marker_scheduler_verified"] is not True:
+                if (
+                    requires_segmented_protocol_audit
+                    and clean_sample["native_contract"]["formal_mining_marker_scheduler_verified"]
+                    is not True
+                ):
                     raise NativeGraphDialogueReject(
                         "formal Stage64 mining requires complete, unique capped marker scheduling"
                     )
-                if (
+                if requires_segmented_protocol_audit and (
                     clean_sample["native_contract"].get(
                         "formal_mining_difficulty_evidence_placement_applicable"
                     )
@@ -26167,11 +36166,15 @@ def generate_graph_conditioned_api_dialogue_samples(
                     raise NativeGraphDialogueReject(
                         "formal Stage64 mining requires primary evidence in the requested difficulty band"
                     )
-                if clean_sample["native_contract"]["formal_mining_exact_claim_preflight_verified"] is not True:
+                if (
+                    requires_segmented_protocol_audit
+                    and clean_sample["native_contract"]["formal_mining_exact_claim_preflight_verified"]
+                    is not True
+                ):
                     raise NativeGraphDialogueReject(
                         "formal Stage64 mining requires a verified exact-claim lexical preflight"
                     )
-                if (
+                if requires_segmented_protocol_audit and (
                     clean_sample["native_contract"].get(
                         "formal_mining_turn_duplicate_audit_version"
                     )
@@ -26194,7 +36197,7 @@ def generate_graph_conditioned_api_dialogue_samples(
                     raise NativeGraphDialogueReject(
                         "formal Stage64 mining requires a verified duplicate-free segmented dialogue audit"
                     )
-                if (
+                if requires_segmented_protocol_audit and (
                     clean_sample["native_contract"].get(
                         "formal_mining_opening_diversity_audit_version"
                     )
@@ -26213,7 +36216,7 @@ def generate_graph_conditioned_api_dialogue_samples(
                     raise NativeGraphDialogueReject(
                         "formal Stage64 mining requires a verified opening-diverse segmented dialogue audit"
                     )
-                if (
+                if requires_segmented_protocol_audit and (
                     int(clean_sample["native_contract"].get("formal_mining_marker_cap_per_segment") or 0)
                     != FORMAL_DIALOGUE_MAX_MARKERS_PER_SEGMENT
                     or int(clean_sample["native_contract"].get("formal_mining_marker_max_assigned_per_segment") or 0)
@@ -26291,6 +36294,28 @@ def generate_graph_conditioned_api_dialogue_samples(
                 "current_anchor_to_event_instance_id": anchor_to_event,
                 "raw_current_alignment_proposal": raw_alignment_proposal,
                 "hashes": hashes,
+                **(
+                    {
+                        "claim_first_multiqa_bundle": copy.deepcopy(
+                            claim_first_bundle
+                        ),
+                        "claim_bundle_hash": claim_first_bundle.get(
+                            "claim_bundle_hash"
+                        ),
+                        "claim_proof_hashes": copy.deepcopy(
+                            claim_first_bundle.get("proof_sha256_by_qa_id") or {}
+                        ),
+                        "dialogue_family_id": claim_first_bundle.get(
+                            "dialogue_family_id"
+                        ),
+                        "claim_first_qa_count": claim_first_bundle.get(
+                            "qa_count"
+                        ),
+                    }
+                    if claim_first_multiqa
+                    and isinstance(claim_first_bundle, dict)
+                    else {}
+                ),
                 "diagnostics": {
                     "api_graph_meta": graph_meta,
                     "api_dialogue_meta": dialogue_meta,
@@ -26304,6 +36329,19 @@ def generate_graph_conditioned_api_dialogue_samples(
             raw_record["accepted"] = True
             raw_record["sample_id"] = clean_sample.get("sample_id")
             raw_record["length_metadata"] = accepted_length_metadata
+            if claim_first_multiqa and isinstance(claim_first_bundle, dict):
+                raw_record["claim_bundle_hash"] = claim_first_bundle.get(
+                    "claim_bundle_hash"
+                )
+                raw_record["claim_proof_hashes"] = copy.deepcopy(
+                    claim_first_bundle.get("proof_sha256_by_qa_id") or {}
+                )
+                raw_record["dialogue_family_id"] = claim_first_bundle.get(
+                    "dialogue_family_id"
+                )
+                raw_record["claim_first_qa_count"] = claim_first_bundle.get(
+                    "qa_count"
+                )
             # The hard-cap check, append, accepted counters, and checkpoint are done SERIALLY
             # by the collector (they depend on cross-sample accepted counts).
             return {
@@ -26478,7 +36516,20 @@ def generate_graph_conditioned_api_dialogue_samples(
                     temp_summary.update(
                         stage64_target_ledger.quota_summary(clean_samples)
                     )
-                _write_generation_files(output, clean_samples, marked_samples, raw_records, rejects, temp_summary)
+                _write_generation_files(
+                    output,
+                    clean_samples,
+                    marked_samples,
+                    raw_records,
+                    rejects,
+                    temp_summary,
+                    truth_first_mode=truth_first_mode,
+                    claim_first_min_qas=int(claim_first_settings["min_qas"]),
+                    claim_first_max_qas=int(claim_first_settings["max_qas"]),
+                    claim_first_eval_per_mille=int(
+                        claim_first_settings["eval_per_mille"]
+                    ),
+                )
         return resolved
 
     def _planned_cell_for_slot(slot: int) -> dict[str, str] | None:
@@ -26782,7 +36833,18 @@ def generate_graph_conditioned_api_dialogue_samples(
             "attack_skill_match_rate": round(skill_match / n_planned, 6) if n_planned else 0.0,
             "planned_question_type_quota": dict(quota_scheduler.qtype_quota) if quota_scheduler else {},
         }
-    _write_generation_files(output, clean_samples, marked_samples, raw_records, rejects, summary)
+    _write_generation_files(
+        output,
+        clean_samples,
+        marked_samples,
+        raw_records,
+        rejects,
+        summary,
+        truth_first_mode=truth_first_mode,
+        claim_first_min_qas=int(claim_first_settings["min_qas"]),
+        claim_first_max_qas=int(claim_first_settings["max_qas"]),
+        claim_first_eval_per_mille=int(claim_first_settings["eval_per_mille"]),
+    )
     if len(clean_samples) < n_samples:
         shortfall_msg = (
             f"graph_conditioned_api_dialogue generated {len(clean_samples)}/{n_samples}; "
@@ -26796,7 +36858,20 @@ def generate_graph_conditioned_api_dialogue_samples(
         if curriculum_mode == EASY_V2_MODE and len(clean_samples) > 0:
             summary["shortfall"] = True
             summary["shortfall_message"] = shortfall_msg
-            _write_generation_files(output, clean_samples, marked_samples, raw_records, rejects, summary)
+            _write_generation_files(
+                output,
+                clean_samples,
+                marked_samples,
+                raw_records,
+                rejects,
+                summary,
+                truth_first_mode=truth_first_mode,
+                claim_first_min_qas=int(claim_first_settings["min_qas"]),
+                claim_first_max_qas=int(claim_first_settings["max_qas"]),
+                claim_first_eval_per_mille=int(
+                    claim_first_settings["eval_per_mille"]
+                ),
+            )
             return clean_samples
         raise RuntimeError(shortfall_msg)
     return clean_samples

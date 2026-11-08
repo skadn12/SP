@@ -2,7 +2,15 @@
 
 本地部署与文件分工见 [`docs/LOCAL_SETUP.md`](docs/LOCAL_SETUP.md)。该文档说明哪些文件需要从服务器复制到本地，以及如何继续使用远程 Qwen/Memorax API。
 
-## 当前分支：Stage3 run234 checkpoint
+## 2026-11-08 发布快照
+
+本次更新发布在现有 `skadn12/SP` 项目的 `publish/current-method-r2-20261108` 分支。
+当前入口、范围和离线检查见 [发布说明](docs/PUBLISH_SCOPE_20261108.md)。
+新增内容包括 Memorax 对话扩展依赖、QA 生成与门禁、F/G 作者合同、R2 训练/固定验证工具和 MultiRC/BAMBOO smoke runner。
+本次保留研究实现及冻结路径，不改实验方法；训练工具按原工作区目录保存源码，依赖的数据、manifest、模型和凭据需另行准备。
+下述 Stage3 run234 及后续旧流程说明为历史记录，不代表 11 月当前主线状态。
+
+## 历史记录：Stage3 run234 checkpoint
 
 > 本节只描述 GitHub 分支 `checkpoint/stage3-run234-20260716`。它是一次可恢复的开发快照，不代表已经通过 Stage3 数据生产门槛。
 

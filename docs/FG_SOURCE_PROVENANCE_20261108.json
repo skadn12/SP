@@ -1,0 +1,150 @@
+{
+  "scope": "Selected reusable F/G preparation, author contracts, review and export source; generated questions/data/reports excluded. Files are byte-identical snapshots, not authorization to run historical jobs.",
+  "files": [
+    {
+      "source_workspace_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/AUTHOR_CONTRACT.txt",
+      "published_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/AUTHOR_CONTRACT.txt",
+      "sha256": "02d5512051041f3cf200c934356c9a7c74e957f45d62c6fa39f4dd8fb7746b85"
+    },
+    {
+      "source_workspace_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/prepare_batch.py",
+      "published_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/prepare_batch.py",
+      "sha256": "477423f1978c94ddb0648f7e39146c11651f984d29daaf51185affedb648f3ec"
+    },
+    {
+      "source_workspace_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/maintain_frozen_artifacts.py",
+      "published_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/maintain_frozen_artifacts.py",
+      "sha256": "bd898ce076223e133cdc3aa1519649bc408c73f25a34398383fe6f7e6b4f94ee"
+    },
+    {
+      "source_workspace_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/frozen_assessments.py",
+      "published_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/frozen_assessments.py",
+      "sha256": "2eb21a640eb074ccc7f1589baa89b250a5c3b40d211517dafd5a0436796dc25c"
+    },
+    {
+      "source_workspace_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/apply_warning_policy_view.py",
+      "published_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/apply_warning_policy_view.py",
+      "sha256": "6ef2d572b96555007087d92751cbe185b63f4138942067f6f8573febce58a739"
+    },
+    {
+      "source_workspace_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/close_completed_batch.py",
+      "published_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/close_completed_batch.py",
+      "sha256": "89f472db6cfdf4d64dcb926721ef52260e8f7c14b9096fb0543e18a12088efdb"
+    },
+    {
+      "source_workspace_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/inspect_completed_outputs.py",
+      "published_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/inspect_completed_outputs.py",
+      "sha256": "eac15298fe268d5d9719de7cc4f63e8f293416d686bc294c4395bdb76ec1a4f1"
+    },
+    {
+      "source_workspace_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/freeze_next_feedback.py",
+      "published_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/freeze_next_feedback.py",
+      "sha256": "62de35eed8df37f930fa2eba316e6161563f34144168fd6ba25fefeb5f14e954"
+    },
+    {
+      "source_workspace_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/audit_final_execution.py",
+      "published_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/audit_final_execution.py",
+      "sha256": "416bd33a9ef1700ac6470bc80a9b6e2ed6e36fa5b1833a1676d4e9267cdf23d8"
+    },
+    {
+      "source_workspace_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/seal_final_export.py",
+      "published_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/seal_final_export.py",
+      "sha256": "e0232c30a1c71d3c4fcf7d31a84d431476db9943025db7db989eb5e7cf9ccff1"
+    },
+    {
+      "source_workspace_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/source_preparation/prepare_sources.py",
+      "published_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/source_preparation/prepare_sources.py",
+      "sha256": "a051a4b1c7d654f605a00df3b86b1d6fd09598e22072d2d356101a66881a26c5"
+    },
+    {
+      "source_workspace_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/union_selection/select_final_candidates.py",
+      "published_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/union_selection/select_final_candidates.py",
+      "sha256": "c51d39a6861efe7e477cd2c73f820f4647cdb9c18c597bfb64f784533b3183c1"
+    },
+    {
+      "source_workspace_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261105_FG_exploration_run01/AUTHOR_CONTRACT.txt",
+      "published_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261105_FG_exploration_run01/AUTHOR_CONTRACT.txt",
+      "sha256": "a3a4feaec52c5244f562e13001acde300e8eb5e8481997174a14c63bba8efd4b"
+    },
+    {
+      "source_workspace_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261105_FG_exploration_run01/freeze_references.py",
+      "published_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261105_FG_exploration_run01/freeze_references.py",
+      "sha256": "d22aaf27545f9f4ad4b0451b4de1acc99e51b5bdb41827da55f0e13681e583e4"
+    },
+    {
+      "source_workspace_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261105_FG_exploration_run01/prepare_artifact_audit.py",
+      "published_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261105_FG_exploration_run01/prepare_artifact_audit.py",
+      "sha256": "f6bfd17e4f3bb5963ff8fd028b89e59790999b2f533eeea781e555da032293bd"
+    },
+    {
+      "source_workspace_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261105_FG_exploration_run01/freeze_sealed_projection.py",
+      "published_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261105_FG_exploration_run01/freeze_sealed_projection.py",
+      "sha256": "6d6c55ab69ab31ccc9634770317b8829baf5c79a4e4040c5dcd67d9cfd0a0d0a"
+    },
+    {
+      "source_workspace_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261105_FG_exploration_run01/prepare_review_packets.py",
+      "published_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261105_FG_exploration_run01/prepare_review_packets.py",
+      "sha256": "518ac270b3af17bf759ab918c71145cf4000dac2647bee2a8f5be636f5cc9ab6"
+    },
+    {
+      "source_workspace_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261105_FG_exploration_run01/finalize_exploration.py",
+      "published_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261105_FG_exploration_run01/finalize_exploration.py",
+      "sha256": "59fe0162c69ce370990f9bdff322b62365d5f357d8be34caf46c31f9c65ecd1e"
+    },
+    {
+      "source_workspace_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261105_FG_exploration_run01/quality_source_review_20261108_v1/audit_review_records.py",
+      "published_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261105_FG_exploration_run01/quality_source_review_20261108_v1/audit_review_records.py",
+      "sha256": "919f6c57d916a29095885e9327cf7abe7caeaddb3f6bf333ce1ab348dbf155e1"
+    },
+    {
+      "source_workspace_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261105_FG_exploration_run01/quality_source_review_20261108_v1/canonical_review_resolver.py",
+      "published_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261105_FG_exploration_run01/quality_source_review_20261108_v1/canonical_review_resolver.py",
+      "sha256": "626eb32f19db469ef432938ca2222e8f5beb2347312613db28ba96d20e1b12f0"
+    },
+    {
+      "source_workspace_path": "research-protocols/selfplay_week_20261019/root_capacity_feedback_20261104_run01/finalize_batch.py",
+      "published_path": "research-protocols/selfplay_week_20261019/root_capacity_feedback_20261104_run01/finalize_batch.py",
+      "sha256": "a6c5e1a1b64b746e7a10652fb09d803d13f5c4e46bfa0de6099972aa09a75060"
+    },
+    {
+      "source_workspace_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/batch_02/prepare_batch.py",
+      "published_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/batch_02/prepare_batch.py",
+      "sha256": "477423f1978c94ddb0648f7e39146c11651f984d29daaf51185affedb648f3ec"
+    },
+    {
+      "source_workspace_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/batch_03/prepare_batch.py",
+      "published_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/batch_03/prepare_batch.py",
+      "sha256": "477423f1978c94ddb0648f7e39146c11651f984d29daaf51185affedb648f3ec"
+    },
+    {
+      "source_workspace_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/batch_04/prepare_batch.py",
+      "published_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/batch_04/prepare_batch.py",
+      "sha256": "477423f1978c94ddb0648f7e39146c11651f984d29daaf51185affedb648f3ec"
+    },
+    {
+      "source_workspace_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/batch_05/prepare_batch.py",
+      "published_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/batch_05/prepare_batch.py",
+      "sha256": "477423f1978c94ddb0648f7e39146c11651f984d29daaf51185affedb648f3ec"
+    },
+    {
+      "source_workspace_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/batch_06/prepare_batch.py",
+      "published_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/batch_06/prepare_batch.py",
+      "sha256": "477423f1978c94ddb0648f7e39146c11651f984d29daaf51185affedb648f3ec"
+    },
+    {
+      "source_workspace_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/batch_07/prepare_batch.py",
+      "published_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/batch_07/prepare_batch.py",
+      "sha256": "477423f1978c94ddb0648f7e39146c11651f984d29daaf51185affedb648f3ec"
+    },
+    {
+      "source_workspace_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/batch_08/prepare_batch.py",
+      "published_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/batch_08/prepare_batch.py",
+      "sha256": "477423f1978c94ddb0648f7e39146c11651f984d29daaf51185affedb648f3ec"
+    },
+    {
+      "source_workspace_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/batch_09/prepare_batch.py",
+      "published_path": "research-protocols/selfplay_week_20261019/training_set_rebuild_20261104_run01/batch_09/prepare_batch.py",
+      "sha256": "477423f1978c94ddb0648f7e39146c11651f984d29daaf51185affedb648f3ec"
+    }
+  ]
+}

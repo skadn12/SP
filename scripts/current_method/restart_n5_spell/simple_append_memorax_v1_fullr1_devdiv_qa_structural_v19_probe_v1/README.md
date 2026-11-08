@@ -14,6 +14,29 @@ python -m scripts.current_method.restart_n5_spell.simple_append_memorax_v1_fullr
 
 The explicit `--live` flag permits the unique Writer call after preflight.
 
+## Explicit Input Override
+
+The historical v19 input remains the default. To audit a different frozen
+expanded dialogue, pass its paths explicitly and add
+`--allow-input-override`. The override freezes the supplied dialogue and
+overview SHA, root identity, turn count, prompt SHA, and the current protected
+module tree snapshots for that run; it does not alter any input file or relax
+the Solver/Writer contract.
+
+For example, a zero-API preflight over a completed expansion is:
+
+```bash
+python -m scripts.current_method.restart_n5_spell.simple_append_memorax_v1_fullr1_devdiv_qa_structural_v19_probe_v1.structural_qa_live \
+  --allow-input-override \
+  --expanded-dialogue /path/to/expanded_dialogue.json \
+  --memory-overview /path/to/post_generation_overview.json \
+  --run-root /path/to/new-qa-run-root \
+  --writer-only
+```
+
+The override is opt-in. Without it, the historical episode, SHA constants,
+baseline inventory, and protected expected tree hashes are still required.
+
 ## Copied Full-R1 Reference
 
 # Simple Append + Memorax: Full-R1 Development-Diversity Probe v1
