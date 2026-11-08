@@ -13,6 +13,7 @@
 | R2 候选准入、训练与验证 | `research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/final_training/` |
 | 训练器 | `train_qwen3_lora_sft.py` |
 | Formal Solver | `research-protocols/selfplay_week_20261019/training_set_rebuild_20261108_overnight_run01/solver_eval_20261108_strict128_formal/` |
+| 历史 DEV485 多展示评估 | `scripts/current_method/restart_n5_spell/h4_round0_common_dev_eval_v1/` |
 | MultiRC/BAMBOO smoke | `external_eval/smoke_eval.py` |
 
 这些路径是源码索引，不是新的运行指令。应按目标实验的冻结合同、manifest、输入哈希和实际完成记录确定调用链。历史实验的目录名、脚本或合同不构成重新运行的授权。
@@ -35,5 +36,6 @@
 
 - [扩展依赖来源](docs/EXPANSION_SOURCE_PROVENANCE_20261108.json)、[F/G 来源](docs/FG_SOURCE_PROVENANCE_20261108.json)、[R2 来源](docs/R2_SOURCE_PROVENANCE_20261108.json)。
 - [本次清理范围和验证](docs/CLEANUP_20261108.md)。
+- [复现依赖与已知缺口](docs/REPRODUCIBILITY_20261108.md)。
 - 实际数据、样本题、Gold、对话、私有审核、模型响应、权重、日志、运行现场、密钥及第三方未核实许可的文件未纳入当前文件树。部分历史脚本本身混有实际事实或审核，须在受控环境中单独保管。
 - 旧文件从当前 `main` 文件树移除，既有 Git 历史仍保留；SP-820 为独立仓库，本次不修改。

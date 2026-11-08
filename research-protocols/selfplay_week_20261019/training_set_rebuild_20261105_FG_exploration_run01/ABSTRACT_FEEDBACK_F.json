@@ -1,0 +1,27 @@
+{
+  "card_id": "FC09_MCLEAN_LIMITED_20261104_B09",
+  "status": "observed_on_mclean_limited",
+  "checkpoint": "M-clean",
+  "confidence": "Limited calibration and 8 completed batches. Repeated samples, shared sources and semantic families are correlated; no general or internal causal weakness is established.",
+  "abstract_search_hypotheses": [
+    "A natural complete-set question may reveal omission, extra selection or loss of entity/plan/completion scope between supported facts and the final answer.",
+    "A source-defined sequence or prerequisite relation set may reveal reversed/invented relations, omitted indirect prerequisites, or disagreement between the visible reasoning and final answer."
+  ],
+  "batch_review_assessment": [
+    "Visible examples include unsupported extras, complete-set omissions, ordering reversals and partial-relation direction errors; these are separate observed output patterns, not one inferred mechanism.",
+    "Correct and fully strict-valid tasks provide counterexamples. Keep state/speaker bindings and queried relation domains explicit while discovering natural needs; do not assume every local task exposes a weakness.",
+    "Strict format validity or a correct final box does not establish every item judgment/reason/citation is semantically aligned. Feedback remains abstract and does not alter frozen scoring or first answers."
+  ],
+  "alternative_explanations": [
+    "Displayed-item mapping, speaker/action-state attribution, multi-step sequence reconstruction, query-domain tracking, wording and ordinary source ambiguity.",
+    "Some tasks are locally easy or context-free; language and author/root/structure are mixed and samples correlated."
+  ],
+  "applicability": "Discover real relations and a natural information need in the complete assigned source. Require individually decidable claims or a uniquely defined relation set.",
+  "do_not_force": [
+    "No fixed Gold count, question-type ratio or complexity threshold.",
+    "Do not copy prior tasks or build artificial bundles to match a hypothesis.",
+    "Do not assume all local sets or sequences of these kinds are difficult."
+  ],
+  "exploration_direction": "Explore naturally supported multi-select, complete ordering and partial ordering. A local or easy task may be sound, and a root may yield zero safe new questions.",
+  "no_private_case_wording_options_gold_blind_or_solver_answers": true
+}
