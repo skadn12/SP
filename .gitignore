@@ -2,6 +2,10 @@
 config.json
 *.env
 .env
+.env.*
+*.pem
+*.key
+.netrc
 
 # Generated runs and datasets
 runs/
@@ -20,9 +24,10 @@ current_method_runs/
 *.nohup.log
 *.log
 
-# Curated reproducibility data included with this repository.
-!data/
-!data/**
+# Data and generated content remain outside this source tree.
+data/
+datasets/
+*.jsonl.gz
 
 # Model/checkpoint artifacts
 checkpoints/

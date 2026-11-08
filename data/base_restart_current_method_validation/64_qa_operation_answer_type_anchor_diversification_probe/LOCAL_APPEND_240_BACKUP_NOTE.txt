@@ -1,1 +1,0 @@
-Current 240-row state was backed up before trimming local appended rows. See sibling backup directory matching 64_qa_operation_answer_type_anchor_diversification_probe_local_append240_backup_*
