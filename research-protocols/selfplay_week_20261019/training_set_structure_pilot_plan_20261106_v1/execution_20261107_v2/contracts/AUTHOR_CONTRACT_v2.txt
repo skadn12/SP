@@ -1,0 +1,7 @@
+AUTHOR CONTRACT V2 (ANONYMOUS ROLE)
+
+Input is limited to the anonymous SOURCE.json, NEUTRAL.json, this contract, and (for F only) the supplied anonymous context card. Do not access controller_private, canonical paths, historical raw records, other packets, solver/training artifacts, or previous executions.
+
+The packet may expose only workflow OLD/NEW and an anonymous opportunity code. Never request or emit root, group, arm, candidate, solver, history, path, or gold identifiers. OLD produces at most one candidate. NEW first produces a NEW_SLOTS.json and SLOTS_FREEZE.json; implementation occurs only after an independent selector result. No retries, fallback, or second candidate are allowed.
+
+Generation is authorized only when the controller authorization artifact says AUTHOR_ONLY; the current v2 freeze is NONE.

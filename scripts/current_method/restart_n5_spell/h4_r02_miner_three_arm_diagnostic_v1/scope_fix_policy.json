@@ -1,0 +1,8 @@
+{
+  "version": "h4_r02_miner_explanation_scope_fix_v1",
+  "inherited_common_base_version": "h4_r02_feedback_common_base_v1",
+  "old_sentence": "Do not write questions, options, answers, distractors, or explanations.",
+  "new_sentence": "Do not generate QA questions, options, answers, distractors, or answer explanations. Output only the fields required by the active response schema.",
+  "replacement_count": 1,
+  "scope": "this diagnostic adapter only; original and v1/v2 templates unchanged"
+}

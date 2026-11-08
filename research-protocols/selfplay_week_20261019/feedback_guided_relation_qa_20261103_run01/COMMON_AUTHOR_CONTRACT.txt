@@ -1,0 +1,17 @@
+本轮由 Codex 直接作 Challenger。你是其中一个独立作者上下文。只读取分配给你的完整来源、COMMON_AUTHOR_CONTRACT.txt、你的 AUTHOR_INPUT.json；不得读取其他作者目录、旧题、盲审、Solver 输出或本轮其他私有记录。
+使用原始完整对话发现自然信息需求与关系。每 root 最多一道新首稿，允许 NO_SAFE_QA。不改写旧题，不为数量增删旧选项。
+本轮只生成多选或完整排序，展示标签分别 A、B、C…与 I1、I2…。内部 stable option_id。没有题型配额，正确项数量2–6为允许范围且 n>g，不要求覆盖；不得以相同的“以下哪些说法得到原文支持”作为默认题干。优先直接问内容、行动、约束、证据或过程；这些不是题型模板配额。
+先写开放式信息需求、语义答案、证据与关系计划，以 exclusive create 保存 TARGETS_FROZEN.json（可包含多个备选及放弃原因）和 TARGETS_FREEZE.json（时间、SHA256），然后构造 CANDIDATES_FIRST_DRAFT.json。文件不得覆盖、不得看模型成绩后修订。
+逐个选项保留真值或排序位置、确切turn_ref、逐字quote、推导、干扰项真实误读路径；每题说明事件身份、必要证据、替代充分路径、删除证据影响、是否只是跨选项聚合；不要夸大困难度或全局最小性。低难度/局部判断可合格，不是拒绝理由。
+完整来源冻结，逐题审核引用轮次。来源原有origin/warnings如实传递，不能自行审批合成素材，也不能凭整个来源旧HOLD标记拒绝用户本轮已授权的研究实验；正式资格仍与内容质量分开。本轮为已授权的研究质量与Solver诊断，不导出正式训练池。
+输出 EXPLORATION.json（全文读取轮数、全部备选关系、保留拒绝理由），TARGETS_FROZEN.json / TARGETS_FREEZE.json，CANDIDATES_FIRST_DRAFT.json（{author_id,candidates:[...],failures:[...]}）。
+每候选统一字段：
+candidate_id,root_id,question_type(multi_select或ordering),question,
+options:[{option_id,text}],gold_option_ids:[语义ID，排序时有序],
+source_path,source_sha256,source_turn_count,natural_information_need,cognitive_task,difficulty_auxiliary,
+event_identity,relation_plan,evidence:[{turn_ref,quote,origin}],
+option_audit:[{option_id,correct(bool；排序可null),gold_position(排序从1起；多选null),reason,evidence:[{turn_ref,quote}],distractor_error_path}],
+evidence_audit:{sufficiency,necessity,alternative_paths,deletion_tests,aggregation_note},
+quality_concerns:[...],source_scope_note,targets_sha256。
+反馈作者额外按其 AUTHOR_INPUT.json 要求记录target_card_id、target_realization、predicted_error（具体语义option_id/排序对）及falsification；对照作者不接收这些字段。
+不得调用任何学校/远程模型API，不运行Solver，不训练，不修改生成算法/扩充流程/历史文件。只写分配的作者目录。独立盲审由另外的Codex上下文完成。所有作者与Reviewer属于同模型家族，不能声称异模型验证。

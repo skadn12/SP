@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stage_b_selector_audit_v1",
+  "title": "Controller-generated per-slot selection audit",
+  "description": "Review draft. This is an audit derivative and does not alter the selector's exact four-key response.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "input_hashes", "selector_result_sha256", "comparison_rule_version", "slot_count", "history_count", "slot_comparisons", "selected_slot_id", "status"],
+  "properties": {
+    "schema_version": {"const": "stage_b_selector_audit_v1"},
+    "input_hashes": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_sha256", "neutral_sha256", "slots_sha256", "history_sha256"],
+      "properties": {"source_sha256": {"$ref": "#/definitions/hash"}, "neutral_sha256": {"$ref": "#/definitions/hash"}, "slots_sha256": {"$ref": "#/definitions/hash"}, "history_sha256": {"$ref": "#/definitions/hash"}}
+    },
+    "selector_result_sha256": {"$ref": "#/definitions/hash"},
+    "comparison_rule_version": {"const": "stage_b_historical_slot_compare_v1"},
+    "slot_count": {"type": "integer", "minimum": 1, "maximum": 3},
+    "history_count": {"type": "integer", "minimum": 0},
+    "slot_comparisons": {
+      "type": "array", "minItems": 1, "maxItems": 3,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["slot_id", "feasibility_gate", "historical_comparisons", "summary", "decision", "decision_reason"],
+        "properties": {
+          "slot_id": {"enum": ["S01", "S02", "S03"]},
+          "feasibility_gate": {"type": "object", "additionalProperties": false, "required": ["evidence_sufficient", "scope_clear", "allowed_semantic_form_possible", "decision", "reason"], "properties": {"evidence_sufficient": {"type": ["boolean", "null"]}, "scope_clear": {"type": ["boolean", "null"]}, "allowed_semantic_form_possible": {"type": ["boolean", "null"]}, "decision": {"enum": ["PASS", "FAIL", "UNKNOWN"]}, "reason": {"type": "string"}}},
+          "historical_comparisons": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["history_item_id", "eligibility", "event", "information_need", "query_scope", "answer_operation", "evidence_family", "overall_comparison", "basis_fields"], "properties": {"history_item_id": {"type": "string"}, "eligibility": {"enum": ["ELIGIBLE_VERIFIED", "INELIGIBLE", "UNKNOWN"]}, "event": {"enum": ["MATCH", "DISTINCT", "UNKNOWN"]}, "information_need": {"enum": ["MATCH", "DISTINCT", "UNKNOWN"]}, "query_scope": {"enum": ["MATCH", "DISTINCT", "UNKNOWN"]}, "answer_operation": {"enum": ["MATCH", "DISTINCT", "UNKNOWN"]}, "evidence_family": {"enum": ["MATCH", "DISTINCT", "UNKNOWN"]}, "overall_comparison": {"enum": ["POSSIBLE_DUPLICATE", "DISTINCT_VERIFIED", "UNKNOWN"]}, "basis_fields": {"type": "array", "items": {"type": "string"}}}}},
+          "summary": {"type": "object", "additionalProperties": false, "required": ["eligible_verified", "ineligible", "unknown", "possible_duplicates", "distinct_verified", "unknown_not_counted_as_novel"], "properties": {"eligible_verified": {"type": "integer", "minimum": 0}, "ineligible": {"type": "integer", "minimum": 0}, "unknown": {"type": "integer", "minimum": 0}, "possible_duplicates": {"type": "integer", "minimum": 0}, "distinct_verified": {"type": "integer", "minimum": 0}, "unknown_not_counted_as_novel": {"const": true}}},
+          "decision": {"enum": ["SELECT", "REJECT_POSSIBLE_DUPLICATE", "REJECT_SCOPE", "REJECT_UNSUPPORTED", "NOT_SELECTED_TIEBREAK"]},
+          "decision_reason": {"type": "string"}
+        }
+      }
+    },
+    "selected_slot_id": {"type": ["string", "null"], "enum": ["S01", "S02", "S03", null]},
+    "status": {"enum": ["SELECTED", "NO_SAFE_QA", "FORM_UNSUPPORTED", "HISTORY_BASELINE_INCOMPLETE"]}
+  },
+  "definitions": {"hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}
+}

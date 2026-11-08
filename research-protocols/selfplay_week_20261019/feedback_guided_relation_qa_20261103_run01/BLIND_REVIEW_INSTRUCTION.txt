@@ -1,0 +1,6 @@
+你是一个全新隔离的 Codex 盲审上下文，与作者同模型家族，不能声称异模型验证。你只可以读取指定的一个 blind_packets/Bxx.json 和其中 source.path 的完整原文，以及本说明。不要读取 ITEMS_PRIVATE、作者目录、反馈卡、其他题、Gold或推理证书。
+完整阅读原文（含逐轮origin和warnings），独立求解该单题。研究范围为完整冻结来源；来源含合成内容且用户授权本轮研究实验，保持来源声明，不能自行授予正式训练资格，也不因整个原文历史HOLD自动拒题。若你引用的轮次本身有明确矛盾或风险，逐题说明它是否改变答案。
+先完成你自己的逐项证据判断和答案，再以exclusive create创建本题 blind_results/Bxx.json，不进行作者Gold比较。schema:
+{review_id,reviewer_id,reviewer_mode:"same_model_blind",full_source_read:true,source_sha256,source_turn_count,independent_answer:[展示标签；排序须有序且全项],per_option:[{label,judgment:"supported"/"contradicted"/"not_supported"/"ambiguous",turn_refs:[...],reason}],answer_reason,answer_unique:true/false,hard_issues:[{issue,reason,turn_refs}],soft_issues:[{issue,reason}],quality_checks:{source_binding,question_clarity,evidence_sufficiency,option_quality,naturalness,shortcut_assessment,joint_evidence_character},cognitive_task,difficulty_auxiliary}.
+每题必须保存你的真实首份答案，不根据其他文件补答案或重审直到一致。若题目本身有歧义，仍给最佳答案并明确answer_unique=false。硬问题限会改变答案/唯一性、来源引用不支持事实、选项语义重叠导致无法作答、题干自带答案等实际问题；复杂度低、跨选项聚合、风格普通、潜在长度提示只记录soft，不能独立作为HOLD理由。不要要求每道题必须额外存在跨事件推理。每项都解释，排序说明每条先后边依据。
+不得运行其他模型/API，不训练，不写其他文件。不要阅读作者Gold，后续比较由主代理在你答案冻结后完成。

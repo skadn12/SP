@@ -1,0 +1,147 @@
+{
+  "type": "object",
+  "properties": {
+    "root_id": {
+      "type": "string"
+    },
+    "scene": {
+      "type": "object",
+      "properties": {
+        "scene_ref": {
+          "type": "string"
+        },
+        "route": {
+          "type": "string"
+        },
+        "turns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "turn_ref": {
+                "type": "string"
+              },
+              "speaker": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "origin": {
+                "type": "string",
+                "enum": [
+                  "codex_synthetic_extension"
+                ]
+              }
+            },
+            "required": [
+              "turn_ref",
+              "speaker",
+              "text",
+              "origin"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 8,
+          "maxItems": 8
+        }
+      },
+      "required": [
+        "scene_ref",
+        "route",
+        "turns"
+      ],
+      "additionalProperties": false
+    },
+    "scene_native_mappings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "source_id": {
+            "type": "string"
+          },
+          "native_turn_id": {
+            "type": "string"
+          },
+          "native_quote": {
+            "type": "string"
+          },
+          "disposition": {
+            "type": "string",
+            "enum": [
+              "PRESERVED",
+              "OMITTED_NONMATERIAL"
+            ]
+          },
+          "rationale": {
+            "type": "string"
+          },
+          "source_evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "turn_ref": {
+                  "type": "string"
+                },
+                "quote": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "turn_ref",
+                "quote"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "source_id",
+          "native_turn_id",
+          "native_quote",
+          "disposition",
+          "rationale",
+          "source_evidence"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "ledger_facts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "turn_id": {
+            "type": "string"
+          },
+          "canonical_proposition": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "turn_id",
+          "canonical_proposition"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 8,
+      "maxItems": 8
+    },
+    "changes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "root_id",
+    "scene",
+    "scene_native_mappings",
+    "ledger_facts",
+    "changes"
+  ],
+  "additionalProperties": false
+}

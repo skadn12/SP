@@ -1,0 +1,228 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:gxy-selfplay:day1:diagnosis:weakness-taxonomy:1.0",
+  "title": "Diagnostic annotation taxonomy; catalog fields also document operational policy",
+  "type": "object",
+  "oneOf": [
+    {
+      "properties": {
+        "kind": {
+          "const": "observed_error"
+        },
+        "tag_id": {
+          "enum": [
+            "obs.mc.false_positive",
+            "obs.mc.false_negative",
+            "obs.mc.over_selection",
+            "obs.mc.under_selection",
+            "obs.order.within_scene_pair",
+            "obs.order.across_scene_pair",
+            "obs.order.repeated_report_occurrence",
+            "obs.display.position_sensitivity"
+          ]
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "kind",
+        "tag_id",
+        "note"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "properties": {
+        "kind": {
+          "const": "mechanism_hypothesis"
+        },
+        "tag_id": {
+          "enum": [
+            "hyp.binding.role_action_object",
+            "hyp.binding.state_revision",
+            "hyp.binding.condition_conjunction",
+            "hyp.evidence.retrieval",
+            "hyp.reasoning.relation",
+            "hyp.shortcut.lexical"
+          ]
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "kind",
+        "tag_id",
+        "note"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "properties": {
+        "kind": {
+          "const": "excluded"
+        },
+        "tag_id": {
+          "enum": [
+            "excluded.invalid_gold",
+            "excluded.ambiguous_item",
+            "excluded.unsupported_item",
+            "excluded.format_defect",
+            "excluded.context_coverage_loss"
+          ]
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "kind",
+        "tag_id",
+        "note"
+      ],
+      "additionalProperties": false
+    }
+  ],
+  "schema_version": "1.0",
+  "artifact_type": "weakness_taxonomy_catalog",
+  "status": "READY_FOR_TRAIN_SIDE_DIAGNOSIS_NOT_RESULTS",
+  "model_baseline": "S0=M-clean; exact checkpoint binding belongs to the parent experiment protocol",
+  "tags": [
+    {
+      "id": "obs.mc.false_positive",
+      "kind": "observed_error",
+      "label_zh": "多选误选",
+      "definition_zh": "预测集合中的非Gold项。"
+    },
+    {
+      "id": "obs.mc.false_negative",
+      "kind": "observed_error",
+      "label_zh": "多选漏选",
+      "definition_zh": "Gold集合中未预测的项。"
+    },
+    {
+      "id": "obs.mc.over_selection",
+      "kind": "observed_error",
+      "label_zh": "多选过选",
+      "definition_zh": "预测集合大小大于Gold集合；与误选并非同义。"
+    },
+    {
+      "id": "obs.mc.under_selection",
+      "kind": "observed_error",
+      "label_zh": "多选少选",
+      "definition_zh": "预测集合大小小于Gold集合；与漏选并非同义。"
+    },
+    {
+      "id": "obs.order.within_scene_pair",
+      "kind": "observed_error",
+      "label_zh": "同场景错序对",
+      "definition_zh": "审核确定的同场景两事项相对次序预测错误。"
+    },
+    {
+      "id": "obs.order.across_scene_pair",
+      "kind": "observed_error",
+      "label_zh": "跨场景错序对",
+      "definition_zh": "审核确定的不同场景两事项相对次序预测错误。"
+    },
+    {
+      "id": "obs.order.repeated_report_occurrence",
+      "kind": "observed_error",
+      "label_zh": "重复报告定位错误",
+      "definition_zh": "在题意已经唯一限定首次/修订/指定言语行为时选错出现位置。"
+    },
+    {
+      "id": "obs.display.position_sensitivity",
+      "kind": "observed_error",
+      "label_zh": "展示位置敏感",
+      "definition_zh": "同一题双射换位后还原到内容ID的答案不一致；记录采样不确定性。"
+    },
+    {
+      "id": "hyp.binding.role_action_object",
+      "kind": "mechanism_hypothesis",
+      "label_zh": "人物—行动—对象绑定",
+      "definition_zh": "证据中的人物、行动或对象被错配。"
+    },
+    {
+      "id": "hyp.binding.state_revision",
+      "kind": "mechanism_hypothesis",
+      "label_zh": "状态与修订绑定",
+      "definition_zh": "把旧计划、撤回项或条件性方案当作指定时点有效状态。"
+    },
+    {
+      "id": "hyp.binding.condition_conjunction",
+      "kind": "mechanism_hypothesis",
+      "label_zh": "条件联合与桥接",
+      "definition_zh": "未同时满足多个必要条件，或跨轮指代/归属桥接失败。"
+    },
+    {
+      "id": "hyp.evidence.retrieval",
+      "kind": "mechanism_hypothesis",
+      "label_zh": "证据定位",
+      "definition_zh": "在全文可见的前提下未找到相关证据；证据提示对照可以提供支持。"
+    },
+    {
+      "id": "hyp.reasoning.relation",
+      "kind": "mechanism_hypothesis",
+      "label_zh": "给定证据后的关系判断",
+      "definition_zh": "相关证据已明确提供，仍把人物、状态、条件或相对次序关系判断错。"
+    },
+    {
+      "id": "hyp.shortcut.lexical",
+      "kind": "mechanism_hypothesis",
+      "label_zh": "词面捷径依赖",
+      "definition_zh": "对同义改写、近邻用词或引用去除敏感；需最小对照而非仅看原题成绩。"
+    }
+  ],
+  "excluded_categories": [
+    {
+      "id": "excluded.invalid_gold",
+      "label": "Gold错误",
+      "disposition": "退回内容审核；保留原稿及改动链，不入弱点频次。"
+    },
+    {
+      "id": "excluded.ambiguous_item",
+      "label": "题意/排序锚点不唯一",
+      "disposition": "HOLD或FAIL；不能按Solver预测选择Gold。"
+    },
+    {
+      "id": "excluded.unsupported_item",
+      "label": "证据不足",
+      "disposition": "退回审核；未给定证据不是推理弱点。"
+    },
+    {
+      "id": "excluded.format_defect",
+      "label": "输出格式/映射缺陷",
+      "disposition": "单列协议有效率；不计内容能力失败。"
+    },
+    {
+      "id": "excluded.context_coverage_loss",
+      "label": "memory或截断丢证据",
+      "disposition": "单列证据覆盖损失；不计全文条件下能力弱点。"
+    }
+  ],
+  "confidence_states": {
+    "hypothesis": "一个或多个合格失败案例支持的机制假设，尚未达到跨root复现门槛。",
+    "reproduced": "同一冻结模型上，至少3个不同Train root及3个题族的合格失败；至少一个与机制相关的受控探针提供支持。工作阈值，非统计显著性或内部因果证明。",
+    "improving": "已有reproduced证据；新题族训练侧探针较前版改善并记录共同协议，仍不称Mastered。",
+    "recurred": "先前改善后，新合格题族再次出现该机制；继续保留整个历史。",
+    "retired": "不再用于本轮定向生成；说明原因，保留证据，不能表示能力永久掌握。"
+  },
+  "aggregation": {
+    "frequency_unit": "unique(root_id, family_id)",
+    "root_count": "distinct root_id",
+    "family_count": "distinct(root_id, family_id)",
+    "repeated_calls": "保留分母、采样率与排列一致性；不增加独立失败频次。",
+    "failure_case_rule": "按预先冻结规则聚合同题的直接答案记录；不得从18次重复中只挑最差一次。",
+    "root_equal_reporting": true
+  },
+  "known_limits": [
+    "观察标签不等于机制原因。",
+    "结构化解释不是忠实内部CoT的证明。",
+    "同一root多个题族仍可能相关。",
+    "schema约束声明；实际split、来源hash及读写权限仍需运行时审计。"
+  ]
+}

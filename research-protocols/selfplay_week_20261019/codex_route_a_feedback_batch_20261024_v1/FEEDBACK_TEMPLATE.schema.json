@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:gxy-selfplay:codex-route-a-feedback-card:v1",
+  "title": "Codex A路线候选反馈卡结构契约",
+  "description": "直接验证一张原始card对象，不验证bundle包装。兼容已审核卡中对象/数组包装和文本/数组差异。结构通过不等于语义或跨文件证据准入通过。",
+  "$comment": "MANDATORY EXTERNAL ADMISSION: supporting_error_ids must resolve only to final admitted PASS observations with verified source/Gold and exact evidence; UNKNOWN/FAIL/excluded/pending revisions cannot be positive support. This cannot be proven by JSON Schema over ID strings alone. Bind and validate the independent review/adjudication registry before admitting a bundle. Draft only; not a modification of legacy runtime.",
+  "type": "object",
+  "required": ["feedback_id", "root_id", "supporting_candidate_ids", "supporting_error_ids", "status", "solver_feedback", "questioner_feedback", "extension_task", "question_task", "limitations"],
+  "additionalProperties": true,
+  "properties": {
+    "feedback_id": {"$ref": "#/$defs/nonemptyText"},
+    "root_id": {"type": "string", "pattern": "^cc-train-episode-[0-9]+$"},
+    "supporting_candidate_ids": {"$ref": "#/$defs/nonemptyIds"},
+    "supporting_error_ids": {"$ref": "#/$defs/nonemptyIds", "description": "Only external-registry admitted PASS error IDs; do not include unknown or excluded observations."},
+    "status": {"const": "HYPOTHESIS"},
+    "solver_feedback": {
+      "type": "object",
+      "required": ["observed_behavior", "candidate_hypothesis", "trigger_conditions", "expected_observable_error", "correct_behavior", "boundary_conditions", "competing_explanations", "falsification_condition"],
+      "additionalProperties": true,
+      "properties": {
+        "observed_behavior": {"$ref": "#/$defs/textOrTexts"},
+        "candidate_hypothesis": {"$ref": "#/$defs/textOrTexts"},
+        "trigger_conditions": {"$ref": "#/$defs/textOrTexts"},
+        "expected_observable_error": {"$ref": "#/$defs/textOrTexts"},
+        "correct_behavior": {"$ref": "#/$defs/textOrTexts"},
+        "boundary_conditions": {"$ref": "#/$defs/textOrTexts"},
+        "competing_explanations": {"$ref": "#/$defs/textOrTexts"},
+        "falsification_condition": {"$ref": "#/$defs/textOrTexts"}
+      }
+    },
+    "questioner_feedback": {
+      "description": "Empty is legitimate. Existing object wrappers and arrays are both retained; issue-specific semantic evidence is reviewed outside this card schema.",
+      "oneOf": [
+        {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+        {"type": "object", "additionalProperties": true}
+      ]
+    },
+    "extension_task": {
+      "type": "object",
+      "required": ["needed", "mode", "source_shortfall_issue_ids", "material_targets", "relations_to_add", "contrast_conditions", "continuity_constraints", "material_acceptance_test"],
+      "additionalProperties": true,
+      "properties": {
+        "needed": {"type": "boolean", "description": "In these cards this concerns confirmed source-shortfall repair, not whether a future authorized hypothesis-test extension is possible."},
+        "mode": {"enum": ["REUSE", "REUSE_WITH_PROSPECTIVE_PROBE", "EXTEND"]},
+        "source_shortfall_issue_ids": {"type": "array", "items": {"$ref": "#/$defs/nonemptyText"}, "uniqueItems": true},
+        "material_targets": {"type": "array", "items": {"oneOf": [{"$ref": "#/$defs/nonemptyText"}, {"type": "object", "additionalProperties": true}]}},
+        "relations_to_add": {"$ref": "#/$defs/textOrPossiblyEmptyTexts"},
+        "contrast_conditions": {"$ref": "#/$defs/textOrPossiblyEmptyTexts"},
+        "continuity_constraints": {"$ref": "#/$defs/textOrTexts"},
+        "material_acceptance_test": {"$ref": "#/$defs/textOrTexts"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"needed": {"const": false}}, "required": ["needed"]},
+          "then": {"properties": {"mode": {"enum": ["REUSE", "REUSE_WITH_PROSPECTIVE_PROBE"]}, "material_targets": {"maxItems": 0}}}
+        },
+        {
+          "if": {"properties": {"needed": {"const": true}}, "required": ["needed"]},
+          "then": {"properties": {"mode": {"const": "EXTEND"}, "source_shortfall_issue_ids": {"minItems": 1}, "material_targets": {"minItems": 1}}, "$comment": "Every referenced shortage must externally resolve to independently CONFIRMED SOURCE_SHORTFALL on the bound source version. The schema cannot verify that review."}
+        }
+      ]
+    },
+    "question_task": {
+      "type": "object",
+      "required": ["target_relation", "operation_ids", "evidence_combination", "distractor_or_ordering_requirements", "shortcut_controls", "target_realization_test", "expected_error_test"],
+      "additionalProperties": true,
+      "properties": {
+        "target_relation": {"$ref": "#/$defs/textOrTexts"},
+        "operation_ids": {"$ref": "#/$defs/nonemptyIds"},
+        "evidence_combination": {"$ref": "#/$defs/textOrTexts"},
+        "distractor_or_ordering_requirements": {"$ref": "#/$defs/textOrTexts"},
+        "shortcut_controls": {"$ref": "#/$defs/textOrTexts"},
+        "target_realization_test": {"$ref": "#/$defs/textOrTexts"},
+        "expected_error_test": {"$ref": "#/$defs/textOrTexts"}
+      }
+    },
+    "limitations": {"$ref": "#/$defs/textOrTexts"}
+  },
+  "$defs": {
+    "nonemptyText": {"type": "string", "minLength": 1, "pattern": "\\S"},
+    "nonemptyIds": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/nonemptyText"}},
+    "textOrTexts": {"oneOf": [{"$ref": "#/$defs/nonemptyText"}, {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/nonemptyText"}}]},
+    "textOrPossiblyEmptyTexts": {"oneOf": [{"$ref": "#/$defs/nonemptyText"}, {"type": "array", "items": {"$ref": "#/$defs/nonemptyText"}}]}
+  },
+  "x-required-cross-document-checks": [
+    "Every supporting error exists, belongs to a supporting candidate and the same Train root, has exact raw/source evidence, passes source and Gold review, and is finally admitted PASS.",
+    "UNKNOWN, FAIL, excluded, unresolved or superseded support is not admitted; pending REVISE cards require reviewed patches before bundle admission.",
+    "Final-answer, rationale and citation results are independent axes; preserve the correct-case denominator and do not inflate failed-question counts with reason-only observations.",
+    "Public projection uses REVIEW_CONTRACT.public_fields and removes original IDs, option labels, Gold, mappings, answer strings and raw responses from free text as well as keys.",
+    "Material author projection is constructed from neutral material goals, not copied from the full Challenger card; no solver errors, expected errors or Gold quotas.",
+    "Schema validity does not prove Challenger consumption, runtime integration, formal weakness reproduction or feedback/training benefit."
+  ]
+}

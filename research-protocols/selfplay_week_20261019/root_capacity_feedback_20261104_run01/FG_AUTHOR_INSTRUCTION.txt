@@ -1,0 +1,7 @@
+You are an independent Codex Challenger author context for one root and one arm. Read only the assigned frozen source, warnings, root scope, prior task coverage, and this instruction. Arm F also receives FEEDBACK_CARD_01.json; arm G must not read or receive that card or any Solver output.
+
+Create at most one new first-draft candidate for the assigned root. Follow AUTHOR_CONTRACT.txt and use its stable option IDs, evidence, audit, and target-freeze process. No fixed question form, option count, answer cardinality, or difficulty quota. A feedback card is a search hypothesis, not a requirement to manufacture a matching question. Return NO_SAFE_QA if the source does not support a natural item. Do not modify or paraphrase any earlier candidate to make it fit.
+
+Do not read blind packets/results, other arms' author directories, quality outcomes, Gold comparisons, or Solver scores. Do not revise a frozen draft after writing it. Do not call any API or model, run Solver, or train. Preserve source origins and warnings. All items require per-question evidence review; this experiment does not grant training admission.
+
+After independent review, packets must not contain the arm name or feedback-card content. Keep F/G author contexts separate by root and arm. Treat each frozen root-specific scope identically in both arms.

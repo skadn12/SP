@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "P2-2 Free compiled brief; no binding dependency",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "brief_version": {
+      "type": "string"
+    },
+    "root_id": {
+      "type": "string"
+    },
+    "intent_label": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "intent_id",
+        "intent_type"
+      ],
+      "properties": {
+        "intent_id": {
+          "type": "string"
+        },
+        "intent_type": {
+          "type": "string"
+        }
+      }
+    },
+    "generation_source": {
+      "const": "free_exploration"
+    },
+    "assigned_feedback_mode": {
+      "const": "P2_2_CONCRETE_TRANSFER"
+    },
+    "effective_feedback_mode": {
+      "enum": [
+        "ROOT_OBSERVATIONS",
+        "NO_ACTIVE_FEEDBACK"
+      ]
+    },
+    "fallback_reason": {
+      "enum": [
+        null,
+        "NO_ACTIVE_FEEDBACK"
+      ]
+    },
+    "feedback_status": {
+      "enum": [
+        "ACTIVE_FEEDBACK",
+        "NO_ACTIVE_FEEDBACK"
+      ]
+    },
+    "observation_cards": {
+      "type": "array"
+    },
+    "historical_tracking": {
+      "type": "array"
+    },
+    "fixed_policy": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "brief_version",
+    "root_id",
+    "intent_label",
+    "generation_source",
+    "assigned_feedback_mode",
+    "effective_feedback_mode",
+    "fallback_reason",
+    "feedback_status",
+    "observation_cards",
+    "historical_tracking",
+    "fixed_policy"
+  ]
+}

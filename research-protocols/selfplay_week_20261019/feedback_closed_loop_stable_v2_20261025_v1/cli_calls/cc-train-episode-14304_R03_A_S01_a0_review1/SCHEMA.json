@@ -1,0 +1,80 @@
+{
+  "type": "object",
+  "properties": {
+    "root_id": {
+      "type": "string"
+    },
+    "scene_ref": {
+      "type": "string"
+    },
+    "decision": {
+      "type": "string",
+      "enum": [
+        "PASS",
+        "REVISE",
+        "FAIL"
+      ]
+    },
+    "source_quotes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "turn_ref": {
+            "type": "string"
+          },
+          "quote": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "turn_ref",
+          "quote"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "scene_ref": {
+            "type": "string"
+          },
+          "fact_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "smallest_correction": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "scene_ref",
+          "fact_id",
+          "reason",
+          "smallest_correction"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "root_id",
+    "scene_ref",
+    "decision",
+    "source_quotes",
+    "issues",
+    "warnings"
+  ],
+  "additionalProperties": false
+}

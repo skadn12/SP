@@ -1,0 +1,246 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:gxy-selfplay:day1:diagnosis:fact-memory-schema:1.0",
+  "title": "Prefix-derived fact memory for conversation expansion; separate from weakness memory",
+  "type": "object",
+  "properties": {
+    "document_type": {
+      "const": "prefix_fact_memory"
+    },
+    "schema_version": {
+      "const": "1.0"
+    },
+    "snapshot_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]*$"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "root_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]*$"
+    },
+    "namespace": {
+      "const": "train.expansion.fact_memory"
+    },
+    "audience": {
+      "const": "expansion_planner_realizer"
+    },
+    "source_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]*$"
+    },
+    "source_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "accepted_prefix": {
+      "$ref": "#/$defs/artifact_ref"
+    },
+    "prefix_last_turn": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "prefix_content_gate": {
+      "$ref": "#/$defs/artifact_ref"
+    },
+    "gold_or_question_conditioned": {
+      "const": false
+    },
+    "future_turns_read": {
+      "const": false
+    },
+    "parent_snapshot": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/artifact_ref"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "facts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "fact_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]*$"
+          },
+          "fact_type": {
+            "type": "string",
+            "enum": [
+              "person",
+              "relation",
+              "event",
+              "item",
+              "state",
+              "open_issue"
+            ]
+          },
+          "subject_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]*$"
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "claim": {
+            "type": "string",
+            "minLength": 1
+          },
+          "validity": {
+            "type": "string",
+            "enum": [
+              "active",
+              "superseded",
+              "cancelled",
+              "uncertain"
+            ]
+          },
+          "valid_from_turn": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "valid_until_turn": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "supersedes_fact_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]*$"
+            },
+            "minItems": 0,
+            "uniqueItems": true
+          },
+          "evidence_refs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/evidence_ref"
+            },
+            "minItems": 1
+          },
+          "uncertainty": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "fact_id",
+          "fact_type",
+          "subject_ids",
+          "claim",
+          "validity",
+          "valid_from_turn",
+          "valid_until_turn",
+          "supersedes_fact_ids",
+          "evidence_refs",
+          "uncertainty"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0
+    },
+    "known_limits": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    }
+  },
+  "required": [
+    "document_type",
+    "schema_version",
+    "snapshot_id",
+    "created_at",
+    "root_id",
+    "namespace",
+    "audience",
+    "source_id",
+    "source_sha256",
+    "accepted_prefix",
+    "prefix_last_turn",
+    "prefix_content_gate",
+    "gold_or_question_conditioned",
+    "future_turns_read",
+    "parent_snapshot",
+    "facts",
+    "known_limits"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "artifact_ref": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "additionalProperties": false
+    },
+    "evidence_ref": {
+      "type": "object",
+      "properties": {
+        "source_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]*$"
+        },
+        "source_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "scene_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]*$"
+        },
+        "turn_start": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "turn_end": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "speaker": {
+          "type": "string",
+          "minLength": 1
+        },
+        "quote": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "source_id",
+        "source_sha256",
+        "scene_id",
+        "turn_start",
+        "turn_end",
+        "speaker",
+        "quote"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

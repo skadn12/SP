@@ -1,0 +1,341 @@
+"""Independent generation/assembly/dedup evidence audit; never invoke a model.
+
+Production validators are replayed, then request receipts and public whole-set
+composition are reconstructed separately. This is not blind semantic review.
+"""
+from collections import Counter
+from datetime import datetime, timezone
+from itertools import product
+from pathlib import Path
+import hashlib
+import json
+import os
+import re
+import sys
+import traceback
+
+HOME = Path(__file__).resolve().parents[1]
+OUT = HOME / 'evidence/GENERATION_AUDIT.json'
+OPENED = set()
+CHECKS = []
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(HOME))
+
+
+def guard(event, args):
+    if event.startswith('socket.') or event in {'subprocess.Popen', 'os.system', 'os.posix_spawn'}:
+        raise RuntimeError('audit_forbids_external:' + event)
+    if event == 'open' and isinstance(args[0], (str, bytes, os.PathLike)):
+        path = Path(os.fsdecode(args[0])).resolve()
+        mode, flags = args[1:3]
+        writing = ((isinstance(mode, str) and any(c in mode for c in 'wax+'))
+                   or (isinstance(flags, int) and flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND)))
+        if writing and path not in {OUT, Path('/dev/null')} and not path.is_relative_to(Path('/tmp')):
+            raise RuntimeError('audit_forbids_write:' + str(path))
+        if path.is_relative_to(HOME):
+            if path.is_relative_to(HOME / 'solver'):
+                raise RuntimeError('audit_forbids_solver:' + str(path))
+            if not writing:
+                OPENED.add(str(path))
+
+
+sys.addaudithook(guard)
+import common
+import ordering_generation as ordering
+import ordering_review
+a = common.load_multi('asset_generation')
+c = common.load_multi('compose')
+
+
+def read(path):
+    return json.loads(Path(path).read_text())
+
+
+def sha(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def bind(path):
+    path = Path(path).resolve()
+    return {'path': str(path), 'sha256': sha(path)}
+
+
+def require(condition, name, detail=None):
+    record = {'check': name, 'status': 'PASS' if condition else 'FAIL'}
+    if detail is not None:
+        record['detail'] = detail
+    CHECKS.append(record)
+    if not condition:
+        raise AssertionError(name)
+
+
+def check_binding(row):
+    require(sha(row['path']) == row['sha256'], 'binding:' + row['path'])
+
+
+def normalized_set(q):
+    field = 'options' if q['question_type'] == 'multi_select' else 'items'
+    return (q['root_id'], q['question_type'], tuple(sorted(' '.join(t.split()).casefold() for t in q[field].values())))
+
+
+def independent_scope(q, source):
+    """Recreate the old documented public scene boundary, without Gold input."""
+    scenes = list(dict.fromkeys(t['turn_ref'].rsplit(':', 1)[0] for t in source['turns']))
+    match = re.search(r'\bAPPEAR IN THE SUPPLIED DIALOGUE (?P<restriction>within the (?P<scenes>.+?) scenes?\.?)\s*$', q['question'], re.I)
+    selected, fragment = [], None
+    if match:
+        entries = re.split(r'\s*,\s*(?:and\s+)?|\s+and\s+', match.group('scenes'))
+        if entries and all(entry in scenes for entry in entries):
+            selected = [scene for scene in scenes if scene in entries]
+            fragment = match.group('restriction')
+    return {'contract': 'explicit_public_stem_scene_scope_v52', 'candidate_id': q['candidate_id'],
+            'kind': 'explicit_scene_union' if selected else 'full_dialogue',
+            'public_stem_restriction': fragment, 'scene_refs': selected,
+            'matching_turn_refs': [t['turn_ref'] for t in source['turns'] if not selected or t['turn_ref'].rsplit(':', 1)[0] in selected],
+            'context_turn_refs': [t['turn_ref'] for t in source['turns']]}
+
+
+def audit():
+    config = read(HOME / 'CONFIG.json')
+    prep = read(HOME / 'BATCH_PREPARATION.COMPLETE.json')
+    require(config['multiselect_engine'] == str(a.HERE), 'same_v79_multiselect_engine')
+    for row in prep['files']:
+        check_binding(row)
+    for row in read(a.HERE / 'OFFLINE_TEST_RECEIPT.json')['files']:
+        check_binding(row)
+    protected = read(HOME / 'PRESERVATION_BEFORE.json')
+    for path, digest in protected['files'].items():
+        require(sha(path) == digest, 'protected_previous_file:' + path)
+    for slot in config['multiselect_config']['slots']:
+        a.verify(HOME / 'multiselect/assets' / slot['slot_id'], complete=True)
+    ordering_result = ordering.verify(HOME)
+    ordering_review.verify_review(HOME)
+    assembled = c.verify_assembly(HOME / 'multiselect')
+    final_review = common.load_multi('evaluate').verify_review(HOME / 'multiselect')
+    require(final_review['usable_count'] <= len(assembled['questions']), 'final_review_usable_subset')
+    _, _, annotate, capacity, dev = a.base.transport()
+    tokenizer = dev.tokenizer_from(str(a.base.TOKENIZER))
+    calls, multi_mechanics, order_mechanics = [], [], []
+    request_dirs = sorted(HOME.glob('multiselect/assets/*/rounds/*/requests/*')) + sorted(HOME.glob('ordering/*/requests/*'))
+    require(len(request_dirs) <= config['max_generation_http'], 'total_generation_request_budget')
+    for request in request_dirs:
+        is_multi = request.is_relative_to(HOME / 'multiselect')
+        round_folder = request.parents[1]
+        run = round_folder.parents[1] if is_multi else round_folder
+        manifest = read(round_folder / 'MANIFEST.json')
+        payload, proof = read(request / 'REQUEST.json'), read(request / 'PROOF.json')
+        frozen_payload = read(round_folder / ('INITIAL_REQUEST.json' if is_multi else 'REQUEST.json'))
+        frozen_proof = read(round_folder / ('INITIAL_PROOF.json' if is_multi else 'PROOF.json'))
+        require(payload == frozen_payload and {k:v for k,v in proof.items() if k != 'capacity'} == frozen_proof,
+                'request_frozen_payload_and_proof:' + str(request))
+        require(proof['payload_sha256'] == a.base.digest(payload), 'request_payload_sha:' + str(request))
+        source = read(run / 'SOURCE.json')
+        content = payload['messages'][0]['content']
+        context, _ = json.JSONDecoder().raw_decode(content.split('INPUT_JSON\n', 1)[1])
+        require(context['source_turns'] == source['turns'] and context['source_metadata'] == {k:v for k,v in source.items() if k != 'turns'},
+                'complete_source_context:' + str(request))
+        original = Path(manifest['source_history']['path'] if is_multi else manifest['original_source']['path'])
+        require((run / 'SOURCE.json').read_bytes() == original.read_bytes(), 'full_source_bytes:' + str(request))
+        attempt = read(request / 'HTTP_ATTEMPT.json')
+        reservation, completion = read(request / 'RESERVATION.json'), read(request / 'HTTP_RESULT.json')
+        require(attempt == {'actual_payload_equals_frozen':True, 'payload_sha256':a.base.digest(payload),
+            'requested_model':a.legacy.MODEL, 'http_attempt_number':1, 'transport_retries':0}, 'one_real_http_attempt:' + str(request))
+        require(reservation['automatic_retries'] == 0 and reservation['request_number'] == 1, 'reservation_no_retry:' + str(request))
+        require(completion['http_status'] == 200 and completion['outcome'] == 'response' and not (request / 'ERROR.json').exists(), 'successful_response_receipt:' + str(request))
+        response = read(request / 'RESPONSE.json'); metadata = response['metadata']
+        require(json.loads(metadata['raw_response_text']) == metadata['raw_response'] and response['text'] == metadata['raw_response']['choices'][0]['message']['content'],
+                'raw_service_text_preserved:' + str(request))
+        require(all(metadata[k] == a.legacy.MODEL for k in ['requested_model','actual_model','returned_model'])
+                and metadata['http_status'] == 200 and metadata['finish_reason'] == 'stop' and metadata['timeout'] is False,
+                'model_and_finish_reason:' + str(request))
+        require(metadata['transport_attempt_count'] == metadata['http_attempt_count'] == 1
+                and metadata['transport_retry_count'] == metadata['rate_limit_retry_count'] == 0,
+                'transport_zero_retries:' + str(request))
+        profile = read(request / 'PROFILE.json')
+        require(payload == {'model':profile['model'], 'messages':payload['messages'],
+                           **{k:v for k,v in profile['request_parameters'].items() if v is not None}}
+                and profile['http_retry_limit'] == 0 and profile['parameter_fallback'] is False, 'profile_exact_request:' + str(request))
+        cap = annotate(capacity(profile, tokenizer, payload['messages'], payload['max_tokens']))
+        require(cap == proof['capacity'] and cap['status'] == 'PASS' and cap['truncation'] is False, 'capacity_no_truncation:' + str(request))
+        entry = {'lane':'multi_select' if is_multi else 'ordering', 'root_id':manifest['root_id'],
+            'round_id':manifest.get('round_id'), 'source_turn_count':len(source['turns']),
+            'request':bind(request / 'REQUEST.json'), 'proof':bind(request / 'PROOF.json'),
+            'response':bind(request / 'RESPONSE.json'), 'http_attempt':bind(request / 'HTTP_ATTEMPT.json'),
+            'profile':bind(request / 'PROFILE.json'), 'source':bind(run / 'SOURCE.json'),
+            'capacity':cap, 'service_reported_usage':metadata['usage'], 'retry_count':0}
+        if is_multi:
+            targets = manifest['target_fact_ids']; tail = a.render_task_tail(manifest, targets)
+            require(content.endswith(tail) and context['target_fact_ids'] == targets and proof['target_fact_ids'] == targets,
+                    'rendered_current_target_ids:' + str(request))
+            skeleton, _ = json.JSONDecoder().raw_decode(tail.split('OUTPUT_JSON_SKELETON\n',1)[1])
+            require([r['fact_id'] for r in skeleton['replacements']] == targets, 'exact_target_skeleton:' + str(request))
+            data, errors = a.validate_assets(response['text'], manifest, source, read(run / 'PARENT.json'), targets)
+            require(read(request / 'VALIDATION.json') == a.validation(data, errors), 'multiselect_mechanical_replay:' + str(request))
+            review = read(round_folder / 'SOURCE_JUDGMENTS.json'); public = read(round_folder / 'PUBLIC_ASSETS.json')
+            try:
+                raw = a.strict_json(response['text'])
+                raw_by_fact = {r['fact_id']:r['replacement_proposition'] for r in raw['replacements']}
+                require(all(v['proposition'] == raw_by_fact[v['fact_id']] for v in public['versions']), 'public_asset_text_unedited:' + str(request))
+            except (ValueError, TypeError, KeyError):
+                require(not public['versions'] and bool(errors), 'malformed_writer_output_remains_excluded:' + str(request))
+            multi_mechanics.append({'root_id':manifest['root_id'], 'round_id':manifest['round_id'],
+                'target_fact_ids':targets, 'mechanical_errors':errors, 'public_version_count':len(public['versions']),
+                'source_review_parent_relations':dict(Counter(r['relation'] for r in review['parents'])),
+                'source_review_version_relations':dict(Counter(r['relation'] for r in review['versions'])),
+                'source_review':bind(round_folder / 'SOURCE_JUDGMENTS.json'), 'per_version_source_findings':review['versions']})
+        else:
+            prior = read(run / 'PRIOR.json')
+            accepted, rejected = ordering.validate_raw(response['text'],manifest,source,run/'SOURCE.json',prior)
+            require(accepted == read(run/'POOL.json')['questions'] and rejected == read(run/'REJECTIONS.json'), 'ordering_mechanical_replay:' + str(request))
+            tail = content.split('[ORDERING_BATCH_V80]',1)[1].split('[/ORDERING_BATCH_V80]',1)[0]
+            scenes = list(dict.fromkeys(t['turn_ref'].rsplit(':', 1)[0] for t in source['turns']))
+            scene_listing, _ = json.JSONDecoder().raw_decode(tail.split('available_scene_ids: ',1)[1])
+            prior_listing, _ = json.JSONDecoder().raw_decode(tail.split('DISALLOWED PRIOR WHOLE SETS (public text, deduplication only):\n',1)[1])
+            require(scene_listing == scenes and prior_listing['disallowed_prior_six_item_sets'] == [sorted(q['items'].values()) for q in prior], 'scene_and_public_dedup_payload:' + str(request))
+            require('"gold"' not in json.dumps(prior_listing) and '"item_evidence"' not in json.dumps(prior_listing), 'ordering_prior_has_no_private_answers:' + str(request))
+            try:
+                raw = a.strict_json(response['text']); raw_rows = raw['questions']
+            except (ValueError, TypeError, KeyError):
+                raw_rows = []
+            accepted_by_id = {q['candidate_id']:q for q in accepted}; rejected_by_id = {q['candidate_id']:q for q in rejected}
+            source_lookup = {t['turn_ref']: t for t in source['turns']}
+            for qid, row in zip(manifest['candidate_ids'],raw_rows):
+                findings = {'candidate_id':qid, 'writer_null':row is None, 'mechanically_accepted':qid in accepted_by_id,
+                    'rejection_reasons':rejected_by_id.get(qid,{}).get('reasons',[]), 'gold_or_items_rewritten':False}
+                if isinstance(row,dict) and isinstance(row.get('items'),dict):
+                    findings['raw_question'] = row.get('question')
+                    findings['raw_gold'] = row.get('gold')
+                    findings['evidence_failure_details'] = []
+                    for error in findings['rejection_reasons']:
+                        label = error.split(':', 1)[0]
+                        evidence = row.get('item_evidence', {}).get(label)
+                        if isinstance(evidence, dict):
+                            findings['evidence_failure_details'].append({'reason':error, 'raw_evidence':evidence,
+                                'actual_source_turn':source_lookup.get(evidence.get('turn_ref'))})
+                    findings['prior_whole_set_matches'] = [q['candidate_id'] for q in prior if ordering.whole_set(q)==ordering.whole_set(row)]
+                    if qid in accepted_by_id:
+                        q = accepted_by_id[qid]
+                        require(row['gold'] == q['gold'] and row['items'] == q['items'] and row['question']==q['question'], 'ordering_raw_public_and_gold_unchanged:' + qid)
+                        scope = independent_scope(q,source)
+                        require(scope == common.load_ordering_gate().ordering_match_scope(q,source), 'independent_public_scope_parser:' + qid)
+                        require(all(v['turn_ref'] in scope['matching_turn_refs'] for v in q['generated_order_anchor_spans'].values()), 'generated_anchors_in_public_scope:' + qid)
+                        has_scene_restriction = bool(re.search(r'APPEAR IN THE SUPPLIED DIALOGUE\s+within\b', q['question'], re.I))
+                        require(not (has_scene_restriction and scope['kind']=='full_dialogue'), 'no_unrecognized_scene_fallback:' + qid)
+                        findings['ordering_match_scope'] = scope
+                order_mechanics.append(findings)
+        calls.append(entry)
+
+    multi = HOME / 'multiselect'; cfg = read(multi/'CONFIG.json')
+    prior_paths = {Path(cfg['baseline_pool'])} | {Path(p) for s in cfg['slots'] for p in s.get('prior_pool_paths',[])}
+    prior_index = {}
+    for path in sorted(prior_paths):
+        for original in c._rows(read(path)):
+            q = original.get('original_selected_question',original)
+            if q.get('question_type') == 'multi_select':
+                prior_index.setdefault(normalized_set(q),[]).append({'candidate_id':q['candidate_id'],'prior':bind(path)})
+    current_public = read(multi/'PUBLIC_QUESTIONS.json')['questions']
+    members = read(multi/'FAMILY_SIDECAR.json')['members']; roles = {r['candidate_id']:r for r in members}
+    require(len(current_public) == len(members) and set(roles) == {q['candidate_id'] for q in current_public}, 'public_family_member_identity')
+    require(all(r['new_candidate'] == (r['role']=='child') for r in members), 'control_newness_roles')
+    dedup, novel, repeated_facts = [], [], []
+    for slot in cfg['slots']:
+        run = multi/'assets'/slot['slot_id']; public = read(run/'PUBLIC_ASSETS.json')
+        variants = {p['fact_id']:[(p['proposition'],True)] for p in public['parent_facts']}
+        for v in public['versions']:
+            variants[v['fact_id']].append((v['proposition'],False))
+        available = {k:[] for k in slot['target_counts']}
+        for combination in product(*(variants[fid] for fid in sorted(variants))):
+            count = sum(supported for _,supported in combination)
+            if count not in available:
+                continue
+            key = (slot['root_id'],'multi_select',tuple(sorted(' '.join(text.split()).casefold() for text,_ in combination)))
+            if len(set(key[2])) != 6:
+                continue
+            if key in prior_index:
+                dedup.append({'root_id':slot['root_id'],'gold_count_from_reviewed_supports':count,
+                    'whole_set_digest':c.digest(key),'normalized_statement_set':list(key[2]),
+                    'matched_prior_questions':prior_index[key],'excluded_from_new_count':True})
+            else:
+                available[count].append(key)
+        children = [q for q in current_public if q['root_id']==slot['root_id'] and roles[q['candidate_id']]['role']=='child']
+        for count, keys in available.items():
+            matching = [q for q in children if roles[q['candidate_id']]['gold_count']==count]
+            require(len(matching) == bool(keys), 'one_novel_combination_per_available_gold:' + slot['root_id'] + ':' + str(count))
+            if not keys:
+                continue
+            chosen = min(keys,key=c.digest); q=matching[0]
+            require(normalized_set(q)==chosen and chosen not in prior_index, 'independent_dedup_min_digest_composition:' + q['candidate_id'])
+            require(q['candidate_id']==slot['root_id']+'-v79-'+slot['family_id']+'-'+c.digest(chosen)[:12], 'reused_engine_candidate_identity:' + q['candidate_id'])
+            novel.append({'candidate_id':q['candidate_id'],'root_id':q['root_id'],'gold_count_from_reviewed_supports':count,
+                'whole_set_digest':c.digest(chosen),'new_exact_six_option_combination':True,'new_independent_facts':False,
+                'same_parent_and_source_family':slot['family_id']})
+        new = read(run/'rounds/initial/PUBLIC_ASSETS.json')
+        for old_batch in ('h4_ready_roots_mixed_batch_v78','h4_output_contract_mixed_batch_v79'):
+            old_path = HOME.parent/old_batch/'multiselect/assets'/slot['slot_id']/'rounds/initial/PUBLIC_ASSETS.json'
+            old_by_fact = {r['fact_id']:r['proposition'] for r in read(old_path)['versions']}
+            repeated_facts.append({'root_id':slot['root_id'],'old_public_assets':bind(old_path),
+                'new_public_assets':bind(run/'rounds/initial/PUBLIC_ASSETS.json'),
+                'identical_per_fact_replacements':[v['fact_id'] for v in new['versions'] if old_by_fact.get(v['fact_id'])==v['proposition']]})
+    review = read(HOME/'ordering/CONTENT_REVIEW.json'); review_sources = read(HOME/'ordering/SOURCE_JUDGMENTS.json')
+    require(review['accepted_count']+review['rejected_count']==ordering_result['candidate_count'] and review['question_or_gold_edits']==[], 'ordering_content_counts_and_no_edits')
+    review_findings = []
+    for q in review['questions']:
+        source_row = next(r for r in review_sources['questions'] if r['candidate_id']==q['candidate_id'])
+        review_findings.append({'candidate_id':q['candidate_id'],'status':q['status'],'reasons':q['reasons'],
+            'complete_source_turns_read':source_row['complete_source_turns_read'], 'source_review_reason':source_row.get('reason'),
+            'alternative_orders':source_row['alternative_orders'], 'items':source_row['items']})
+    initial_count=read(HOME/'BATCH_GENERATION.COMPLETE.json')['http_attempts']
+    expected_initial=len(config['multiselect_config']['slots'])+len(config['ordering_slots'])
+    multi_calls=read(multi/'GENERATION.COMPLETE.json')['http_attempts']
+    ordering_calls=read(HOME/'ordering/GENERATION.COMPLETE.json')['http_attempts']
+    supplement_calls=sum(row['round_id']=='supplement' for row in calls)
+    require(initial_count == expected_initial and multi_calls+ordering_calls==len(calls) and len(calls)-initial_count==supplement_calls,
+            'initial_snapshot_plus_explicit_supplements')
+    for slot in cfg['slots']:
+        require(sum(r['root_id']==slot['root_id'] and r['round_id']=='supplement' for r in calls)<=1, 'supplement_family_budget:' + slot['root_id'])
+    controls=sum(r['role']=='control6' for r in members)
+    shortfalls=bool(len(novel)<sum(len(s['target_counts']) for s in cfg['slots']) or ordering_result['candidate_count']<sum(s['candidate_count'] for s in config['ordering_slots']) or review['rejected_count'] or final_review['usable_count']<len(assembled['questions']))
+    return {'status':'PASS_WITH_GENERATION_AND_CONTENT_SHORTFALLS' if shortfalls else 'PASS',
+        'totals':{'actual_generation_http_calls':len(calls),'initial_batch_snapshot_http_calls':initial_count,
+            'explicit_bounded_supplement_http_calls':supplement_calls,'new_multiselect_six_option_combinations':len(novel),
+            'historical_controls':controls,'multiselect_assembled':len(assembled['questions']),'multiselect_content_usable':final_review['usable_count'],
+            'ordering_slot_count':sum(s['candidate_count'] for s in config['ordering_slots']),
+            'ordering_mechanical_accepted':ordering_result['candidate_count'],'ordering_content_usable':review['accepted_count'],
+            'ordering_content_rejected':review['rejected_count'],'protected_previous_file_count':len(protected['files'])},
+        'calls':calls,'multiselect_rounds':multi_mechanics,'ordering_mechanical_findings':order_mechanics,
+        'ordering_source_review_findings':review_findings,'deduplicated_combinations':dedup,'new_combinations':novel,
+        'repeated_per_fact_replacement_texts':repeated_facts,
+        'evidence':[bind(multi/'PUBLIC_QUESTIONS.json'),bind(multi/'ALLOCATION.json'),bind(multi/'FAMILY_SIDECAR.json'),
+            bind(HOME/'ordering/CONTENT_REVIEW.json'),bind(HOME/'ordering/SOURCE_JUDGMENTS.json'),bind(HOME/'BATCH_PREPARATION.COMPLETE.json')],
+        'limitations':['This audit replays records and exact-set composition, not source answer semantics or semantic novelty.',
+            'New multiselect combinations retain parent/source dependencies; the audit does not certify independent facts.',
+            'Explicit scene scope affects only matching occurrences; complete source remains in every generation request.',
+            'Capacity uses the frozen local proxy; service token usage is reported separately.']}
+
+
+def main():
+    if OUT.exists():
+        raise RuntimeError('refuse_overwrite:' + str(OUT))
+    report = {'version':'v80_independent_generation_audit_v1','created_at_utc':datetime.now(timezone.utc).isoformat(),
+        'disclosures':{'audit_generation_http_calls':0,'audit_solver_calls':0,'network_and_subprocess_blocked':True,
+            'generation_private_and_raw_read':True,'current_final_multiselect_private_pool_read':True,
+            'current_solver_outputs_read':False,'frozen_code_modified':False,'blind_semantic_review_claimed':False}}
+    try:
+        report.update(audit())
+    except BaseException as error:
+        report['status']='FAIL'
+        CHECKS.append({'check':'audit_execution_exception','status':'FAIL','detail':{'error':repr(error),'traceback':traceback.format_exc()}})
+    report['checks']=CHECKS
+    report['check_count']=len(CHECKS)
+    report['failed_checks']=[row for row in CHECKS if row['status']=='FAIL']
+    report['opened_current_batch_files']=sorted(OPENED)
+    report['auditor']=bind(__file__)
+    with OUT.open('x') as stream:
+        json.dump(report,stream,ensure_ascii=False,indent=2);stream.write('\n')
+    print(json.dumps({'path':str(OUT),'status':report['status'],'checks':len(CHECKS),'failed_checks':report['failed_checks']},ensure_ascii=False))
+    if report['status']=='FAIL':
+        raise SystemExit(1)
+
+
+if __name__=='__main__':
+    main()

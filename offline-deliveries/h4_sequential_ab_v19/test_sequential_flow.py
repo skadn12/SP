@@ -1,0 +1,328 @@
+"""Offline control-flow regression: real runner + recorded mock transport.
+
+Fixtures exercise contracts, not Qwen semantic quality. Socket creation is
+forbidden and all run/inventory writes stay in temporary directories.
+"""
+from contextlib import ExitStack
+from copy import deepcopy
+import importlib.util
+import inspect
+import json
+from pathlib import Path
+import shutil
+import tempfile
+import unittest
+from unittest.mock import patch
+
+import runner
+import audit_sequential
+
+_spec = importlib.util.spec_from_file_location("v15_scripted_transport_fixture",
+    runner.HERE.parent / "h4_feedback_training_pool_v15_expansion/test_end_to_end.py")
+fixtures = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(fixtures)
+FROZEN = runner.HERE.parent / "h4_feedback_training_pool_v15_expansion/runs/end_to_end_5roots_01"
+ROOT = "cc-train-episode-104814"
+
+
+class SequentialProvider(fixtures.ScriptedProvider):
+    def planner(self, ctx):
+        value = super().planner(ctx)
+        scene = value["scenes"][0]
+        is_b = ctx["route"] == runner.ROUTES[1]
+        scene["event_definition"] = {"trigger": "MOCK ONLY: a new request.",
+            "main_goal": scene["goal"], "history_relation": "distinct_event" if is_b else "continuation"}
+        if is_b:
+            scene["source_anchors"] = []
+            scene["history_context_reason"] = "MOCK ONLY: the new request has no historical premise."
+            scene["state_transition"]["basis_fact_ids"] = []
+            scene["state_transition"]["basis_reason"] = "MOCK ONLY: card determines the goal; history remains context."
+        return value
+
+    def role_verdict(self, ctx, *, realized=False, negative=False):
+        history = ctx.get("cumulative_history", ctx.get("branch_history"))
+        anchor = history[-1]
+        is_b = ctx["route"] == runner.ROUTES[1]
+        value = {"role": ctx["route"], "satisfied": not negative,
+                 "primary_event": "MOCK ONLY: independent appointment" if is_b else "MOCK ONLY: old-event progress",
+                 "relation_to_history": "old_event_substep" if negative else "distinct_event" if is_b else "continuation",
+                 "reason": "MOCK ONLY: scripted route role judgment, not semantic evidence.",
+                 "history_evidence": [{"turn_ref": anchor["turn_ref"]}],
+                 "primary_goal": "MOCK ONLY: independent new appointment" if is_b else "MOCK ONLY: advance prior event",
+                 "serves_existing_event": negative or not is_b,
+                 "existing_event": "MOCK ONLY: the prior appointment" if negative or not is_b else "",
+                 "new_progress": True,
+                 "correction": "MOCK ONLY: create another activity with its own goal." if negative else ""}
+        if realized:
+            value["new_evidence"] = [{"turn_ref": "NEW:T001"}]
+        return value
+
+    def state_extractor(self, ctx):
+        if self.mode == "A_rejected" and ctx["route"] == runner.ROUTES[0]:
+            return {"MOCK_invalid_state": True}
+        return super().state_extractor(ctx)
+
+    def event_state_extractor(self, ctx):
+        value = super().event_state_extractor(ctx)
+        negative = self.mode == "B_role_replan" and ctx["route"] == runner.ROUTES[1] and "B_role_replan" not in self.used_injections
+        if negative:
+            self.used_injections.add("B_role_replan")
+        value["route_fulfillment"] = self.role_verdict(ctx, negative=negative)
+        for check in value["plan_checks"]:
+            check["comparison_kind"] = "new_development"
+        if ctx["route"] == runner.ROUTES[1] and self.mode == "B_event_preservation_repair":
+            if ctx.get("targeted_repair") is not None:
+                value["plan_checks"][0] = deepcopy(self.preserved_event_negative)
+            elif self.mode not in self.used_injections:
+                self.used_injections.add(self.mode)
+                first = value["plan_checks"][0]
+                first.update(verdict="revise", comparison_kind="historical_assertion",
+                    reason="MOCK ONLY: an old premise conflicts with the proposed claim.",
+                    conflict={"type": "historical_contradiction", "historical_claim": "MOCK ONLY: old appointment remains unconfirmed.",
+                              "proposed_claim": "MOCK ONLY: appointment was already confirmed.",
+                              "correction": "MOCK ONLY: keep the old appointment unconfirmed and propose new progress."})
+                self.preserved_event_negative = deepcopy(first)
+                value["plan_checks"].pop()
+        return value
+
+    def realizer(self, ctx):
+        value = super().realizer(ctx)
+        if ctx["route"] == runner.ROUTES[1] and self.mode == "B_schema_repair" and self.mode not in self.used_injections:
+            self.used_injections.add(self.mode)
+            value["turns"][2]["speaker"] = "MOCK_INVALID_SPEAKER"
+        if ctx["route"] == runner.ROUTES[1] and self.mode == "B_copy_A" and self.mode not in self.used_injections:
+            self.used_injections.add(self.mode)
+            value["turns"] = [{"speaker": turn["speaker"], "text": turn["text"]}
+                              for turn in ctx["cumulative_history"][-12:]]
+        return value
+
+    def scene_reviewer(self, ctx):
+        value = super().scene_reviewer(ctx)
+        negative = self.mode == "B_role_repair" and ctx["route"] == runner.ROUTES[1] and self.mode not in self.used_injections
+        if negative:
+            self.used_injections.add(self.mode)
+        value["route_fulfillment"] = self.role_verdict(ctx, realized=True, negative=negative)
+        if ctx["route"] == runner.ROUTES[1] and self.mode == "B_partial_review_repair":
+            if self.mode not in self.used_injections:
+                self.used_injections.add(self.mode)
+                self.omitted_check = deepcopy(value["checks"].pop())
+            else:
+                return {"root_id": value["root_id"], "route": value["route"], "scene_id": value["scene_id"],
+                        "repair_updates": {"checks": [self.omitted_check]}}
+        if ctx["route"] == runner.ROUTES[1] and self.mode == "B_review_incomplete":
+            value["checks"].pop()
+        if ctx["route"] == runner.ROUTES[1] and self.mode == "B_review_role_consistency_repair":
+            if self.mode not in self.used_injections:
+                self.used_injections.add(self.mode)
+                value["route_fulfillment"].update(satisfied=False, correction="MOCK ONLY: clarify the inconsistent role verdict.")
+            else:
+                return {"root_id": value["root_id"], "route": value["route"], "scene_id": value["scene_id"],
+                        "repair_updates": {"route_fulfillment": value["route_fulfillment"]}}
+        return value
+
+
+def initialize_mock(caller, run, fake):
+    caller.run, caller.limit = run, 200
+    caller.profile, caller.factory = object(), fake.factory
+    caller.capacity = lambda *_args: {"status": "PASS", "mock_capacity_only": True}
+    caller.annotate, caller.tokenizer = lambda value: value, object()
+    caller.http_counter = caller.request_counter = 0
+    caller.last_http_completed = None
+
+
+class SequentialFlowTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="v19-sequential-mock-")
+        self.addCleanup(self.temp.cleanup)
+        self.run = Path(self.temp.name)
+        for name in ("sources", "feedback"):
+            shutil.copytree(FROZEN / name, self.run / name)
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        self.stack.enter_context(patch("socket.socket", side_effect=AssertionError("network_forbidden_in_mock")))
+        self.stack.enter_context(patch.object(runner, "MIN_HTTP_GAP_SECONDS", 0))
+
+    def exercise(self, mode=None):
+        fake = SequentialProvider(mode)
+        caller = runner.Caller.__new__(runner.Caller)
+        initialize_mock(caller, self.run, fake)
+        results = runner.run_root(caller, self.run, ROOT, fixtures.fixture_cards(1), target_scenes=1)
+        frozen = runner.base.read(self.run / "sources" / f"{ROOT}.json")["turns"]
+        accepted_a = runner.base.read(self.run / "roots" / ROOT / "A/cumulative_dialogue.json")["turns"]
+        expected_a = 0 if mode == "A_rejected" else 1
+        expected_b = 0 if mode == "B_review_incomplete" else 1
+        self.assertEqual([item["accepted_scenes"] for item in results], [expected_a, expected_b], results)
+        self.assertEqual(accepted_a[:len(frozen)], frozen)
+        for observation in fake.observed:
+            ctx = observation["context"]
+            history = ctx.get("cumulative_history", ctx.get("branch_history"))
+            self.assertEqual(history, frozen if ctx["route"] == runner.ROUTES[0] else accepted_a,
+                             observation["role"])
+        actual = runner.base.read(self.run / "sources_merged" / f"{ROOT}.json")["turns"]
+        self.assertEqual(actual[:len(accepted_a)], accepted_a)
+        self.assertEqual(len(actual), len(frozen) + 12 * (expected_a + expected_b))
+        self.assertEqual(len(set(turn["turn_ref"] for turn in actual)), len(actual))
+        b_input = runner.base.read(self.run / "roots" / ROOT / "B/INPUT.json")
+        self.assertEqual(b_input["turns"], accepted_a)
+        for directory in (self.run / "requests").iterdir():
+            payload = runner.base.read(directory / "REQUEST.json")
+            proof = runner.base.read(directory / "PROOF.json")
+            attempt = runner.base.read(directory / "HTTP_ATTEMPT.json")
+            self.assertEqual(attempt["payload_sha256"], runner.base.digest(payload))
+            self.assertEqual(proof["payload_sha256"], runner.base.digest(payload))
+            self.assertTrue(attempt["actual_payload_equals_frozen"])
+            if proof["role"] in ("planner", "realizer"):
+                receipt = proof["feedback_receipt"]
+                self.assertTrue(receipt["feedback_appended"])
+                self.assertFalse(receipt["current_generation_feedback_used"])
+                self.assertEqual(receipt["request_payload_sha256"], runner.base.digest(payload))
+        return fake, results
+
+    def test_B_all_stages_receive_exact_accepted_A_and_frozen_feedback(self):
+        fake, _ = self.exercise()
+        roles = {item["role"] for item in fake.observed if item["context"]["route"] == runner.ROUTES[1]}
+        self.assertEqual(roles, {"state_extractor", "planner", "event_state_extractor", "realizer", "scene_reviewer"})
+
+    def test_failed_A_is_never_injected_into_B(self):
+        self.exercise("A_rejected")
+
+    def test_B_schema_repair_keeps_the_same_complete_history(self):
+        fake, _ = self.exercise("B_schema_repair")
+        calls = [row for row in fake.observed if row["role"] == "realizer" and row["context"]["route"] == runner.ROUTES[1]]
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(calls[1]["context"]["targeted_repair"])
+
+    def test_B_old_event_substep_replans_before_realization(self):
+        fake, _ = self.exercise("B_role_replan")
+        calls = [row for row in fake.observed if row["context"]["route"] == runner.ROUTES[1]]
+        self.assertEqual([row["role"] for row in calls],
+            ["state_extractor", "planner", "event_state_extractor", "planner", "event_state_extractor", "realizer", "scene_reviewer"])
+        self.assertTrue(calls[3]["context"]["targeted_repair"]["plan_checks"][0]["route_role_check"])
+
+    def test_B_wrong_role_in_realization_triggers_bounded_repair(self):
+        fake, _ = self.exercise("B_role_repair")
+        calls = [row for row in fake.observed if row["role"] == "realizer" and row["context"]["route"] == runner.ROUTES[1]]
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[1]["context"]["targeted_repair"]["route_fulfillment"]["relation_to_history"], "old_event_substep")
+
+    def test_B_verbatim_A_copy_rejected_before_reviewer_then_repaired(self):
+        fake, _ = self.exercise("B_copy_A")
+        calls = [row["role"] for row in fake.observed if row["context"]["route"] == runner.ROUTES[1]]
+        self.assertEqual(calls[-3:], ["realizer", "realizer", "scene_reviewer"])
+        failures = [runner.base.read(path) for path in self.run.glob("requests/*/ACCEPTANCE.json")]
+        self.assertTrue(any(item.get("stage") == "duplicate" and item["status"] == "REJECT" for item in failures))
+
+    def test_partial_review_retry_fills_only_missing_check_without_rewriting_scene(self):
+        fake, _ = self.exercise("B_partial_review_repair")
+        calls = [row["role"] for row in fake.observed if row["context"]["route"] == runner.ROUTES[1]]
+        self.assertEqual(calls.count("realizer"), 1)
+        self.assertEqual(calls.count("scene_reviewer"), 2)
+        merged = [runner.base.read(path) for path in self.run.glob("requests/*/FORMAT_REPAIR_MERGE.json")]
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0]["status"], "PASS")
+        self.assertEqual(len(merged[0]["candidate"]["checks"]), 2)
+
+    def test_exhausted_review_format_is_audit_incomplete_not_content_failure(self):
+        fake, results = self.exercise("B_review_incomplete")
+        failure = results[1]["failures"][0]
+        self.assertEqual(failure["reason"], "audit_incomplete")
+        self.assertFalse(failure["scene_content_failure_established"])
+        self.assertEqual(sum(row["role"] == "realizer" and row["context"]["route"] == runner.ROUTES[1]
+                             for row in fake.observed), 1)
+
+    def test_audit_does_not_mark_incomplete_run_passed(self):
+        delivery = self.run / "audit_only_delivery"
+        incomplete = delivery / "runs/incomplete"
+        incomplete.mkdir(parents=True)
+        (incomplete / "MANIFEST.json").write_text("{}")
+        with patch.object(audit_sequential, "HERE", delivery):
+            with self.assertRaisesRegex(ValueError, "incomplete_run_missing:REPORT.json"):
+                audit_sequential.audit_run(incomplete)
+        self.assertFalse((incomplete / "FINAL_AUDIT.json").exists())
+
+
+class FullMockLiveAuditTests(unittest.TestCase):
+    def exercise_live(self, mode=None, *, tamper=False):
+        with tempfile.TemporaryDirectory(prefix="v19-complete-mock-") as temporary, ExitStack() as stack:
+            temp = Path(temporary)
+            delivery = temp / "offline-deliveries/h4_sequential_ab_v19"
+            delivery.mkdir(parents=True)
+            for path in runner.HERE.glob("*.py"):
+                shutil.copy2(path, delivery / path.name)
+            (delivery / "POLICY.md").write_text("MOCK ONLY: artifact binding fixture.\n")
+            unique = delivery.parent / "h4_r02_source_unique_v2"
+            unique.mkdir()
+            shutil.copy2(runner.HERE.parent / "h4_r02_source_unique_v2/unique_events.py", unique / "unique_events.py")
+            run = delivery / "runs/MOCK_ONLY"
+            fake = SequentialProvider(mode)
+            def before_request():
+                self.assertTrue((run / "SOURCE_RESERVATIONS.json").exists())
+                self.assertTrue((run / "LIVE_STARTED.json").exists())
+            fake.before_request = before_request
+            original_collect = runner.source_inventory.collect_prior
+            prior_paths = {key: temp / key for key in inspect.signature(original_collect).parameters if key != "current_runs"}
+            def isolated_inventory():
+                return original_collect(delivery / "runs", **prior_paths)
+            stack.enter_context(patch.object(runner, "HERE", delivery))
+            stack.enter_context(patch.object(audit_sequential, "HERE", delivery))
+            stack.enter_context(patch.object(audit_sequential, "r", runner))
+            stack.enter_context(patch.object(runner, "LOCK_PATH", temp / "inventory.lock"))
+            stack.enter_context(patch.object(runner, "MIN_HTTP_GAP_SECONDS", 0))
+            stack.enter_context(patch.object(runner.source_inventory, "collect_prior", side_effect=isolated_inventory))
+            stack.enter_context(patch.object(runner.Caller, "__init__", lambda caller, run_path: initialize_mock(caller, run_path, fake)))
+            stack.enter_context(patch("socket.socket", side_effect=AssertionError("network_forbidden_in_mock")))
+            runner.prepare(run, scenes=1, roots=[ROOT])
+            output = runner.live(run)
+            self.assertEqual(output["accepted_scenes"], 2, output)
+            audit = audit_sequential.audit_run(run)
+            self.assertEqual(audit["status"], "PASS", audit["failures"])
+            self.assertEqual(audit["merged_roots_verified"], 1)
+            self.assertEqual(audit["source_overlap_count"], 0)
+            b_calls = [row["role"] for row in fake.observed if row["context"].get("route") == runner.ROUTES[1]]
+            if mode in ("B_partial_review_repair", "B_review_role_consistency_repair"):
+                self.assertEqual(b_calls.count("realizer"), 1)
+                self.assertEqual(b_calls.count("scene_reviewer"), 2)
+                merges = [runner.base.read(path) for path in run.glob("requests/*/FORMAT_REPAIR_MERGE.json")]
+                self.assertEqual(len(merges), 1)
+                self.assertEqual(merges[0]["status"], "PASS")
+            if mode == "B_event_preservation_repair":
+                self.assertEqual(b_calls.count("event_state_extractor"), 3)
+                self.assertEqual(b_calls.count("planner"), 2)
+                preserved = [runner.base.read(path) for path in run.glob("requests/*/FORMAT_REPAIR_PRESERVATION.json")]
+                self.assertEqual(len(preserved), 1)
+                self.assertTrue(preserved[0]["unchanged_negative_findings_required"])
+                event_calls = [row for row in fake.observed if row["context"].get("route") == runner.ROUTES[1]
+                               and row["role"] == "event_state_extractor"]
+                repaired = json.loads(event_calls[1]["context"]["targeted_repair"]["previous_raw"])
+                self.assertEqual(repaired["plan_checks"][0], fake.preserved_event_negative)
+                decision = next(runner.base.read(path) for path in run.glob("requests/*B*S01-planner-1/EVENT_STATE_DECISION.json"))
+                self.assertEqual(decision["status"], "REPLAN")
+            if not tamper:
+                return
+            # A prompt tamper cannot survive independent request revalidation.
+            directory = next(path for path in (run / "requests").iterdir()
+                if runner.base.read(path / "PROOF.json").get("route") == runner.ROUTES[1])
+            payload = runner.base.read(directory / "REQUEST.json")
+            payload["messages"][0]["content"] += "MOCK_TAMPER"
+            (directory / "REQUEST.json").write_text(json.dumps(payload))
+            for name in ("FINAL_AUDIT.json", "SEQUENTIAL_SUMMARY.json", "SEQUENTIAL_SUMMARY.md"):
+                (run / name).unlink()
+            negative = audit_sequential.audit_run(run)
+            self.assertEqual(negative["status"], "FAIL")
+            self.assertTrue(any("request_payload_hash_mismatch" in item["error"] for item in negative["failures"]))
+
+    def test_real_prepare_live_reservation_and_independent_audit(self):
+        self.exercise_live(tamper=True)
+
+    def test_full_audit_replays_partial_review_merge(self):
+        self.exercise_live("B_partial_review_repair")
+
+    def test_full_audit_replays_preserved_negative_event_repair(self):
+        self.exercise_live("B_event_preservation_repair")
+
+    def test_full_audit_replays_role_consistency_repair(self):
+        self.exercise_live("B_review_role_consistency_repair")
+
+
+if __name__ == "__main__":
+    unittest.main()

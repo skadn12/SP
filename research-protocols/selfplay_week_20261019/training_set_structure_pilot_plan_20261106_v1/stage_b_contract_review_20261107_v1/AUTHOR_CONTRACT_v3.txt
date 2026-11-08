@@ -1,0 +1,49 @@
+STAGE B AUTHOR CONTRACT v3 — ANONYMOUS, REVIEW DRAFT
+
+STATUS AND SCOPE
+This is a contract review draft, not an authorization. No author may run under this file until a later frozen execution binds this exact file hash, its schemas, all role inputs, the schedule, metrics, and an explicit AUTHOR_ONLY authorization. The current execution_20261107_v6 remains unchanged and unauthorized.
+
+The experiment remains the preregistered 8 roots × 4 opportunities per root design: OLD_F, OLD_G, NEW_F, NEW_G; 32 opportunities total and no more than 32 first drafts. Each opportunity is an independent author context. The workflow field OLD/NEW is necessary to perform the assigned process. Do not request or emit root identity, group/arm identity, canonical path, private source identity, history item content, model-answer scores, or controller mappings. The feedback condition is supplied only through presence or absence of the authorized abstract context card in the assigned input packet; do not infer or label its experimental arm.
+
+AUTHORIZED INPUTS
+Read only the exact files listed in your own frozen author packet: its anonymous SOURCE.json, NEUTRAL.json, this contract and schema, and the abstract context card only when the packet supplies it. Read the entire source before freezing any exploration, target, slot, or item. Do not access another opportunity, selector packet/result, history projection, prior execution, private/controller file, training artifact, or solver output. Do not call another model or remote service. Do not change model identity during the opportunity. Record the actual model identity and observable usage or use null when unavailable.
+
+GENERAL CONTENT RULES
+Use only source-supported facts. Preserve who said or did what, and distinguish reported, planned, suggested, attempted, and completed events. Mention order alone does not establish event order, precedence, or causality. Cite the exact turn reference and exact supporting substring for every fact needed to determine the answer. State the natural information need and exact query scope. Record alternative sufficient evidence paths and unresolved relations rather than claiming a unique minimal proof without support.
+
+An item may use multi-select, complete ordering, or partial ordering. No fixed number of choices, answer labels, task type, or complexity is required. Every choice must be independently decidable from the source. Complete ordering is allowed only if the requested items have one source-supported total order. Partial ordering must define the full queried pair domain and return all and only supported directed relations; do not force unresolved pairs into an order. A locally easy or simple item is acceptable if it is natural and sound. Do not invent facts, bundle unrelated events, change the source, or optimize to a presumed solver score.
+
+ONE-ATTEMPT RULE
+Each opportunity permits one author attempt. No repair, rewrite, replacement item, second slot set, retry, fallback, reselection, or replacement opportunity is allowed. Preserve submitted bytes. Any invalid/malformed output or access violation is terminal; do not silently correct it. A terminal opportunity remains in the fixed denominator.
+
+OLD WORKFLOW
+Read and explore the complete source. Explore at least three materially distinct natural information needs when the source supports that many; if fewer are source-supported, record the actual number and why no further distinct need can be grounded. Do not manufacture distinctions to reach three. You may find zero safe items. Before writing an item, freeze the exploration record and one chosen target. The target freeze records the precise need/scope, facts and exact evidence, semantic answer, answer program (the operations and relations that determine it), alternatives, and unresolved relations. Only after that target is frozen may you write the item. Do not use the history projection to claim novelty; the author does not see it.
+
+Submit these files once, in order:
+1. AUTHOR_READ_LOG.json — actual inputs read and source completeness evidence.
+2. OLD_EXPLORATION.json — explored needs in discovery order; 0..n rows, with a reason if fewer than three are supported.
+3. OLD_TARGET.json and OLD_TARGET_FREEZE.json — only when a safe target was selected. Freeze is a raw-byte SHA-256 binding and must precede the item.
+4. OLD_ITEM.json — zero or one item. If no safe item exists, submit terminal status NO_SAFE_QA and no item.
+
+NEW WORKFLOW
+Read and explore the complete source, then submit zero to three semantic slots. Each slot records (a) the natural information need and exact scope, (b) stable source facts/relations with turn references and exact quotations, (c) semantic answer before it is represented as options or labels, (d) a reproducible answer program, and (e) alternatives and unresolved relations. Slots are in discovery order with unique IDs S01, S02, S03. Do not include a question, answer choices, a question type, displayed labels, or a formatted item in the slot file. Do not pad the slots.
+
+Freeze NEW_SLOTS.json by raw-byte SHA-256 before it is handed to the independent selector. After submission, do not edit or reorder it. Wait for one hash-bound result. If selected, implement only that slot as one item; do not change its need, scope, facts, semantic answer, or answer program and do not see or request other slots' selection status as a reason to switch. If the selected target cannot naturally be represented by an allowed item type, return FORM_UNSUPPORTED and stop. If the selector returns NO_SAFE_QA, stop. No second selector call or alternate slot is permitted.
+
+Submit these files once, in order:
+1. AUTHOR_READ_LOG.json — actual inputs read and source completeness evidence.
+2. NEW_SLOTS.json and SLOTS_FREEZE.json — zero to three slots, frozen once.
+3. After one selector result only: IMPLEMENTATION_READ_LOG.json, NEW_ITEM.json and IMPLEMENTATION_FREEZE.json; or a terminal FORM_UNSUPPORTED record. If no slot is safe, record terminal NO_SAFE_QA and do not produce an item.
+
+ITEM RECORD
+An item record must include: anonymous opportunity code; workflow; source hash; frozen target/slot hash; one item index equal to 1; type; natural-language question; displayed options when applicable; answer key as displayed option identifiers or the complete ordered items/pairs; natural information need; query scope; cognitive task/answer program; event identity when applicable; relation plan; exact evidence and option-by-option evidence/reason audit; alternative sufficient paths; unresolved relations; and any quality concerns. The full schema is in OUTPUT_SCHEMAS_v1.json. Do not include private identity fields or files/paths outside the authorized anonymous packet. No fixed option count or answer cardinality applies.
+
+For partial ordering include every queried pair, classify each as supported in a direction or not established by the source, and cite support for every positive relation. For complete ordering verify every requested item appears exactly once and the order is unique. For multi-select provide an independent source-grounded judgment for every option; do not force distractors or an answer count.
+
+READ LOG, FREEZE, AND OUTPUT
+The read log records only actually read allowed files, their relative paths, raw-byte SHA-256 and byte length, and complete source-turn coverage. It must not claim complete reading unless every source turn is accounted for exactly once. Store output files with exclusive creation; if a target path already exists, stop. Never overwrite an output or write a revised “final.” Hash exact submitted bytes, not normalized JSON. Use UTF-8 JSON without BOM and UTC timestamps where observed. Unavailable token, cost, or model details are null, never estimated.
+
+For NEW implementation, the read log additionally binds the frozen slot file and the one selector result. For OLD, target freeze precedes the item. Every item/freeze records the corresponding input hashes. The controller, not the author, maintains the private opportunity mapping and analysis joins.
+
+STOP CONDITIONS
+NO_SAFE_QA, FORM_UNSUPPORTED, malformed input/output, inability to establish complete source reading, timeout, or access violation consumes the opportunity and is terminal. Do not retry, repair, ask for more context, request another selector, use a fallback slot, or create another item. This contract authorizes no blind review, solver run, training, or export.

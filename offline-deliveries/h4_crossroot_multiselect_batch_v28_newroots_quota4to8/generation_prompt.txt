@@ -1,0 +1,36 @@
+Generate source-grounded six-option multi-select question drafts for root {ROOT_ID}, using only the supplied frozen promoted dialogue (parent turns plus appended R01). This is a generation draft, not an approved dataset. Return exactly one JSON object and no prose outside it.
+
+Output schema:
+{
+  "root_id": "{ROOT_ID}",
+  "questions": [
+    {
+      "candidate_id": "one exact ID from candidate_ids in the supplied input",
+      "topic": "one coherent topic supported by all six options",
+      "question": "A concise question whose scope fits all six options and ends with Select all that apply.",
+      "options": [
+        {
+          "proposition": "A complete, directly decidable statement that names its speaker",
+          "relation": "supports",
+          "turn_ref": "P... or R01:...",
+          "speaker": "exact speaker name from that turn",
+          "quote": "an exact contiguous quote from that single turn, at most 240 characters",
+          "rationale": "Why this quote directly supports or contradicts the complete proposition"
+        }
+      ]
+    }
+  ],
+  "abstentions": []
+}
+
+Generate exactly the requested number of candidate slots unless a slot cannot be grounded. In that case omit that question and add its candidate_id and a concise reason to abstentions. Do not pad with unrelated facts. All six propositions in one question must fit the same narrow topic and question scope; six individually true facts from unrelated episodes do not form a valid question.
+
+Each question must have six distinct propositions from six distinct source turns, including at least one appended R01 turn. Other options may cite parent (P) turns or R01 turns. Copy each turn_ref character-for-character from source_turns; do not abbreviate a parent ref to P01:T001 or invent a ref. Copy quote as an exact contiguous substring of that same turn's text; check that it appears verbatim there. Each proposition must be fully decidable from its own quoted turn alone. Preserve speaker, time, negation, modality, and qualifications. Do not resolve pronouns, unnamed events, or activities from neighboring turns. Do not treat silence, uncertainty, plans, suggestions, or missing details as evidence of the opposite.
+
+Use relation "supports" only when the quoted speaker directly supports the whole proposition. Use "contradicts" only when the same speaker directly states the opposite of the whole proposition in that quoted turn. Every contradiction must be explicit and attributable to that speaker; do not create a false option by arbitrarily negating a true one. Each question must have between two and six supported options. Any count in that range is allowed; do not force the same count across questions. Six supported options are allowed only when all six are independently and directly supported. Never alter truth to create label variety.
+
+The option array is intentionally unlabeled. A later deterministic step will bind labels after content review, preserving each proposition and evidence record while varying Gold positions where the number of supported options makes that possible. Do not arrange truth values into a prefix or choose a desired label pattern.
+
+Avoid facts already represented in the supplied prior candidate pool of any question type. The old pool is deduplication context only, not evidence and not proof of training selection. Search the supplied capacity-screen priority scenes and topics first, because they may contain less-covered material, but verify every proposed fact against the old pool and other questions. An unreferenced source turn is not proof that its fact is novel. Compare paraphrases and negations, not just exact wording or turn references. If a priority scene cannot support another narrow, genuinely new six-turn question, search elsewhere in the frozen source or abstain for that slot. Complete the requested slots only when the source supports six distinct turns on one coherent narrow topic; abstain when that is unavailable rather than weaken evidence, reuse covered facts, or mix topics. Four slots are an experimental request, not a quota to fill regardless of validity.
+
+Root, quota, capacity-screen priority scenes, complete frozen promoted source turns, existing candidate-pool coverage, and candidate IDs follow as JSON:

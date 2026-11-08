@@ -1,0 +1,1154 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stage_b_output_schemas_v1",
+  "title": "Stage B anonymous author and selector outputs",
+  "description": "Review draft only. JSON Schema validates shape, not factual support, access boundaries, novelty, or quality.",
+  "$defs": {
+    "hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "turn_ref",
+        "quote",
+        "speaker"
+      ],
+      "properties": {
+        "turn_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "quote": {
+          "type": "string",
+          "minLength": 1
+        },
+        "speaker": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fact_id",
+        "proposition",
+        "evidence"
+      ],
+      "properties": {
+        "fact_id": {
+          "type": "string",
+          "pattern": "^F[0-9]{2,}$"
+        },
+        "proposition": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/evidence"
+          }
+        },
+        "status_or_modality": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "program": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation",
+        "entities",
+        "relations",
+        "scope"
+      ],
+      "properties": {
+        "operation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "entities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "relations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "scope": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "natural_information_need",
+        "precise_query_scope",
+        "facts",
+        "semantic_answer",
+        "answer_program",
+        "required_relations",
+        "alternative_sufficient_paths",
+        "unresolved_relations"
+      ],
+      "properties": {
+        "natural_information_need": {
+          "type": "string",
+          "minLength": 1
+        },
+        "precise_query_scope": {
+          "type": "string",
+          "minLength": 1
+        },
+        "facts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/fact"
+          }
+        },
+        "semantic_answer": {},
+        "answer_program": {
+          "$ref": "#/$defs/program"
+        },
+        "required_relations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "alternative_sufficient_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "unresolved_relations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "event_identity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "slot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slot_id",
+        "natural_information_need",
+        "precise_query_scope",
+        "facts",
+        "semantic_answer",
+        "answer_program",
+        "required_relations",
+        "alternative_sufficient_paths",
+        "unresolved_relations"
+      ],
+      "properties": {
+        "slot_id": {
+          "type": "string",
+          "enum": [
+            "S01",
+            "S02",
+            "S03"
+          ]
+        },
+        "natural_information_need": {
+          "type": "string",
+          "minLength": 1
+        },
+        "precise_query_scope": {
+          "type": "string",
+          "minLength": 1
+        },
+        "facts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/fact"
+          }
+        },
+        "semantic_answer": {},
+        "answer_program": {
+          "$ref": "#/$defs/program"
+        },
+        "required_relations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "alternative_sufficient_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "unresolved_relations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "event_identity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "question"
+            ]
+          },
+          {
+            "required": [
+              "options"
+            ]
+          },
+          {
+            "required": [
+              "question_type"
+            ]
+          },
+          {
+            "required": [
+              "answer_key"
+            ]
+          },
+          {
+            "required": [
+              "gold"
+            ]
+          },
+          {
+            "required": [
+              "solver"
+            ]
+          }
+        ]
+      }
+    },
+    "base": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "type": "string"
+        },
+        "opportunity_code": {
+          "type": "string",
+          "pattern": "^OPP_[0-9]{3}$"
+        },
+        "workflow": {
+          "enum": [
+            "OLD",
+            "NEW"
+          ]
+        },
+        "source_sha256": {
+          "$ref": "#/$defs/hash"
+        },
+        "status": {
+          "type": "string"
+        }
+      }
+    },
+    "option": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "option_id",
+        "text",
+        "is_supported",
+        "reason",
+        "evidence"
+      ],
+      "properties": {
+        "option_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "is_supported": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidence"
+          }
+        }
+      }
+    },
+    "item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "item_index",
+        "question_type",
+        "question",
+        "options",
+        "answer_key",
+        "target",
+        "option_audit",
+        "quality_concerns"
+      ],
+      "properties": {
+        "item_index": {
+          "const": 1
+        },
+        "question_type": {
+          "enum": [
+            "multi_select",
+            "ordering",
+            "partial_order"
+          ]
+        },
+        "question": {
+          "type": "string",
+          "minLength": 1
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/option"
+          }
+        },
+        "answer_key": {},
+        "target": {
+          "$ref": "#/$defs/target"
+        },
+        "option_audit": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/option"
+          }
+        },
+        "quality_concerns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "partial_order_audit": {
+          "type": "object"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "question_type": {
+                "const": "partial_order"
+              }
+            },
+            "required": [
+              "question_type"
+            ]
+          },
+          "then": {
+            "required": [
+              "partial_order_audit"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "question_type": {
+                "const": "ordering"
+              }
+            },
+            "required": [
+              "question_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "options": {
+                "minItems": 2
+              }
+            }
+          }
+        }
+      ]
+    },
+    "read_log": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "opportunity_code",
+        "workflow",
+        "read_files",
+        "source_turn_count",
+        "source_turns_read",
+        "full_source_read",
+        "model_identity",
+        "usage",
+        "started_utc",
+        "completed_utc",
+        "status",
+        "source_turn_refs_read"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "stage_b_input_read_log_v1"
+        },
+        "opportunity_code": {
+          "type": "string",
+          "pattern": "^OPP_[0-9]{3}$"
+        },
+        "workflow": {
+          "enum": [
+            "OLD",
+            "NEW"
+          ]
+        },
+        "read_files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "logical_name",
+              "relative_path",
+              "sha256",
+              "bytes"
+            ],
+            "properties": {
+              "logical_name": {
+                "type": "string"
+              },
+              "relative_path": {
+                "type": "string"
+              },
+              "sha256": {
+                "$ref": "#/$defs/hash"
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        "source_turn_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "source_turns_read": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Must equal source_turn_count if full_source_read=true; exact unique turn refs are in source_turn_refs_read."
+        },
+        "full_source_read": {
+          "type": "boolean"
+        },
+        "model_identity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "usage": {
+          "type": "object",
+          "required": [
+            "input_tokens",
+            "output_tokens",
+            "cost_usd"
+          ],
+          "properties": {
+            "input_tokens": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "output_tokens": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "cost_usd": {
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          }
+        },
+        "started_utc": {
+          "$ref": "#/$defs/time"
+        },
+        "completed_utc": {
+          "$ref": "#/$defs/time"
+        },
+        "status": {
+          "enum": [
+            "READ_COMPLETE",
+            "INCOMPLETE_TERMINAL"
+          ]
+        },
+        "source_turn_refs_read": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "old_exploration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "opportunity_code",
+        "workflow",
+        "source_sha256",
+        "source_turn_count",
+        "natural_needs_explored",
+        "selected_need_id",
+        "status",
+        "insufficient_distinct_needs_reason"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "stage_b_old_exploration_v1"
+        },
+        "opportunity_code": {
+          "type": "string",
+          "pattern": "^OPP_[0-9]{3}$"
+        },
+        "workflow": {
+          "const": "OLD"
+        },
+        "source_sha256": {
+          "$ref": "#/$defs/hash"
+        },
+        "source_turn_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "natural_needs_explored": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "need_id",
+              "natural_information_need",
+              "scope_summary",
+              "supporting_turn_refs",
+              "feasible",
+              "reason"
+            ],
+            "properties": {
+              "need_id": {
+                "type": "string"
+              },
+              "natural_information_need": {
+                "type": "string"
+              },
+              "scope_summary": {
+                "type": "string"
+              },
+              "supporting_turn_refs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "feasible": {
+                "type": "boolean"
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        "selected_need_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "enum": [
+            "FROZEN",
+            "NO_SAFE_QA"
+          ]
+        },
+        "insufficient_distinct_needs_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "natural_needs_explored": {
+                "maxItems": 2
+              }
+            },
+            "required": [
+              "natural_needs_explored"
+            ]
+          },
+          "then": {
+            "properties": {
+              "insufficient_distinct_needs_reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "freeze": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "opportunity_code",
+        "source_sha256",
+        "read_log_sha256",
+        "content_sha256",
+        "frozen_utc",
+        "status"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "string"
+        },
+        "opportunity_code": {
+          "type": "string",
+          "pattern": "^OPP_[0-9]{3}$"
+        },
+        "source_sha256": {
+          "$ref": "#/$defs/hash"
+        },
+        "read_log_sha256": {
+          "$ref": "#/$defs/hash"
+        },
+        "content_sha256": {
+          "$ref": "#/$defs/hash"
+        },
+        "frozen_utc": {
+          "$ref": "#/$defs/time"
+        },
+        "status": {
+          "type": "string"
+        },
+        "selector_result_sha256": {
+          "$ref": "#/$defs/hash"
+        },
+        "selected_slot_id": {
+          "type": "string"
+        }
+      }
+    },
+    "old_target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "opportunity_code",
+        "workflow",
+        "source_sha256",
+        "selected_need_id",
+        "target",
+        "status"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "stage_b_old_target_v1"
+        },
+        "opportunity_code": {
+          "type": "string",
+          "pattern": "^OPP_[0-9]{3}$"
+        },
+        "workflow": {
+          "const": "OLD"
+        },
+        "source_sha256": {
+          "$ref": "#/$defs/hash"
+        },
+        "selected_need_id": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/target"
+        },
+        "status": {
+          "const": "FROZEN"
+        }
+      }
+    },
+    "new_slots": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "opportunity_code",
+        "workflow",
+        "source_sha256",
+        "source_turn_count",
+        "slots",
+        "status"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "stage_b_new_slots_v1"
+        },
+        "opportunity_code": {
+          "type": "string",
+          "pattern": "^OPP_[0-9]{3}$"
+        },
+        "workflow": {
+          "const": "NEW"
+        },
+        "source_sha256": {
+          "$ref": "#/$defs/hash"
+        },
+        "source_turn_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "slots": {
+          "type": "array",
+          "maxItems": 3,
+          "items": {
+            "$ref": "#/$defs/slot"
+          }
+        },
+        "status": {
+          "enum": [
+            "READY_FOR_SELECTOR",
+            "NO_SAFE_QA"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "READY_FOR_SELECTOR"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "slots": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "NO_SAFE_QA"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "slots": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    "old_item_submission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "opportunity_code",
+        "workflow",
+        "source_sha256",
+        "target_sha256",
+        "status",
+        "item"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "stage_b_old_item_v1"
+        },
+        "opportunity_code": {
+          "type": "string",
+          "pattern": "^OPP_[0-9]{3}$"
+        },
+        "workflow": {
+          "const": "OLD"
+        },
+        "source_sha256": {
+          "$ref": "#/$defs/hash"
+        },
+        "target_sha256": {
+          "$ref": "#/$defs/hash"
+        },
+        "status": {
+          "enum": [
+            "ITEM_CREATED",
+            "NO_SAFE_QA"
+          ]
+        },
+        "item": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/item"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "ITEM_CREATED"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "item": {
+                "$ref": "#/$defs/item"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "NO_SAFE_QA"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "item": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "slots_freeze": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "opportunity_code",
+        "source_sha256",
+        "read_log_sha256",
+        "content_sha256",
+        "slot_count",
+        "frozen_utc",
+        "status"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "stage_b_slots_freeze_v1"
+        },
+        "opportunity_code": {
+          "type": "string",
+          "pattern": "^OPP_[0-9]{3}$"
+        },
+        "source_sha256": {
+          "$ref": "#/$defs/hash"
+        },
+        "read_log_sha256": {
+          "$ref": "#/$defs/hash"
+        },
+        "content_sha256": {
+          "$ref": "#/$defs/hash"
+        },
+        "slot_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "frozen_utc": {
+          "$ref": "#/$defs/time"
+        },
+        "status": {
+          "const": "FROZEN_WAITING_SELECTOR"
+        }
+      }
+    },
+    "selector_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "selected_slot_id",
+        "status",
+        "reason",
+        "input_hashes"
+      ],
+      "properties": {
+        "selected_slot_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "S01",
+            "S02",
+            "S03",
+            null
+          ]
+        },
+        "status": {
+          "enum": [
+            "SELECTED",
+            "NO_SAFE_QA",
+            "FORM_UNSUPPORTED"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "input_hashes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "source_sha256",
+            "neutral_sha256",
+            "slots_sha256",
+            "history_sha256"
+          ],
+          "properties": {
+            "source_sha256": {
+              "$ref": "#/$defs/hash"
+            },
+            "neutral_sha256": {
+              "$ref": "#/$defs/hash"
+            },
+            "slots_sha256": {
+              "$ref": "#/$defs/hash"
+            },
+            "history_sha256": {
+              "$ref": "#/$defs/hash"
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "SELECTED"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "selected_slot_id": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "NO_SAFE_QA",
+                  "FORM_UNSUPPORTED"
+                ]
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "selected_slot_id": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "new_item_submission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "opportunity_code",
+        "workflow",
+        "source_sha256",
+        "slots_sha256",
+        "selector_result_sha256",
+        "selected_slot_id",
+        "status",
+        "item"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "stage_b_new_item_v1"
+        },
+        "opportunity_code": {
+          "type": "string",
+          "pattern": "^OPP_[0-9]{3}$"
+        },
+        "workflow": {
+          "const": "NEW"
+        },
+        "source_sha256": {
+          "$ref": "#/$defs/hash"
+        },
+        "slots_sha256": {
+          "$ref": "#/$defs/hash"
+        },
+        "selector_result_sha256": {
+          "$ref": "#/$defs/hash"
+        },
+        "selected_slot_id": {
+          "enum": [
+            "S01",
+            "S02",
+            "S03"
+          ]
+        },
+        "status": {
+          "enum": [
+            "ITEM_CREATED",
+            "FORM_UNSUPPORTED"
+          ]
+        },
+        "item": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/item"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "ITEM_CREATED"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "item": {
+                "$ref": "#/$defs/item"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "FORM_UNSUPPORTED"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "item": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

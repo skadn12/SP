@@ -1,0 +1,43 @@
+STAGE B INDEPENDENT SELECTOR CONTRACT v3 — ANONYMOUS, REVIEW DRAFT
+
+STATUS AND SCOPE
+This is a contract review draft, not an authorization. A selector may run only after a later freeze binds this exact contract, selector schemas, complete historical projection, the opportunity's frozen slots, and an explicit selector authorization. The selector's only job is to choose one already-frozen semantic slot according to PLAN_ZH.md §4. It cannot author a new task, alter a slot, or improve its wording.
+
+INPUT AND ISOLATION
+Read only the exact anonymous source, neutral source note, frozen semantic slots, anonymous historical-coverage projection, selector contract/schema and selector packet named by the frozen inputs. Do not read author logs/exploration, author identity, OLD/NEW or feedback condition, other opportunities, solver/training outputs, historical question text/options/answers, private mappings, or paths outside the supplied packet. The controller must invoke the selector in an isolated context and provide no forbidden material.
+
+HISTORICAL PROJECTION PREREQUISITE
+The plan's priority is based on event + natural information need + answer operation, then underrepresented actual operation/evidence relation among verified, eligible historical training items. The projection must follow the exact history eligibility and inclusion policy frozen from PLAN_ZH.md §3. Expose two distinct anonymous sets in the selector projection. (1) The coverage set contains only eligible, independently reviewed training items and supports frequencies for the plan's underrepresented-operation/evidence-family tie-break. Each row has a stable opaque record key, review status, event, natural information need, precise query scope, answer operation, evidence family, and eligibility, each traceable to a sealed coding audit outside the selector packet. (2) The overlap set contains the plan-required same-root historical references; it may include drafts and other non-training records, with their qualification state made explicit. Deduplicate the 18 known overlap records that are also in the sealed 135 by canonical binding so coverage counts are not doubled. Preserve the 12 unrecoverable same-root references as explicit unknown rows. Do not include structured semantics for other-root/non-training inventory records; bind their complete inventory and hashes in the controller manifest for the separate Stage-C overlap review. Do not count overlap-only records as verified training coverage.
+
+Treat `UNKNOWN`, pending, provisional, ineligible, and absent dimensions as unknown, never as uncovered or novel. Compare only explicit reviewed fields. If the projection lacks a required comparison dimension or its coverage status is not auditable, the controller must stop before selector invocation as `HISTORY_BASELINE_INCOMPLETE`; do not downgrade the selector to operation-only selection. A selector must not convert unknown into evidence of novelty. The v6 projection currently fails this prerequisite; this draft does not make it complete. The plan-scoped union is 212 unique rows: 135 sealed training items plus 77 unique same-root additions after deduplicating 18 sealed representations and 11 derived copies of sealed IDs. This includes 65 coded additions pending tuple completion and 12 explicit unknowns.
+
+SELECTION PROCEDURE
+For every slot, in its original order:
+1. Apply a feasibility gate: source evidence is sufficient, the natural need and query scope are clear, and at least one allowed item form can express the exact semantic target. Record the reason for each failed gate.
+2. Among feasible slots, compare the event + natural need + answer operation combination against all same-root overlap rows for collision avoidance, and separately against the eligible coverage set for coverage status. Mark a match, distinct comparison, or unknown with the fields used. A known exact match in a non-training overlap row is a duplication signal but does not increase qualified training-coverage frequency. Unknown same-root rows remain unresolved and cannot support a claim of historical novelty. Unknown does not count as distinct.
+3. Prefer slots with a verified not-covered combination only when every needed comparison dimension is known. Among equally supported non-duplicate slots, prefer less-represented verified answer operations and evidence relations under the frozen projection. Do not optimize for complexity, answer cardinality, type quotas, expected model failure, or F/G condition.
+4. Resolve complete ties by ascending slot ID. Do not generate substitute slots. If no feasible slot exists, return NO_SAFE_QA; if a feasible natural target exists but none can be expressed in an allowed form, return FORM_UNSUPPORTED.
+
+The history baseline is fixed for this experiment and does not update across opportunities. The selector may not see another opportunity's slots or result. A selected slot ID is returned to the same author only. Selection is not a quality pass.
+
+EXACT RESULT
+Return one JSON object with exactly these four top-level keys and no other keys:
+
+{
+  "selected_slot_id": "S01 | S02 | S03 | null",
+  "status": "SELECTED | NO_SAFE_QA | FORM_UNSUPPORTED",
+  "reason": "Concise account of the frozen rule and visible comparison basis.",
+  "input_hashes": {
+    "source_sha256": "64 lowercase hex characters",
+    "neutral_sha256": "64 lowercase hex characters",
+    "slots_sha256": "64 lowercase hex characters",
+    "history_sha256": "64 lowercase hex characters"
+  }
+}
+
+When status is SELECTED, the ID must exist in the frozen slot file. For either rejection status, selected_slot_id must be null. Hashes are the SHA-256 of the exact raw input bytes. Do not add a comparison table or hidden metadata to the response.
+
+CONTROLLER AUDIT AND TERMINAL BEHAVIOR
+The controller separately generates the per-slot audit from the exact frozen inputs and the selector's untouched response. It compares each slot against every selector-visible row in the coverage and same-root overlap sets, records per-dimension unknowns, qualification, feasibility, decision and tie-break. Overlap-only rows may identify duplication risk but are excluded from verified training-coverage counts. The audit cannot claim complete semantic deduplication when the baseline cannot support it. Its hash binds to the selector result and all four input hashes. A human semantic judgement must be recorded as such, not represented as a mechanical comparison.
+
+Only one selector call is permitted. A selected result with mismatched hashes, an unknown slot ID, malformed JSON, extra/missing keys, or access violation is terminal for that opportunity. NO_SAFE_QA and FORM_UNSUPPORTED are terminal; no second choice or fallback is allowed. No author, solver, training, or export authorization is granted here.

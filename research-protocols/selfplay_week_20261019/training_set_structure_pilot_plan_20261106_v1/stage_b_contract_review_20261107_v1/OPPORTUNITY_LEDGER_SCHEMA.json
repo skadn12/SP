@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stage_b_opportunity_ledger_v1",
+  "title": "Controller-only append-only Stage B opportunity ledger",
+  "description": "Review draft. Never expose this controller ledger or its private binding key to author/selector roles.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "opportunity_code", "private_binding_key", "attempt_number", "state", "events"],
+  "properties": {
+    "schema_version": {"const": "stage_b_opportunity_ledger_v1"},
+    "opportunity_code": {"type": "string", "pattern": "^OPP_[0-9]{3}$"},
+    "private_binding_key": {"type": "string", "description": "Controller-only key used for offline root/group linkage; no raw task content."},
+    "attempt_number": {"const": 1},
+    "state": {"type": "string", "enum": ["NOT_STARTED", "AUTHORING", "WAITING_SELECTOR", "SELECTED_READY", "IMPLEMENTED", "NO_SAFE_QA", "FORM_UNSUPPORTED", "HISTORY_BASELINE_INCOMPLETE", "MALFORMED_INPUT", "MALFORMED_OUTPUT", "ACCESS_VIOLATION", "TIMEOUT", "TERMINAL_ERROR"]},
+    "events": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["sequence", "stage", "state", "timestamp_utc", "input_hashes", "output_artifacts", "rule_ids"],
+        "properties": {
+          "sequence": {"type": "integer", "minimum": 1},
+          "stage": {"enum": ["AUTHOR", "SELECTOR", "IMPLEMENTATION", "CONTROLLER_GATE"]},
+          "state": {"type": "string"},
+          "timestamp_utc": {"type": "string", "format": "date-time"},
+          "input_hashes": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^[a-f0-9]{64}$"}},
+          "output_artifacts": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["relative_path", "sha256"], "properties": {"relative_path": {"type": "string"}, "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}}},
+          "rule_ids": {"type": "array", "items": {"type": "string"}},
+          "reason_code": {"type": ["string", "null"]},
+          "usage": {"type": "object", "required": ["input_tokens", "output_tokens", "cost_usd"], "properties": {"input_tokens": {"type": ["integer", "null"]}, "output_tokens": {"type": ["integer", "null"]}, "cost_usd": {"type": ["number", "null"]}}}
+        }
+      }
+    }
+  }
+}

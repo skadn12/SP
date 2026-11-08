@@ -1,0 +1,40 @@
+{
+  "schema_version": "source_sync_validation_20261108_v1",
+  "scope": "Source synchronization, not reproduction of historical experiments or a full workspace backup.",
+  "static_index_tree": "ad0c77b77e84fe9c9395955e29b0c1538c3cd700",
+  "static_checks": {
+    "added_paths": 5881,
+    "python_compile_only_passed": 5434,
+    "json_parse_passed": 131,
+    "shell_syntax_passed": 2,
+    "errors": 0,
+    "repo_manifest_entries_checked": 806,
+    "weekly_manifest_entries_checked": 1170,
+    "workspace_manifest_entries_checked": 252,
+    "offline_manifest_entries_checked": 3885,
+    "manifest_hash_and_original_byte_mismatches": 0,
+    "method": "Syntax compilation and parsing without executing source; manifests checked against Git index and original files."
+  },
+  "selected_offline_tests": {
+    "unique_passed": 401,
+    "groups": [
+      {"name": "Codex batch, evidence and ordering gates", "passed": 55},
+      {"name": "QA production, presentation, feedback, transport and budget", "passed": 80},
+      {"name": "Base QA pipeline, schemas, option freeze and mock transport", "passed": 199},
+      {"name": "Writer comparison", "passed": 53},
+      {"name": "v112/v113 synthetic tooling guards", "passed": 14}
+    ],
+    "writer_test_tree": "a8de656a2d15dee3ae3729d741e89ce8624f922c",
+    "additional_test_tree": "996b4facd324a63e13bee480a8977d88a1ead41a",
+    "isolation": "Source-only checkout with real network, model imports and private/original workspace access blocked. Three tests needing a fresh process initially hit the process guard and passed on rerun with only their reviewed synthetic child programs allowed; those children retained the isolation guards.",
+    "limitations": "Selected synthetic and mock tests only. Some historical tests need excluded fixtures, immutable inputs and budget ledgers. No model, Solver, training or benchmark inference was run."
+  },
+  "publication_scope": {
+    "source_bytes_preserved": true,
+    "new_data_or_actual_question_payloads_intended": false,
+    "mixed_source_and_actual_data": "Excluded as complete files and listed in the source completeness manifests; original files remain local.",
+    "third_party_reference_copies": "Known copies without verified redistribution permissions are excluded and recorded with origin.",
+    "credentials": "Final staged index checked for common credential patterns before publication; pattern matching cannot establish that every possible secret representation is absent.",
+    "historical_whitespace": "Some verbatim historical files contain trailing whitespace; preserved to retain original bytes."
+  }
+}

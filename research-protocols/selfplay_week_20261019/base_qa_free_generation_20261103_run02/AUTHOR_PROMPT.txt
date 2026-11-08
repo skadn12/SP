@@ -1,0 +1,10 @@
+本轮是 Codex 自由构题研究小样扩展，不是 V2.2.1 自动流程有效性证明。
+用户指令：那我觉得下一步多自由出题一些看看。
+读取分配给你的两个 root 的 FULL_SOURCE.json 全文及来源元数据。每个 root 最多两道新首稿，总计最多四道；没有安全自然问题时可以零道。不能扩充素材或改写历史题来填数。
+从原始对话自行选择自然的信息需求与真实关系，不预设题干、关系族、题型比例或 Gold 数量。只使用多选或排序；多选展示沿用 A、B、C…，排序展示沿用 I1、I2…，内部用稳定语义 ID。正确项数量可为 2–6，且必须存在错误项；不是要求覆盖这些数量。选项和排序项数量由任务决定，不能为了复杂度写成长复合摘要。不得把独立事件默认为同一事件；不把计划当已完成。
+先在作者独立目录以 exclusive create 冻结语义目标、Gold、来源引用与来源哈希，保存冻结哈希，再构造候选。保存第一稿，不根据审核重写，不反复生成直到通过。不要读取历史候选作为构题模板；不是旧单选或旧多选的增删改写。
+完整保存题干、全部选项/项目、稳定 ID、语义 Gold、逐项证据 turn_ref、原文引用、简明可核验推导、干扰项错误路径、问题价值、难度辅助标签、替代证据路径与证据删除分析。不强称全局最小证据。区分每项内部多证据和跨选项聚合；不得把简单任务伪称 L3/L4。低难度不是拒题理由。
+记录全部探索目标与未构题原因。检查答案唯一性、状态/人物/对象绑定、重复证据、常识或措辞捷径、自然性。不能为结果好看掩盖问题。
+所有来源按完整冻结文本使用，逐题保留引用轮次的 origin/provenance 与警告；未知资格不自行批准。正式准入未解决的合成内容只能作为研究草稿，内容正确性与正式使用资格分开记录；不得自称正式 QA PASS。
+不得调用学校 API、运行 Qwen/其他 Solver、训练、修改 V1–V2.2.1、修改扩充流程。只写本次独立目录的作者分片。盲审由另一个全新隔离上下文完成，作者不代写盲审。
+输出文件：EXPLORATION.json（每root至少说明所读范围、发现的自然信息需求/关系及保留拒绝理由）、TARGETS_FROZEN.json 与 TARGETS_FREEZE.json、CANDIDATES_FIRST_DRAFT.json。候选顶层为 candidates 列表，每项至少 candidate_id/root_id/question_type/question/options(列表 option_id,text)/gold_option_ids(或 gold_order)/evidence(原turn_ref,text,origin)/option_audit(逐项 ID、true/false/排序位置、证据、理由)/evidence_audit/natural_information_need/cognitive_task/difficulty_auxiliary/source_path/source_sha256/source_admission_note/quality_concerns。部分顺序如采用，必须显式给出关系语义和唯一查询答案，不强迫唯一全排列。

@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "h4_r02_feedback_binding_schema_v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "change_from_source",
+    "intent_id",
+    "scope",
+    "source_feedback_ids",
+    "status"
+  ],
+  "properties": {
+    "intent_id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "status": {
+      "enum": [
+        "PROPOSED_TRANSFER",
+        "NO_SUPPORTED_TRANSFER"
+      ]
+    },
+    "source_feedback_ids": {
+      "type": "array",
+      "maxItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "\\S"
+      }
+    },
+    "scope": {
+      "type": "string"
+    },
+    "change_from_source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "added_distinction",
+        "feedback_basis",
+        "old_question_focus"
+      ],
+      "properties": {
+        "added_distinction": {
+          "type": "string"
+        },
+        "feedback_basis": {
+          "type": "string"
+        },
+        "old_question_focus": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "PROPOSED_TRANSFER"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "source_feedback_ids": {
+            "minItems": 1
+          },
+          "scope": {
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "change_from_source": {
+            "properties": {
+              "added_distinction": {
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "feedback_basis": {
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "old_question_focus": {
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "source_feedback_ids": {
+            "maxItems": 0
+          },
+          "scope": {
+            "const": ""
+          },
+          "change_from_source": {
+            "properties": {
+              "added_distinction": {
+                "const": ""
+              },
+              "feedback_basis": {
+                "const": ""
+              },
+              "old_question_focus": {
+                "const": ""
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

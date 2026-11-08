@@ -1,0 +1,25 @@
+You are an execution worker. The user explicitly authorized continuing the 20-root F/G replication recovery. Execute now; do not spend the turn re-reading predecessor scripts or proposing alternatives.
+
+CWD is the new resume directory. The predecessor is read-only:
+/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/feedback_replication_20root_20261025_v1
+
+A precheck is complete: python scripts/self_check.py passed. Read only RESUME_MANIFEST.json, RESUME_PLAN.json, EVENT_POLICY_SELF_CHECK.json, then implement and run the pipeline in this directory.
+
+NON-NEGOTIABLE:
+- Never modify predecessor or original-four paths.
+- The 16 predecessor cli_calls/cc_train_episode_*_source_draft/attempt_01/LAST_MESSAGE.txt files are fixed initial draft candidates. Do not regenerate them.
+- In each source draft event stream, accept only the exact local ignored-config warning plus normal agent_message and reasoning events. Reject actual tool/command/function items, unknown error items, malformed/missing JSON, timeouts, backend errors, and top-level error/reconnect events. Retain a per-root classification receipt.
+- Preserve all evidence, failed roots, exact IDs, raw output hashes. Do not substitute roots or native events.
+- Fresh source reviewer calls may use Codex. Give every draft one independent compact review: PASS/REVISE/FAIL, source quotes, concise failure reasons. For failed source candidates allow at most one targeted revision and one independent recheck. Persist both. Do not rerun initial drafts.
+- Use at most 3 parallel semantic calls. Individual source review/revision prompts must contain one root only.
+- Once source freeze exists, use only pass-reviewed sources for paired F/G 8-slot question generation; separate fresh author, Gold, reviewer; maximum one content revision. Retain missing slots.
+- Fixed B1 only for solver; no training; never rerun sealed old four; missing solver responses are missingness, not incorrect.
+- Update RUN_STATUS.json atomically after preflight, every source batch, question freeze, solver, analysis and closeout. Include actual counts and PIDs/start tokens for active children.
+- Perform actual work. Do not merely write plan/analysis files. Do not exit after engineering if source reviews can run.
+
+IMPLEMENTATION PRIORITY:
+1. Create scripts/source_resume.py and scripts/codex_client.py with small unit/self tests, run tests. Record events/raw/backend/request hashes and enforce the exact event policy.
+2. Run python scripts/source_resume.py --run immediately. Persist SOURCE_FREEZE.json with all 16 root outcomes.
+3. Build/run questions for pass-reviewed roots, then solver and analysis, then FINAL_REPORT.json.
+
+Use /root/.vscode-server/extensions/openai.chatgpt-26.51002.51308-linux-x64/bin/linux-x86_64/codex for fresh reviewer and author calls, sandbox danger-full-access, approval policy never, JSON output. Be exact about actual backend model. Do not claim completion unless phases actually ran. Do not spawn subagents.

@@ -1,0 +1,1000 @@
+"""Independent R02 branches with bounded Qwen scene repair and immutable output."""
+from __future__ import annotations
+
+import argparse
+from copy import deepcopy
+from datetime import datetime, timezone
+import fcntl
+import importlib.util
+import json
+from pathlib import Path
+import shutil
+import sys
+
+HERE = Path(__file__).resolve().parent
+DELIVERIES = HERE.parents[1]
+LEGACY = DELIVERIES / "h4_r02_dualroute_feedback_v1"
+sys.path.insert(0, str(LEGACY))
+spec = importlib.util.spec_from_file_location("r02_v4_legacy_contract", LEGACY / "runner.py")
+base = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(base)
+sys.path.insert(0, str(HERE))
+import duplicate_check
+import realization_review
+import source_inventory
+import source_pool
+import card_selection
+import planner_contract
+import latest_state as state_contract
+import event_state as event_contract
+import feedback_adapter
+
+base.feedback = feedback_adapter
+
+VERSION = "h4_dependency_plan_field_evidence_minfix_v94"
+SOURCE_REGISTRY_PATH = HERE / "SOURCE_REGISTRY.json"
+SOURCE_REGISTRY = base.read(SOURCE_REGISTRY_PATH)
+SOURCE_SPECS = {row["root_id"]: row for row in SOURCE_REGISTRY["roots"]}
+ROOTS = tuple(SOURCE_SPECS)
+MODEL = base.dataset_cards.MODEL
+STATE_ATTEMPTS = 2
+EVENT_STATE_ATTEMPTS = 2
+SCENE_ATTEMPTS = 2
+PLAN_ATTEMPTS = 2
+TRANSPORT_RETRIES = 1
+REVIEW_RETRIES = 1
+CARD_EXTRACTION_ATTEMPTS = 2
+ROUTES = base.ROUTES
+LOCK_PATH = DELIVERIES / "h4_r02_source_unique_v2/runs/.unique_event_live.lock"
+
+PLANNER = """Plan at most ONE new scene after this branch's cumulative_history.
+This is one scene slot, not a request to fill three scenes. Return exactly
+{root_id,route,scenes,shortfall_reason}. scenes has zero or one entry. For zero
+scenes explain why; for one scene shortfall_reason must be the JSON string "".
+shortfall_reason must always be a string, never null.
+The scene has exactly {scene_id,actors,source_anchors,goal,developments,
+dataset_card_id,card_development_links,feedback_topic_ids,state_transition}. scene_id MUST equal target_scene_id.
+actors: at least two distinct allowed_speakers. source_anchors: 1-3 exact
+{turn_ref,quote} entries from cumulative_history. goal: concrete short string.
+developments: 2-5 concrete achievable new changes, decisions or outcomes.
+Only scene actors may speak directly in the later dialogue. Make every planned
+development expressible by these actors. They may accurately report a third
+party's action, but never require that third party to speak or join this scene.
+feedback_topic_ids: at most four IDs from supplied previous-round feedback.
+For old_event_continuation, progress an existing event; dataset_card_id is null
+and card_development_links is empty.
+For dataset_new_event, introduce a distinct new event from the single supplied
+dataset card; dataset_card_id MUST be its card_id. Transfer a scaffold's
+relationships/conditions or a seed's premise, never source identities as facts.
+The separate CARD MAPPING CONTRACT defines card_development_links and its three
+reference spaces. Build the new event from that card, using history only to keep
+the participants and circumstances coherent. An unrelated continuation of an
+old donation, class, work task or trip does not instantiate a new event card.
+For this route the assigned card determines the new event. Previous-round
+feedback guides clarity and coverage; its historical example topics must not
+replace the card's event. Prior history anchors justify continuity, not a return
+to unfinished old tasks as the main event of this scene.
+Keep proposals, agreements, attempts and outcomes distinct. A plan need not
+force all actions to finish, but every listed development must appear in the
+new dialogue. Do not merely rephrase old events or create reassurance filler.
+The other expansion branch is not part of this branch's history.
+"""
+
+
+def now():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def final_realizer_instruction():
+    """Keep the current card and scene contract after historical feedback."""
+    return (
+        "\nCURRENT SCENE CONSISTENCY CHECK: The assigned card and this accepted plan "
+        "determine this new scene. Historical feedback examples guide clarity; their old "
+        "topics do not replace this event. Realize each mapped card action with the correct "
+        "actor, request/response, failure/retry and proposal/authorization/completion state. "
+        "Check each utterance's speaker and addressee: do not treat the current addressee "
+        "as a different third-party source unless that distinct person is established. "
+        "Keep relationships attached to the original participants. For travel, explicitly "
+        "keep origin, destination, outward/return leg and departure/arrival dates consistent; "
+        "if the leg or time changes, explain that transition. A proposed future call or booking "
+        "is pending until a new action or explicit later completion report establishes it. "
+        "Coherent new events and explicitly later progress may introduce new facts. Never "
+        "claim they were already completed in the old history. Return the complete scene "
+        "response schema only.\n"
+    )
+
+
+def transport_inputs():
+    """Freeze public provider configuration and imported local transport code.
+
+    Loading these factories makes no HTTP request and does not read credentials.
+    Credential contents are intentionally not copied into artifacts.
+    """
+    profile, _factory, _annotate, _capacity, _dev = base.transport()
+    worktree = (base.PROJECT / "worktrees/h4-writer-coverage-v1").resolve()
+    code = set()
+    for module in tuple(sys.modules.values()):
+        module_path = getattr(module, "__file__", None)
+        if not module_path:
+            continue
+        path = Path(module_path).resolve()
+        if path.suffix == ".py" and path.is_relative_to(worktree) and path.is_file():
+            code.add(path)
+    base.require(code, "transport_code_binding_missing")
+    tokenizer_files = sorted(path for path in base.TOKENIZER.rglob("*") if path.is_file())
+    base.require(tokenizer_files, "capacity_tokenizer_binding_missing")
+    return profile(), sorted(code), tokenizer_files
+
+
+def branch_history_ok(run, root, route, history):
+    frozen = base.read(run / "sources" / f"{root}.json")["turns"]
+    base.require(history[:len(frozen)] == frozen, "frozen_branch_prefix_changed")
+    letter = "A" if route == ROUTES[0] else "B"
+    suffix = history[len(frozen):]
+    base.require(all(t.get("turn_ref", "").startswith(f"R02:{letter}:") for t in suffix),
+                 "other_branch_leaked_into_history")
+    base.require(len({t["turn_ref"] for t in history}) == len(history), "duplicate_branch_turn_ref")
+    return frozen
+
+
+def make_request(run, root, route, role, history, cards, scene_id, *, scene=None, repair=None,
+                 latest_state=None, event_state=None):
+    base.require(route in ROUTES and role in ("planner", "realizer"), "invalid_request_role")
+    frozen = branch_history_ok(run, root, route, history)
+    base.require((route == ROUTES[0] and not cards) or (route == ROUTES[1] and len(cards) == 1),
+                 "one_card_per_B_slot_required")
+    context = {"root_id": root, "route": route, "role": role, "target_scene_id": scene_id,
+               "allowed_speakers": sorted({t["speaker"] for t in frozen}),
+               "branch_base_sha256": base.digest(frozen), "cumulative_history": history,
+               "dataset_cards": cards, "scene_plan": scene}
+    base.require(latest_state is not None, "latest_state_required")
+    state_contract.validate_state(latest_state, root, route, scene_id, history)
+    context["latest_state"] = latest_state
+    if event_state is not None:
+        context["event_state"] = event_state
+    if cards:
+        context["card_mapping_context"] = planner_contract.mapping_context(cards[0], scene)
+    if repair:
+        context["targeted_repair"] = repair
+    prompt = base.COMMON + (PLANNER if role == "planner" else base.REALIZER)
+    prompt += state_contract.PLAN_STATE_PROMPT if role == "planner" else (
+        "\nUse latest_state together with the complete cumulative_history and scene_plan.state_transition. "
+        "The snapshot is fallible; later history remains authoritative. Do not replay completed "
+        "actions, assume unresolved conditions, or confuse people, times, pickup and destination. "
+        "Make any new occasion or trip explicit relative to historical milestones. "
+        "Preserve evidence_basis: reported includes explicitly reported intentions; inferred "
+        "and uncertain entries are qualified interpretations, never unconditional completed-history "
+        "premises. New dialogue may establish later progress on previously unresolved events; "
+        "do not claim that this later progress was already completed in the old history.\n")
+    if event_state is not None:
+        prompt += ("\nEVENT HISTORY: event_state traces the actual planned events across history segments. "
+                   "Its timeline includes updates and uncertainties missed by the initial summary. "
+                   "Revisit its exact citations and the full history; preserve completed milestones, "
+                   "participants, time and location roles. Do not confuse arrival with completion of "
+                   "orientation, or a new occasion with a repeated first occurrence. If revising a plan, "
+                   "resolve every revise finding using new developments coherent with this history. "
+                   "This is a fallible model extraction, never authority over the original history. "
+                   "Preserve inferred/uncertain qualifications. Resolve binding revise findings; "
+                   "soft-only findings are diagnostic and do not establish historical facts.\n")
+    if cards:
+        if role == "planner":
+            prompt += "\nCARD MAPPING CONTRACT:\n" + planner_contract.PLANNER_CONTRACT_PROMPT
+        else:
+            prompt += ("\nInstantiate the assigned card's event in the new dialogue. Preserve the mapped "
+                       "steps, dependency relations, actors, conditions and action states; a map alone "
+                       "does not realize them. Do not substitute an unrelated old event. "
+                       "Return only the Realizer response schema, not a mapping or a review.\n")
+    prompt += "\nOnly this branch's accepted history is authoritative. Add new progress; do not copy old blocks.\n"
+    prompt += "\nINPUT_JSON\n" + json.dumps(context, ensure_ascii=False, separators=(",", ":"))
+    payload = {"model": MODEL, "temperature": .25, "max_tokens": 4096, "enable_thinking": False,
+               "response_format": {"type": "json_object"}, "messages": [{"role": "user", "content": prompt}]}
+    identity = base.read(run / "feedback/COMPILED_FEEDBACK.json")["target_solver_identity_sha256"]
+    payload, receipt = base.feedback.append_feedback_to_request(
+        payload, run / "feedback", root, route, role, target_solver_model=base.TARGET,
+        expected_target_identity_sha256=identity)
+    planner_tail_receipt = None
+    realizer_tail_receipt = None
+    if role == "planner":
+        tail = planner_contract.final_planner_instruction(repair)
+        before_payload_sha256 = base.digest(payload)
+        before_text_sha256 = base.digest(payload["messages"][0]["content"].encode())
+        payload["messages"][0]["content"] += tail
+        planner_tail_receipt = {
+            "before_payload_sha256": before_payload_sha256,
+            "before_text_sha256": before_text_sha256,
+            "tail_sha256": base.digest(tail.encode()),
+            "final_payload_sha256": base.digest(payload),
+            "final_text_sha256": base.digest(payload["messages"][0]["content"].encode()),
+        }
+    if role == "realizer":
+        tail = final_realizer_instruction()
+        before_payload_sha256 = base.digest(payload)
+        before_text_sha256 = base.digest(payload["messages"][0]["content"].encode())
+        payload["messages"][0]["content"] += tail
+        realizer_tail_receipt = {
+            "before_payload_sha256": before_payload_sha256,
+            "before_text_sha256": before_text_sha256,
+            "tail_sha256": base.digest(tail.encode()),
+            "final_payload_sha256": base.digest(payload),
+            "final_text_sha256": base.digest(payload["messages"][0]["content"].encode()),
+        }
+    proof = {"root_id": root, "route": route, "role": role, "scene_id": scene_id,
+             "branch_base_sha256": base.digest(frozen), "history_sha256": base.digest(history),
+             "history_turns": len(history), "branch_isolation_verified": True,
+             "other_branch_in_generator_context": False, "feedback_receipt": receipt,
+             "latest_state_sha256": base.digest(latest_state),
+             "event_state_sha256": base.digest(event_state),
+             "planner_tail_receipt": planner_tail_receipt,
+             "realizer_tail_receipt": realizer_tail_receipt,
+             "payload_sha256": base.digest(payload)}
+    return payload, proof
+
+
+def validate_plan(raw, root, route, history, cards, scene_id, *, latest_state=None):
+    plan = parse_object(raw)
+    scenes = plan.get("scenes")
+    base.require(isinstance(scenes, list) and len(scenes) <= 1, "one_scene_slot_only")
+    if scenes:
+        base.require(isinstance(scenes[0], dict), "scene_not_object")
+        base.require(scenes[0].get("scene_id") == scene_id, "target_scene_id_mismatch")
+        if latest_state is not None:
+            state_contract.validate_transition(scenes[0], latest_state)
+        if route == ROUTES[1]:
+            mapping_errors = planner_contract.collect_mapping_errors(scenes[0], cards[0])
+            if not isinstance(plan.get("shortfall_reason"), str):
+                mapping_errors.append({"code": "shortfall_reason_invalid", "path": "shortfall_reason",
+                                       "actual": plan.get("shortfall_reason"), "allowed": "JSON string, normally empty"})
+            if mapping_errors:
+                raise planner_contract.MappingValidationError(mapping_errors)
+    # Reuse legacy structural/evidence checks on a validation-only view. Never
+    # change the actual model response or its accepted plan.
+    view = deepcopy(plan)
+    if scenes:
+        view["scenes"][0]["scene_id"] = "S01"
+        base.require(isinstance(view.get("shortfall_reason"), str), "shortfall_reason_invalid")
+        view["shortfall_reason"] = view["shortfall_reason"] or "single-scene slot"
+    if scenes:
+        view["scenes"][0].pop("card_development_links", None)
+        view["scenes"][0].pop("state_transition", None)
+    base.validate_plan(view, root, route, history, cards)
+    return plan
+
+
+def validate_card_plan_fidelity(scene, card):
+    """Validate mapping shape; event_contract separately reviews semantics."""
+    return planner_contract.validate_mapping(scene, card)
+
+
+def invalid_speaker_details(turns, allowed_speakers):
+    allowed = set(allowed_speakers)
+    return [{"turn_position": index,
+             "speaker": turn.get("speaker") if isinstance(turn, dict) else None}
+            for index, turn in enumerate(turns, 1)
+            if not isinstance(turn, dict) or turn.get("speaker") not in allowed]
+
+
+def classify_review_failure(review):
+    """Route explicit semantic misses to the realizer; malformed reviews stay with reviewer."""
+    if review.get("schema_valid") is False:
+        return "reviewer_failure"
+    failures = review.get("failures", [])
+    if any(isinstance(item, str) and (
+            item.startswith("review_verdict_reject:") or
+            (item.startswith(("development[", "card_step[", "card_dependency[")) and ":not_realized:" in item) or
+            (item.startswith(("state_fact[", "event_constraint[")) and ":contradicted:" in item) or
+            (item.startswith("scene_consistency[") and ":contradicted:" in item))
+           for item in failures):
+        return "realizer_repair"
+    return "reviewer_failure"
+
+
+def parse_object(raw):
+    def unique_keys(pairs):
+        value = {}
+        for key, item in pairs:
+            base.require(key not in value, "duplicate_json_key:" + key)
+            value[key] = item
+        return value
+    value = json.loads(raw, object_pairs_hook=unique_keys) if isinstance(raw, str) else raw
+    base.require(isinstance(value, dict), "response_not_object")
+    return value
+
+
+class Caller:
+    """Retry one explicit transient provider status with the identical payload."""
+    def __init__(self, run):
+        self.run = run
+        self.limit = base.read(run / "MANIFEST.json")["http_max"]
+        profile, factory, annotate, capacity, dev = base.transport()
+        self.profile, self.factory = profile(), factory
+        base.require(self.profile == base.read(run / "provider_profile.json"), "provider_profile_changed")
+        self.annotate, self.capacity = annotate, capacity
+        self.tokenizer = dev.tokenizer_from(str(base.TOKENIZER))
+        self.http_counter = 0
+        self.request_counter = 0
+
+    @staticmethod
+    def error_metadata(error):
+        metadata = getattr(error, "metadata", None)
+        if isinstance(metadata, dict):
+            return deepcopy(metadata)
+        response = getattr(error, "response", None)
+        status = getattr(error, "status_code", None)
+        if status is None and response is not None:
+            status = getattr(response, "status_code", None)
+        return {"http_status": status} if status is not None else {}
+
+    @staticmethod
+    def http_status(metadata):
+        for key in ("http_status", "status_code"):
+            value = metadata.get(key)
+            if type(value) is int:
+                return value
+        return None
+
+    def call(self, label, payload, proof):
+        base.require(payload["model"] == MODEL, "unexpected_model")
+        capacity = self.annotate(self.capacity(self.profile, self.tokenizer, payload["messages"], 4096))
+        base.require(capacity["status"] == "PASS", "capacity_blocked_no_truncation")
+        self.request_counter += 1
+        directory = self.run / "requests" / f"{self.request_counter:03d}-{label}"
+        base.write(directory / "REQUEST.json", payload)
+        base.write(directory / "PROOF.json", {**proof, "capacity": capacity, "payload_sha256": base.digest(payload)})
+        base.write(directory / "RESERVATION.json", {"request_number": self.request_counter,
+            "http_max": self.limit, "max_attempts": TRANSPORT_RETRIES + 1,
+            "retryable_statuses": [503, 504], "status": "RESERVED"})
+        attempts = []
+        for attempt in range(1, TRANSPORT_RETRIES + 2):
+            attempt_path = directory / ("HTTP_ATTEMPT.json" if attempt == 1 else f"HTTP_ATTEMPT_{attempt:02d}.json")
+            result_path = directory / f"HTTP_RESULT_{attempt:02d}.json"
+            status = None
+
+            def on_attempt(actual):
+                base.require(actual == payload, "actual_payload_differs_from_frozen_request")
+                base.require(self.http_counter < self.limit, "global_http_budget_exhausted")
+                self.http_counter += 1
+                base.write(attempt_path, {"actual_payload_equals_frozen": True,
+                    "payload_sha256": base.digest(actual), "requested_model": MODEL,
+                    "http_attempt_number": self.http_counter, "request_attempt": attempt,
+                    "same_payload_retry": attempt > 1, "transport_retries": attempt - 1})
+
+            try:
+                response = self.factory(self.profile, on_http_attempt=on_attempt).complete(
+                    prompt=payload["messages"][0]["content"], max_tokens=4096, json_object=True)
+                metadata = getattr(response, "metadata", {}) or {}
+                status = self.http_status(metadata)
+                # Keep each received body, including incomplete/invalid responses,
+                # before validation. HTTP_RESULT is written exactly once below.
+                base.write(directory / f"HTTP_RESPONSE_{attempt:02d}.json",
+                           {"text": response.raw_text, "metadata": metadata})
+                if status not in (None, 200):
+                    raise RuntimeError("provider_http_status_invalid")
+                base.require(metadata.get("returned_model") == MODEL, "response_model_mismatch")
+                base.require(metadata.get("finish_reason") == "stop", "response_not_complete")
+            except Exception as error:
+                metadata = self.error_metadata(error)
+                error_status = self.http_status(metadata)
+                if error_status is None:
+                    error_status = status
+                if attempt_path.exists():
+                    base.write(result_path, {"http_status": error_status, "outcome": "error",
+                                             "error_type": type(error).__name__})
+                attempts.append({"attempt": attempt, "error_type": type(error).__name__,
+                                 "http_status": error_status,
+                                 "completion_status": metadata.get("completion_status"),
+                                 "retrying": error_status in (503, 504) and attempt <= TRANSPORT_RETRIES})
+                if error_status in (503, 504) and attempt <= TRANSPORT_RETRIES:
+                    continue
+                base.write(directory / "ERROR.json", {"error_type": type(error).__name__,
+                    "metadata": {**metadata, "http_status": error_status}, "attempts": attempts,
+                    "automatic_retries": attempt - 1, "retry_policy": "one_retry_only_for_http_503_504"})
+                raise RuntimeError("provider_request_failed_after_retry_policy") from None
+            else:
+                if attempt_path.exists():
+                    base.write(result_path, {"http_status": status, "outcome": "response"})
+                base.write(directory / "RESPONSE.json", {"text": response.raw_text, "metadata": metadata,
+                    "attempts": attempts + [{"attempt": attempt, "http_status": status, "retrying": False}]})
+                return response.raw_text, directory
+        base.write(directory / "ERROR.json", {"error_type": "retry_loop_exhausted", "attempts": attempts})
+        raise RuntimeError("provider_request_failed_after_retry_policy")
+
+
+def review_request(root, route, scene, history, realization, other_turns, card=None, repair=None,
+                   latest_state=None, event_state=None):
+    prompt = realization_review.build_review_prompt(root, route, scene, history, realization, other_turns,
+                                                     dataset_card=card, latest_state=latest_state,
+                                                     event_state=event_state)
+    if repair:
+        prompt += "\nREVIEW_FORMAT_REPAIR:\n" + json.dumps(repair, ensure_ascii=False)
+    prompt += realization_review.final_review_instruction(scene, realization)
+    payload = {"model": MODEL, "temperature": .25, "max_tokens": 4096, "enable_thinking": False,
+               "response_format": {"type": "json_object"}, "messages": [{"role": "user", "content": prompt}]}
+    proof = {"root_id": root, "route": route, "role": "scene_reviewer", "scene_id": scene["scene_id"],
+             "independent_request_without_prior_verdict": repair is None,
+             "review_format_repair": repair is not None, "other_branch_review_only": True,
+             "latest_state_sha256": base.digest(latest_state),
+             "event_state_sha256": base.digest(event_state),
+             "history_sha256": base.digest(history), "realization_sha256": base.digest(realization)}
+    return payload, proof
+
+
+def repair_for_duplicate(checked, realization):
+    # Only echo rejected output's own locations. Never copy the reference corpus
+    # into the generator, including on retries.
+    return {"instruction": "Rewrite the rejected scene with substantive new developments. Do not just paraphrase copied turns.",
+            "failure_codes": checked["reasons"],
+            "copied_new_turn_positions": [m["new_position"] for m in checked["matches"] if m["substantive"]],
+            "previous_response": realization}
+
+
+def repair_for_review(review, realization):
+    parsed = review.get("parsed") or {}
+    checks = parsed.get("checks") if isinstance(parsed.get("checks"), list) else []
+    unmet = [c["development_index"] for c in checks
+             if isinstance(c, dict) and c.get("realized") is False
+             and type(c.get("development_index")) is int and c["development_index"] > 0]
+    unmet_card = [{"kind": c["kind"], "id": c["id"]}
+                  for c in parsed.get("card_checks", [])
+                  if isinstance(c, dict) and c.get("realized") is False]
+    soft_facts = {c["fact_id"] for c in review.get("soft_findings", []) if "fact_id" in c}
+    soft_events = {c["constraint_id"] for c in review.get("soft_findings", []) if "constraint_id" in c}
+    contradicted_facts = [c["fact_id"] for c in parsed.get("state_checks", [])
+                          if isinstance(c, dict) and c.get("verdict") == "contradicted"
+                          and c["fact_id"] not in soft_facts]
+    contradicted_events = [c["constraint_id"] for c in parsed.get("event_checks", [])
+                           if isinstance(c, dict) and c.get("verdict") == "contradicted"
+                           and c["constraint_id"] not in soft_events]
+    # Consistency evidence is validated against this rejected new scene only.
+    # Reviewer reason prose stays in the audit because it may quote a corpus
+    # that the generator is not allowed to see.
+    consistency = [{"check_id": c["check_id"], "evidence": deepcopy(c["evidence"])}
+                   for c in parsed.get("consistency_checks", [])
+                   if isinstance(c, dict) and c.get("verdict") == "contradicted"]
+    # Free-form reviewer prose may quote another branch. Keep it in the audit,
+    # but return only structured findings and the already-seen rejected scene.
+    codes = []
+    base.require(classify_review_failure(review) == "realizer_repair", "reviewer_failure_not_repairable")
+    for field, ok in (("new_event_or_progress", True), ("consistent_with_history", True),
+                      ("duplicates_existing_event", False)):
+        if (type(parsed.get(field)) is bool and parsed[field] is not ok
+                and not (field == "consistent_with_history"
+                         and review.get("history_consistency_status") == "UNRESOLVED_SOFT_FINDINGS")):
+            codes.append(field.upper())
+    return {"instruction": "Rewrite this scene. Realize every planned development and assigned card relation at its stated action status; introduce the card's distinct event. Re-read all history and the cited state facts. Resolve contradicted state checks without replaying completed actions or confusing people, times and places; do not change historical facts.",
+            "failure_codes": codes, "unmet_development_indices": unmet,
+            "unmet_card_elements": unmet_card, "contradicted_state_fact_ids": contradicted_facts,
+            "contradicted_event_constraint_ids": contradicted_events,
+            "scene_consistency_findings": consistency,
+            "previous_response": realization}
+
+
+def produce_scene(caller, run, root, route, history, cards, scene, other_turns, *, latest_state=None,
+                  event_state=None):
+    repair = None
+    scene_id = scene["scene_id"]
+    letter = "A" if route == ROUTES[0] else "B"
+    audits = []
+    for attempt in range(1, SCENE_ATTEMPTS + 1):
+        payload, proof = make_request(run, root, route, "realizer", history, cards, scene_id,
+                                     scene=scene, repair=repair, latest_state=latest_state, event_state=event_state)
+        raw, directory = caller.call(f"{root}-{letter}-{scene_id}-realizer-{attempt}", payload, proof)
+        invalid_speakers = []
+        try:
+            response = parse_object(raw)
+            turns = response.get("turns")
+            invalid_speakers = invalid_speaker_details(turns, scene.get("actors", [])) if isinstance(turns, list) else []
+            if invalid_speakers:
+                raise ValueError("turn_speaker_invalid:" + json.dumps(invalid_speakers, ensure_ascii=False))
+            realization = base.validate_realization(response, root, route, scene)
+        except (ValueError, TypeError) as error:
+            audit = {"status": "REJECT", "stage": "mechanical", "reason": str(error)}
+            base.write(directory / "ACCEPTANCE.json", audit); audits.append(audit)
+            repair = {"instruction": "Fix this specific response contract error, including every listed turn position and speaker.",
+                      "failure": str(error), "invalid_speakers": invalid_speakers,
+                      "previous_response": raw}
+            continue
+        if realization["status"] == "no_scene":
+            audit = {"status": "NO_SCENE", "reason": realization["no_scene_reason"]}
+            base.write(directory / "ACCEPTANCE.json", audit)
+            return None, [*audits, audit]
+        checked = duplicate_check.inspect_duplicates(realization["turns"],
+            {"branch_history": history, "other_branch_accepted_additions": other_turns})
+        base.write(directory / "DUPLICATE_CHECK.json", checked)
+        if checked["status"] != "PASS":
+            audit = {"status": "REJECT", "stage": "duplicate", "reasons": checked["reasons"],
+                     "request": str(directory)}
+            base.write(directory / "ACCEPTANCE.json", audit); audits.append(audit)
+            repair = repair_for_duplicate(checked, realization)
+            continue
+        card = cards[0] if route == ROUTES[1] and cards else None
+        review, review_dir, raw_review = None, None, None
+        review_repair = None
+        for review_attempt in range(1, REVIEW_RETRIES + 2):
+            payload, proof = review_request(root, route, scene, history, realization, other_turns,
+                                            card=card, repair=review_repair, latest_state=latest_state,
+                                            event_state=event_state)
+            raw_review, review_dir = caller.call(
+                f"{root}-{letter}-{scene_id}-review-{attempt}-{review_attempt}", payload, proof)
+            review = realization_review.validate_review(raw_review, root, route, scene, realization,
+                                                        dataset_card=card, latest_state=latest_state, history=history,
+                                                        event_state=event_state)
+            base.write(review_dir / "REVIEW.json", review)
+            if review.get("schema_valid") is not False:
+                break
+            review_repair = {"failure_codes": review.get("schema_failures", review.get("failures", [])),
+                             "previous_response": raw_review,
+                             "instruction": "Return the exact required JSON schema. Fix only these format, identity, or citation errors; do not change the scene being reviewed."}
+        audit = {"status": review["status"], "stage": "qwen_plan_review", "request": str(directory),
+                 "review_request": str(review_dir), "failures": review["failures"],
+                 "schema_valid": review.get("schema_valid"), "schema_failures": review.get("schema_failures", []),
+                 "soft_findings": review.get("soft_findings", []),
+                 "empty_consistent_findings": review.get("empty_consistent_findings", []),
+                 "history_consistency_status": review.get("history_consistency_status"),
+                 "semantic_certified": False}
+        reviewer_failure = review["status"] != "PASS" and classify_review_failure(review) == "reviewer_failure"
+        if reviewer_failure:
+            audit["status"] = "REVIEWER_FAILURE_NO_DIALOGUE_REWRITE"
+        base.write(directory / "ACCEPTANCE.json", audit); audits.append(audit)
+        if review["status"] == "PASS":
+            return realization, audits
+        if reviewer_failure:
+            return None, audits
+        repair = repair_for_review(review, realization)
+    return None, audits
+
+
+def extract_latest_state(caller, run, root, route, history, cards, scene_id):
+    frozen = branch_history_ok(run, root, route, history)
+    letter = "A" if route == ROUTES[0] else "B"
+    repair = None
+    for attempt in range(1, STATE_ATTEMPTS + 1):
+        payload = state_contract.build_state_request(root, route, scene_id, history, cards, repair=repair)
+        proof = {"root_id": root, "route": route, "role": "state_extractor", "scene_id": scene_id,
+                 "branch_base_sha256": base.digest(frozen), "history_sha256": base.digest(history),
+                 "history_turns": len(history), "branch_isolation_verified": True,
+                 "other_branch_in_generator_context": False,
+                 "validation_scope": "schema_and_literal_citations_only"}
+        raw, directory = caller.call(f"{root}-{letter}-{scene_id}-state-{attempt}", payload, proof)
+        try:
+            snapshot = state_contract.validate_state(raw, root, route, scene_id, history)
+            base.write(directory / "VALIDATION.json", {
+                "status": "PASS", "semantic_certified": False,
+                "latest_state_sha256": base.digest(snapshot)})
+            return snapshot
+        except (ValueError, TypeError) as error:
+            repair = state_contract.build_state_repair(error, raw, history=history)
+            base.write(directory / "VALIDATION.json", {
+                "status": "REJECT", "reason": str(error), "errors": repair["errors"]})
+    return None
+
+
+def extract_event_state(caller, run, root, route, history, cards, scene, snapshot, plan_attempt):
+    frozen = branch_history_ok(run, root, route, history)
+    letter = "A" if route == ROUTES[0] else "B"
+    repair = None
+    for attempt in range(1, EVENT_STATE_ATTEMPTS + 1):
+        payload = event_contract.build_request(root, route, scene, history, cards, snapshot, repair=repair)
+        proof = {"root_id": root, "route": route, "role": "event_state_extractor", "scene_id": scene["scene_id"],
+                 "plan_attempt": plan_attempt, "scene_plan_sha256": base.digest(scene),
+                 "branch_base_sha256": base.digest(frozen), "history_sha256": base.digest(history),
+                 "history_turns": len(history), "branch_isolation_verified": True,
+                 "latest_state_sha256": base.digest(snapshot),
+                 "other_branch_in_generator_context": False,
+                 "validation_scope": "schema_segment_coverage_literal_citations_card_mapping_and_explicit_semantic_review_records"}
+        raw, directory = caller.call(
+            f"{root}-{letter}-{scene['scene_id']}-event-state-{plan_attempt}-{attempt}", payload, proof)
+        try:
+            result = event_contract.validate(raw, root, route, scene, history, cards=cards)
+            base.write(directory / "DERIVED_COVERAGE.json", event_contract.derive_coverage(result, history))
+            base.write(directory / "VALIDATION.json", {
+                "status": "PASS", "semantic_certified": False,
+                "requires_replan": event_contract.requires_replan(result),
+                "plan_diagnostics": event_contract.plan_diagnostics(result),
+                "event_state_sha256": base.digest(result)})
+            return result
+        except (ValueError, TypeError) as error:
+            repair = event_contract.build_repair(error, raw, history=history)
+            base.write(directory / "VALIDATION.json", {
+                "status": "REJECT", "reason": str(error), "errors": repair["errors"]})
+    return None
+
+
+def run_root(caller, run, root, cards, *, target_scenes=1, routes=None):
+    frozen = base.read(run / "sources" / f"{root}.json")["turns"]
+    selected_routes = tuple(routes) if routes is not None else ROUTES
+    base.require(selected_routes in (ROUTES, (ROUTES[1],)), "invalid_route_selection")
+    accepted_by_branch = {"A": [], "B": []}
+    comparison_path = run / "comparison_corpora" / f"{root}.A.json"
+    if selected_routes == (ROUTES[1],) and comparison_path.exists():
+        accepted_by_branch["A"] = base.read(comparison_path)["turns"]
+    results = []
+    for route, letter in zip(ROUTES, ("A", "B")):
+        if route not in selected_routes:
+            continue
+        history = deepcopy(frozen)  # Never inherit the other branch's additions.
+        other = accepted_by_branch["B" if letter == "A" else "A"]
+        folder = run / "roots" / root / letter
+        base.write(folder / "INPUT.json", {"root_id": root, "route": route, "turns": history,
+                                           "branch_base_sha256": base.digest(frozen)})
+        slots = target_scenes if letter == "A" else min(target_scenes, len(cards))
+        accepted, failures = [], []
+        for number in range(1, slots + 1):
+            scene_id = f"S{number:02d}"
+            card = cards[number - 1] if letter == "B" else None
+            if letter == "B" and card is None:
+                failures.append({"scene_id": scene_id, "reason": "reserved_source_card_extraction_failed"})
+                continue
+            guidance = [base.dataset_cards.build_realization_guidance(card)] if card else []
+            repair, plan, event_snapshot = None, None, None
+            plan_failure = "plan_rejected_after_retry"
+            try:
+                snapshot = extract_latest_state(caller, run, root, route, history, guidance, scene_id)
+                if snapshot is None:
+                    failures.append({"scene_id": scene_id, "reason": "state_rejected_after_retry"})
+                    continue
+                base.write(folder / f"{scene_id}.LATEST_STATE.json", snapshot)
+                for attempt in range(1, PLAN_ATTEMPTS + 1):
+                    payload, proof = make_request(run, root, route, "planner", history, guidance, scene_id,
+                                                 repair=repair, latest_state=snapshot, event_state=event_snapshot)
+                    raw, directory = caller.call(f"{root}-{letter}-{scene_id}-planner-{attempt}", payload, proof)
+                    try:
+                        candidate = validate_plan(raw, root, route, history, guidance, scene_id, latest_state=snapshot)
+                        base.write(directory / "VALIDATION.json", {"status": "PASS"})
+                    except (ValueError, TypeError) as error:
+                        plan_failure = "plan_rejected_after_retry"
+                        repair = planner_contract.build_repair_feedback(
+                            error, raw, guidance[0] if guidance else None)
+                        base.write(directory / "VALIDATION.json", {
+                            "status": "REJECT", "reason": str(error), "errors": repair["errors"]})
+                        continue
+                    base.write(directory / "CANDIDATE_PLAN.json", candidate)
+                    if not candidate["scenes"]:
+                        plan = candidate
+                        break
+                    event_snapshot = extract_event_state(caller, run, root, route, history, guidance,
+                                                         candidate["scenes"][0], snapshot, attempt)
+                    if event_snapshot is None:
+                        plan_failure = "event_state_rejected_after_retry"
+                        break
+                    replan = event_contract.requires_replan(event_snapshot)
+                    base.write(directory / "EVENT_STATE_DECISION.json", {
+                        "status": "REPLAN" if replan else "PASS",
+                        "event_state_sha256": base.digest(event_snapshot),
+                        "plan_diagnostics": event_contract.plan_diagnostics(event_snapshot)})
+                    if replan:
+                        plan_failure = "event_state_requires_replan_after_limit"
+                        repair = {"instruction": "Revise the complete plan to resolve every revise finding. "
+                                  "The historical timeline and uncertainty constrain the new event; do not rewrite "
+                                  "history or repeat an already completed first occurrence. Keep the assigned "
+                                  "card and its actual relations. The revised plan will be scanned again.",
+                                  "failure": "event_state_requires_replan", "previous_response": candidate,
+                                  "plan_checks": event_contract.binding_plan_checks(event_snapshot)}
+                        continue
+                    plan = candidate
+                    base.write(folder / f"{scene_id}.EVENT_STATE.json", event_snapshot)
+                    base.write(folder / f"{scene_id}.EVENT_COVERAGE.json",
+                               event_contract.derive_coverage(event_snapshot, history))
+                    break
+                if plan is None:
+                    failures.append({"scene_id": scene_id, "reason": plan_failure}); continue
+                base.write(folder / f"{scene_id}.PLAN.json", plan)
+                if not plan["scenes"]:
+                    failures.append({"scene_id": scene_id, "reason": plan["shortfall_reason"]}); continue
+                realization, audits = produce_scene(caller, run, root, route, history, guidance,
+                                                    plan["scenes"][0], other, latest_state=snapshot,
+                                                    event_state=event_snapshot)
+                base.write(folder / f"{scene_id}.ATTEMPTS.json", audits)
+                if realization is None:
+                    failures.append({"scene_id": scene_id, "reason": "no_accepted_scene", "attempts": audits}); continue
+                base.write(folder / f"{scene_id}.json", realization)
+                history = base.append_scene(history, root, route, realization)
+                accepted_by_branch[letter] = history[len(frozen):]
+                accepted.append({"scene_id": scene_id, "dataset_card_id": card["card_id"] if card else None,
+                                 "turns": len(realization["turns"]), "duplicate_check": "PASS", "qwen_review": "PASS",
+                                 "latest_state_sha256": base.digest(snapshot), "qwen_state_checks": "PASS",
+                                 "event_state_sha256": base.digest(event_snapshot), "qwen_event_checks": "PASS",
+                                 "soft_findings": audits[-1].get("soft_findings", []),
+                                 "empty_consistent_findings": audits[-1].get("empty_consistent_findings", []),
+                                 "history_consistency_status": audits[-1].get("history_consistency_status"),
+                                 "plan_diagnostics": event_contract.plan_diagnostics(event_snapshot),
+                                 "semantic_certified": False})
+            except RuntimeError as error:
+                failures.append({"scene_id": scene_id, "reason": str(error),
+                                 "per_request_automatic_retry_limit": TRANSPORT_RETRIES})
+                break
+        branch_history_ok(run, root, route, history)
+        result = {"root_id": root, "route": route, "target_scenes": target_scenes,
+                  "available_slots": slots, "accepted_scenes": len(accepted),
+                  "scene_metadata": accepted, "failures": failures,
+                  "shortfall_scenes": target_scenes - len(accepted),
+                  "added_turns": len(history) - len(frozen), "input_turns": len(frozen),
+                  "branch_base_sha256": base.digest(frozen), "output_history_sha256": base.digest(history),
+                  "other_branch_in_generator_context": False,
+                  "no_available_guidance": letter == "B" and slots == 0,
+                  "acceptance": "event_history_scan_and_exact_duplicate_check_and_same_qwen_event_state_card_plan_review",
+                  "semantic_certified": False}
+        base.write(folder / "RESULT.json", result)
+        base.write(folder / "cumulative_dialogue.json", {"root_id": root, "route": route, "turns": history,
+            "version": VERSION, "branch_base_sha256": base.digest(frozen), "model": MODEL,
+            "branch_independent": True, "must_not_concatenate_with_other_branch": True})
+        results.append(result)
+    base.write(run / "roots" / root / "BRANCHES.json", {
+        "root_id": root, "shared_base_sha256": base.digest(frozen), "independent_branches": True,
+        "dialogues": {letter: str(run / "roots" / root / letter / "cumulative_dialogue.json")
+                      for route, letter in zip(ROUTES, ("A", "B")) if route in selected_routes},
+        "merged_dialogue": None, "downstream_requires_explicit_branch_source": True})
+    return results
+
+
+def prepare(run, *, scenes=1, roots=None, routes=None):
+    base.require(not run.exists(), "run_already_exists")
+    base.require(type(scenes) is int and 1 <= scenes <= 3, "scenes_outside_1_3")
+    base.require(run.parent == HERE / "runs", "run_must_be_in_current_inventory")
+    roots = list(ROOTS if roots is None else roots)
+    routes = tuple(ROUTES if routes is None else routes)
+    base.require(roots and len(set(roots)) == len(roots) and all(root in ROOTS for root in roots),
+                 "invalid_root_selection")
+    base.require(routes in (ROUTES, (ROUTES[1],)), "invalid_route_selection")
+    # Arbitrary manifests could relabel a consumed event and recompute their
+    # own hashes. Only use the source-bound local freezer for this version.
+    prior = source_inventory.collect_prior()
+    consumed = {source_inventory.event_key(row) for row in prior["accepted_uses"]}
+    sources = source_pool.freeze_unused_source_subset(
+        consumed, count=scenes * len(roots)
+    )
+    expected = sources["manifest_sha256"]
+    base.require(base.dataset_cards._sha(base.dataset_cards._canonical(
+        {k: v for k, v in sources.items() if k != "manifest_sha256"})) == expected, "dataset_manifest_hash_mismatch")
+    for row in sources["files"]:
+        for key, digest_key in (("local_path", "local_sha256"), ("source_receipt_path", "source_receipt_sha256")):
+            base.require(base.digest(Path(row[key]).read_bytes()) == row[digest_key], "dataset_file_changed")
+    source_ids = [item.get("source_id") for item in sources["items"]]
+    base.require(all(isinstance(x, str) and x for x in source_ids)
+                 and len(source_ids) == len(set(source_ids)), "source_ids_missing_or_duplicate")
+    file_hashes = {row["local_sha256"] for row in sources["files"]}
+    base.require(all(item["source_file_sha256"] in file_hashes for item in sources["items"]),
+                 "source_item_not_bound_to_verified_file")
+    allocation = source_inventory.legacy.allocate(sources, roots, prior, scenes)
+    run.mkdir(parents=True)
+    base.feedback.compile_feedback(run / "feedback", roots)
+    original_sources = []
+    for root in roots:
+        spec = SOURCE_SPECS[root]
+        path = Path(spec["source_path"])
+        base.require(base.digest(path.read_bytes()) == spec["source_sha256"], "frozen_complete_source_changed")
+        source = base.read(path)
+        base.require(len(source["turns"]) == spec["source_turns"], "complete_source_turn_count_changed")
+        base.require(not any(turn["turn_ref"].startswith("R02:B:") for turn in source["turns"]),
+                     "new_suffix_ref_collides_with_history")
+        review = Path(spec["baseline_review_path"])
+        base.require(base.digest(review.read_bytes()) == spec["baseline_review_sha256"], "historical_baseline_review_changed")
+        base.write(run / "sources" / f"{root}.json", source)
+        original_sources.extend([path, review])
+    base.write(run / "dataset_sources.json", sources)
+    base.write(run / "UNIQUE_EVENT_ALLOCATION.json", allocation)
+    previews = []
+    for root in roots:
+        history = base.read(run / "sources" / f"{root}.json")["turns"]
+        if routes == (ROUTES[1],):
+            # Review/checker-only corpus; never enters the generator or its repairs.
+            comparison_path = SOURCE_SPECS[root].get("comparison_source_path")
+            comparison_source = Path(comparison_path) if comparison_path else None
+            if comparison_source is not None and comparison_source.exists():
+                compared = base.read(comparison_source)
+                base.require(compared["turns"][:len(history)] == history, "comparison_source_base_changed")
+                suffix = compared["turns"][len(history):]
+                base.require(all(t["turn_ref"].startswith("R02:A:") for t in suffix), "comparison_route_invalid")
+                base.write(run / "comparison_corpora" / f"{root}.A.json", {
+                    "source_path": str(comparison_source), "source_sha256": base.digest(comparison_source.read_bytes()),
+                    "usage": "duplicate_checker_and_reviewer_only", "turns": suffix})
+                original_sources.append(comparison_source)
+        for route in routes:
+            mock_cards = [] if route == ROUTES[0] else [{
+                "card_id": "OFFLINE_PREVIEW_ONLY", "guidance_level": "seed", "actors": [],
+                "steps": [{"step_id": "s1", "actor_id": "actor_1",
+                           "action": "OFFLINE_PREVIEW_ONLY", "state": "proposed"}],
+                "dependencies": [], "confusion_axes": [], "open_ends": [],
+                "downgrade_reason": "OFFLINE_PREVIEW_ONLY"}]
+            mock_state = {"root_id": root, "route": route, "scene_id": "S01", "facts": [{
+                "fact_id": "f1", "entity": "OFFLINE_PREVIEW_ONLY", "event": "OFFLINE_PREVIEW_ONLY",
+                "status": "uncertain", "evidence_basis": "uncertain", "statement": "OFFLINE_PREVIEW_ONLY",
+                "evidence": [{"turn_ref": history[-1]["turn_ref"], "quote": history[-1]["text"]}]}],
+                "conflicts": [], "unknowns": []}
+            state_payload = state_contract.build_state_request(root, route, "S01", history, mock_cards)
+            base.write(run / "previews" / root / f"{route}.state_extractor.json", {
+                "payload": state_payload, "proof": {"mock_only_offline_preview": True,
+                "role": "state_extractor", "other_branch_in_generator_context": False}})
+            for role in ("planner", "realizer"):
+                scene = {"scene_id": "S01", "developments": ["OFFLINE_PREVIEW_ONLY"]} if role == "realizer" else None
+                if scene:
+                    scene["state_transition"] = {"basis_fact_ids": ["f1"],
+                        "new_event": "OFFLINE_PREVIEW_ONLY", "temporal_placement": "OFFLINE_PREVIEW_ONLY"}
+                payload, proof = make_request(run, root, route, role, history, mock_cards, "S01",
+                                             scene=scene, latest_state=mock_state)
+                proof["mock_only_offline_preview"] = True
+                base.write(run / "previews" / root / f"{route}.{role}.json", {"payload": payload, "proof": proof})
+                previews.append(proof)
+    files = list(HERE.glob("*.py")) + list(LEGACY.glob("*.py")) + [HERE / "POLICY.md", SOURCE_REGISTRY_PATH]
+    files += base.feedback.input_paths()
+    provider_profile, transport_code, tokenizer_files = transport_inputs()
+    base.write(run / "provider_profile.json", provider_profile)
+    files += transport_code + tokenizer_files
+    files += [DELIVERIES / "h4_r02_source_unique_v2/unique_events.py", *original_sources]
+    files += [Path(x["path"]) for x in prior["prior_evidence"]]
+    files += [Path(row[k]) for row in sources["files"] for k in ("local_path", "source_receipt_path")]
+    files += list(run.rglob("*.json")) + list(run.rglob("*.txt"))
+    logical_budget = (((scenes * len(roots) if ROUTES[0] in routes else 0) + allocation["assigned_slots"])
+                      * (STATE_ATTEMPTS + PLAN_ATTEMPTS * (1 + EVENT_STATE_ATTEMPTS)
+                         + SCENE_ATTEMPTS * (REVIEW_RETRIES + 2))
+                      + allocation["assigned_slots"] * CARD_EXTRACTION_ATTEMPTS)
+    maximum = logical_budget * (TRANSPORT_RETRIES + 1)
+    manifest = {"version": VERSION, "model": MODEL, "review_model": MODEL, "target_solver_model": base.TARGET,
+        "roots": roots, "selected_routes": list(routes), "scenes_per_route_target": scenes,
+        "sequence": "complete frozen source -> one new B dataset event scene; historical prefix preserved",
+        "other_branch_context": "checker/reviewer only; never generator, including repair",
+        "max_planner_attempts": PLAN_ATTEMPTS, "max_realizer_attempts": SCENE_ATTEMPTS,
+        "max_state_extraction_attempts": STATE_ATTEMPTS,
+        "max_event_state_attempts_per_plan": EVENT_STATE_ATTEMPTS,
+        "state_model": MODEL, "state_version": state_contract.STATE_VERSION,
+        "evidence_basis": "reported|inferred|uncertain; reported plans remain planned; soft-only conflicts are diagnostics",
+        "question_generation_stage": "not part of this expansion-only batch; question_calls and solver_calls remain zero",
+        "root_cohorts": {root: SOURCE_SPECS[root]["cohort"] for root in roots},
+        "event_coverage_version": event_contract.EVENT_STATE_VERSION,
+        "cited_segment_none_reason": "preserve_nonempty_text_as_diagnostic_only",
+        "state_pipeline": "Qwen initial state -> Planner -> Qwen event history plus mapped card semantics and plan consistency / bounded replan -> Realizer -> Qwen event/state/card and full scene consistency review",
+        "plan_card_fidelity_review_required_before_realizer": True,
+        "plan_and_scene_consistency_review_required": True,
+        "absence_only_event_rejection_is_reviewer_contract_failure": True,
+        "automatic_transport_retries": TRANSPORT_RETRIES,
+        "transport_dependency_paths": [str(path) for path in transport_code],
+        "capacity_tokenizer_paths": [str(path) for path in tokenizer_files],
+        "provider_profile_path": str(run / "provider_profile.json"),
+        "credential_contents_frozen": False,
+        "retryable_transport_statuses": [503, 504],
+        "card_extraction_attempts_per_source": CARD_EXTRACTION_ATTEMPTS,
+        "review_schema_retries": REVIEW_RETRIES, "http_max": maximum, "files": base.bindings(files),
+        "live_ready": ROUTES[0] in routes or allocation["assigned_slots"] > 0,
+        "route_readiness": {"A": ROUTES[0] in routes, "B": allocation["assigned_slots"] > 0},
+        "blocking_reason": None if allocation["assigned_slots"] else "B_NO_UNUSED_DATASET_EVENTS",
+        "prepared_at_utc": now(), "generation_calls": 0, "solver_calls": 0, "training_started": False}
+    base.write(run / "MANIFEST.json", manifest)
+    snapshots = []
+    for index, row in enumerate(manifest["files"]):
+        path = Path(row["path"])
+        if path.suffix != ".py":
+            continue
+        destination = run / "execution_code" / f"{index:03d}_{path.name}"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, destination)
+        base.require(base.digest(destination.read_bytes()) == row["sha256"], "snapshot_hash_mismatch")
+        snapshots.append({"original_path": row["path"], "snapshot_path": str(destination),
+                          "sha256": row["sha256"]})
+    base.write(run / "EXECUTION_CODE_SNAPSHOT.json", {"files": snapshots})
+    result = {"status": "PREPARED" if allocation["assigned_slots"] else (
+                  "PREPARED_A_ONLY_NO_UNUSED_DATASET_EVENTS" if ROUTES[0] in routes else "BLOCKED_NO_UNUSED_DATASET_EVENTS"),
+              "assigned_B_slots": allocation["assigned_slots"], "excluded_source_ids": allocation["excluded_prior_source_ids"],
+              "independent_branch_previews": len(previews), "all_feedback_receipts_present": all(p["feedback_receipt"] for p in previews),
+              "live_ready": manifest["live_ready"], "route_readiness": manifest["route_readiness"], "http_calls": 0}
+    base.write(run / "PREPARE_CHECKS.json", result)
+    return result
+
+
+def verify(run, *, live_execution=False):
+    manifest = base.read(run / "MANIFEST.json")
+    base.require(manifest["version"] == VERSION, "wrong_version")
+    base.verify_bindings(manifest["files"])
+    bound = {row["path"] for row in manifest["files"]}
+    base.require(manifest.get("transport_dependency_paths") and manifest.get("capacity_tokenizer_paths"),
+                 "transport_binding_manifest_missing")
+    required = [*manifest["transport_dependency_paths"], *manifest["capacity_tokenizer_paths"],
+                str(run / "provider_profile.json")]
+    base.require(all(str(Path(path).resolve()) in bound for path in required), "transport_inputs_not_bound")
+    profile, _factory, _annotate, _capacity, _dev = base.transport()
+    base.require(profile() == base.read(run / "provider_profile.json"), "provider_profile_changed")
+    allocation = base.read(run / "UNIQUE_EVENT_ALLOCATION.json")
+    source_inventory.legacy.verify_allocation(allocation, base.read(run / "dataset_sources.json"), manifest["roots"])
+    return manifest, allocation
+
+
+def live(run):
+    with LOCK_PATH.open("a") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        manifest, allocation = verify(run, live_execution=True)
+        base.require(manifest["live_ready"], "NO_UNUSED_DATASET_EVENTS")
+        base.require(not (run / "LIVE_STARTED.json").exists(), "already_started_no_automatic_replay")
+        source_inventory.reserve(run, allocation["assignments"], source_inventory.collect_prior())
+        base.write(run / "LIVE_STARTED.json", {"version": VERSION, "started_at": now(), "http_max": manifest["http_max"]})
+        caller = Caller(run)
+        sources = base.read(run / "dataset_sources.json")
+        selected_ids = {x["source_id"] for rows in allocation["assignments"].values() for x in rows}
+        cards, rejected, extraction_audits = [], [], []
+        # One source per extraction avoids cross-batch card-ID collisions.
+        for item in sources["items"]:
+            if item["source_id"] not in selected_ids:
+                continue
+            subset = base.dataset_cards.select_source_subset(sources, [item["source_id"]])
+            repair, selected = None, None
+            source_audits = []
+            for extract_attempt in range(1, CARD_EXTRACTION_ATTEMPTS + 1):
+                payload = card_selection.build_extraction_request(subset, repair=repair)
+                try:
+                    raw, directory = caller.call(
+                        f"extract-{item['source_id'].replace(':', '-')}-{extract_attempt}", payload,
+                        {"role": "dataset_extractor", "source_id": item["source_id"],
+                         "source_event_identity": source_inventory.event_key(item)})
+                except RuntimeError as error:
+                    source_audits.append({"attempt": extract_attempt, "status": "TRANSPORT_FAILURE",
+                                          "reason": str(error)})
+                    break
+                checked = card_selection.select_cards(raw, subset)
+                base.write(directory / "VALIDATION.json", checked)
+                source_audits.append({"attempt": extract_attempt, "request": str(directory),
+                                      "accepted_cards": len(checked["accepted_cards"]),
+                                      "retryable": checked["retryable"]})
+                rejected.extend(checked["rejected_records"])
+                if checked["accepted_cards"]:
+                    selected = checked["accepted_cards"][0]
+                    cards.append(selected)
+                    break
+                if not checked["retryable"]:
+                    break
+                repair = checked["repair_feedback"]
+            if selected is None:
+                rejected.append({"scope": "source", "source_id": item["source_id"],
+                                 "reason": "no_usable_card_after_bounded_extraction",
+                                 "attempts": source_audits})
+            extraction_audits.append({"source_id": item["source_id"], "attempts": source_audits,
+                                      "selected_card_id": selected["card_id"] if selected else None})
+        base.write(run / "dataset_cards_result.json", {"accepted_cards": cards,
+            "rejected_records": rejected, "source_attempts": extraction_audits,
+            "one_card_per_source": True, "selection_policy": card_selection.SELECTION_POLICY})
+        by_source = {c["source_id"]: c for c in cards}
+        # Preserve reservation slots even if an earlier extraction fails.
+        rows, uses = [], []
+        for root in manifest["roots"]:
+            assigned = allocation["assignments"][root]
+            # Keep missing slots as None. A later valid card retains its original
+            # reserved S02/S03 identity and can still be used in this branch.
+            root_cards = [by_source.get(x["source_id"]) for x in assigned]
+            source_inventory.verify_cards_for_root([c for c in root_cards if c is not None], allocation, root)
+            missing = [f"S{i:02d}" for i, card in enumerate(root_cards, 1) if card is None]
+            if missing:
+                base.write(run / "roots" / root / "CARD_SHORTFALL.json", {
+                    "reason": "card_extraction_incomplete_only_missing_slots_skipped", "missing_scene_ids": missing})
+            root_rows = run_root(caller, run, root, root_cards,
+                                 target_scenes=manifest["scenes_per_route_target"], routes=manifest["selected_routes"])
+            rows.extend(root_rows)
+            b_row = next(row for row in root_rows if row["route"] == ROUTES[1])
+            for scene in b_row["scene_metadata"]:
+                card = root_cards[int(scene["scene_id"][1:]) - 1]
+                key = source_inventory.event_key(card)
+                uses.append({"dataset": key[0], "split": key[1], "item_id": key[2], "source_id": card["source_id"],
+                             "source_item_sha256": card["lineage"]["source_item_sha256"],
+                             "root_id": root, "scene_id": scene["scene_id"], "run": str(run)})
+        base.verify_bindings(manifest["files"])
+        actual_http = len(list((run / "requests").glob("*/HTTP_ATTEMPT*.json")))
+        output = {"version": VERSION,
+                  "status": "COMPLETE_WITH_SHORTFALL" if any(r["shortfall_scenes"] for r in rows) else "COMPLETE",
+                  "routes": rows, "accepted_uses": uses,
+                  "accepted_scenes": sum(r["accepted_scenes"] for r in rows), "http_attempts": actual_http,
+                  "http_request_reservations": caller.request_counter,
+                  "http_attempt_log_count": caller.http_counter,
+                  "branches_remain_separate": True, "model": MODEL, "question_calls": 0, "solver_calls": 0,
+                  "training_started": False, "semantic_certified": False}
+        base.write(run / "REPORT.json", output)
+        return output
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("action", choices=("prepare", "verify", "live"))
+    parser.add_argument("--run", type=Path, required=True)
+    parser.add_argument("--scenes", type=int, default=1)
+    parser.add_argument("--roots", nargs="+", choices=ROOTS)
+    parser.add_argument("--routes", choices=("both", "B"), default="both")
+    args = parser.parse_args()
+    run = args.run.resolve()
+    result = prepare(run, scenes=args.scenes, roots=args.roots,
+                     routes=(ROUTES[1],) if args.routes == "B" else ROUTES) if args.action == "prepare" else (
+        live(run) if args.action == "live" else {"status": "PASS", "live_ready": verify(run)[0]["live_ready"]})
+    print(json.dumps(result, ensure_ascii=False, indent=2))

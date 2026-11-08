@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Structure pilot immutable input and review seal",
+  "type": "object",
+  "required": ["schema_version", "namespace", "frozen", "frozen_at_utc", "reviews_frozen", "files", "items"],
+  "properties": {
+    "schema_version": {"const": "structure_pilot_input_review_seal_v1"},
+    "namespace": {"const": "structure_pilot_20261106_v1"},
+    "frozen": {"const": true},
+    "frozen_at_utc": {"type": "string", "minLength": 1},
+    "reviews_frozen": {
+      "type": "object",
+      "required": ["quality", "gold", "structure", "overlap"],
+      "properties": {
+        "quality": {"const": true}, "gold": {"const": true},
+        "structure": {"const": true}, "overlap": {"const": true}
+      }
+    },
+    "files": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/binding"}},
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["candidate_id", "root_id", "group", "raw_draft", "source", "quality_status", "gold_agreement", "review_artifacts", "structure_result", "overlap_result", "protocol_markers"],
+        "properties": {
+          "candidate_id": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+$"},
+          "root_id": {"type": "string", "minLength": 1},
+          "group": {"enum": ["OLD_F", "OLD_G", "NEW_F", "NEW_G"]},
+          "raw_draft": {"$ref": "#/$defs/binding"},
+          "source": {
+            "allOf": [{"$ref": "#/$defs/binding"}, {"type": "object", "required": ["turn_count"], "properties": {"turn_count": {"type": "integer", "minimum": 1}}}]
+          },
+          "quality_status": {"enum": ["PASS", "HOLD", "FAIL"]},
+          "gold_agreement": {"type": "boolean"},
+          "review_artifacts": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/binding"}},
+          "structure_result": {"$ref": "#/$defs/independent_result"},
+          "overlap_result": {"$ref": "#/$defs/independent_result"},
+          "protocol_markers": {"type": "array", "items": {"type": "string", "minLength": 1}}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "binding": {
+      "type": "object", "required": ["path", "sha256"],
+      "properties": {"path": {"type": "string", "pattern": "^/"}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
+    },
+    "independent_result": {
+      "type": "object", "required": ["independent", "status"],
+      "properties": {"independent": {"const": true}, "status": {"type": "string", "minLength": 1}}
+    }
+  }
+}

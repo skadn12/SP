@@ -1,0 +1,406 @@
+{
+  "type": "object",
+  "properties": {
+    "candidate_id": {
+      "const": "STABLE2-F-156136-MC4"
+    },
+    "root_id": {
+      "const": "cc-train-episode-156136"
+    },
+    "arm": {
+      "const": "F"
+    },
+    "slot_id": {
+      "const": "MC4"
+    },
+    "author_id": {
+      "const": "F"
+    },
+    "question_type": {
+      "const": "multi_select"
+    },
+    "task_operation": {
+      "const": "MC_EVIDENCE_SELECTION"
+    },
+    "source_binding": {
+      "const": {
+        "path": "/root/autodl-tmp/gxy-selfplay/research-protocols/selfplay_week_20261019/feedback_closed_loop_stable_v2_20261025_v1/sources/cc-train-episode-156136/FULL_SOURCE.json",
+        "sha256": "687b263d2f0eb1a83d50296db1b4f2203ba1dc754430087e9e467a641a76c5ee",
+        "bytes": 70145
+      }
+    },
+    "question": {
+      "type": "string"
+    },
+    "gold": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "A",
+          "B",
+          "C",
+          "D",
+          "E",
+          "F"
+        ]
+      },
+      "minItems": 4,
+      "maxItems": 4,
+      "uniqueItems": true
+    },
+    "r03_necessity": {
+      "type": "string"
+    },
+    "options": {
+      "type": "object",
+      "properties": {
+        "A": {
+          "type": "string"
+        },
+        "B": {
+          "type": "string"
+        },
+        "C": {
+          "type": "string"
+        },
+        "D": {
+          "type": "string"
+        },
+        "E": {
+          "type": "string"
+        },
+        "F": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E",
+        "F"
+      ],
+      "additionalProperties": false
+    },
+    "item_analysis": {
+      "type": "object",
+      "properties": {
+        "A": {
+          "type": "object",
+          "properties": {
+            "evidence": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "turn_ref": {
+                    "type": "string"
+                  },
+                  "speaker": {
+                    "type": "string"
+                  },
+                  "quote": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "turn_ref",
+                  "speaker",
+                  "quote"
+                ],
+                "additionalProperties": false
+              },
+              "minItems": 1
+            },
+            "rationale": {
+              "type": "string"
+            },
+            "should_select": {
+              "type": "boolean"
+            },
+            "changed_relation": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "evidence",
+            "rationale",
+            "should_select",
+            "changed_relation"
+          ],
+          "additionalProperties": false
+        },
+        "B": {
+          "type": "object",
+          "properties": {
+            "evidence": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "turn_ref": {
+                    "type": "string"
+                  },
+                  "speaker": {
+                    "type": "string"
+                  },
+                  "quote": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "turn_ref",
+                  "speaker",
+                  "quote"
+                ],
+                "additionalProperties": false
+              },
+              "minItems": 1
+            },
+            "rationale": {
+              "type": "string"
+            },
+            "should_select": {
+              "type": "boolean"
+            },
+            "changed_relation": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "evidence",
+            "rationale",
+            "should_select",
+            "changed_relation"
+          ],
+          "additionalProperties": false
+        },
+        "C": {
+          "type": "object",
+          "properties": {
+            "evidence": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "turn_ref": {
+                    "type": "string"
+                  },
+                  "speaker": {
+                    "type": "string"
+                  },
+                  "quote": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "turn_ref",
+                  "speaker",
+                  "quote"
+                ],
+                "additionalProperties": false
+              },
+              "minItems": 1
+            },
+            "rationale": {
+              "type": "string"
+            },
+            "should_select": {
+              "type": "boolean"
+            },
+            "changed_relation": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "evidence",
+            "rationale",
+            "should_select",
+            "changed_relation"
+          ],
+          "additionalProperties": false
+        },
+        "D": {
+          "type": "object",
+          "properties": {
+            "evidence": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "turn_ref": {
+                    "type": "string"
+                  },
+                  "speaker": {
+                    "type": "string"
+                  },
+                  "quote": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "turn_ref",
+                  "speaker",
+                  "quote"
+                ],
+                "additionalProperties": false
+              },
+              "minItems": 1
+            },
+            "rationale": {
+              "type": "string"
+            },
+            "should_select": {
+              "type": "boolean"
+            },
+            "changed_relation": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "evidence",
+            "rationale",
+            "should_select",
+            "changed_relation"
+          ],
+          "additionalProperties": false
+        },
+        "E": {
+          "type": "object",
+          "properties": {
+            "evidence": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "turn_ref": {
+                    "type": "string"
+                  },
+                  "speaker": {
+                    "type": "string"
+                  },
+                  "quote": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "turn_ref",
+                  "speaker",
+                  "quote"
+                ],
+                "additionalProperties": false
+              },
+              "minItems": 1
+            },
+            "rationale": {
+              "type": "string"
+            },
+            "should_select": {
+              "type": "boolean"
+            },
+            "changed_relation": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "evidence",
+            "rationale",
+            "should_select",
+            "changed_relation"
+          ],
+          "additionalProperties": false
+        },
+        "F": {
+          "type": "object",
+          "properties": {
+            "evidence": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "turn_ref": {
+                    "type": "string"
+                  },
+                  "speaker": {
+                    "type": "string"
+                  },
+                  "quote": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "turn_ref",
+                  "speaker",
+                  "quote"
+                ],
+                "additionalProperties": false
+              },
+              "minItems": 1
+            },
+            "rationale": {
+              "type": "string"
+            },
+            "should_select": {
+              "type": "boolean"
+            },
+            "changed_relation": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "evidence",
+            "rationale",
+            "should_select",
+            "changed_relation"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E",
+        "F"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "candidate_id",
+    "root_id",
+    "arm",
+    "slot_id",
+    "author_id",
+    "question_type",
+    "task_operation",
+    "source_binding",
+    "question",
+    "gold",
+    "r03_necessity",
+    "options",
+    "item_analysis"
+  ],
+  "additionalProperties": false
+}

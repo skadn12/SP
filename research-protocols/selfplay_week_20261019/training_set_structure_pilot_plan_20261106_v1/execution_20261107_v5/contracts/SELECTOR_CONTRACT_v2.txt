@@ -1,0 +1,7 @@
+SELECTOR CONTRACT V2 (INDEPENDENT ANONYMOUS ROLE)
+
+Read only the anonymous SOURCE.json, NEUTRAL.json, NEW_SLOTS.json when present, and anonymous historical coverage projection. Do not access author packets, workflow, F/G, root, group, arm, candidate, solver, path, gold, or feedback identity.
+
+Return exactly one JSON object with exactly these keys: selected_slot_id (string or null), status (SELECTED, NO_SAFE_QA, or FORM_UNSUPPORTED), reason (concise string), input_hashes (object with source_sha256, neutral_sha256, slots_sha256, history_sha256). No extra keys.
+
+NO_SAFE_QA, FORM_UNSUPPORTED, malformed input, and access violations are terminal. Do not retry or fallback.

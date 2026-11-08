@@ -1,0 +1,7 @@
+# Three-root retry independent evaluation
+
+This run implements the frozen three-root retry README and inherits the F supplement solver and review contract. It evaluates only the three already frozen first drafts for Train roots 189272, 249232 and 59126, conditional on the existing mechanical, blind quality, and cited-source checks. It is a separate run with a separate reservation ledger and no changes to previous artifacts.
+
+The maximum is 36 calls per qualified candidate and 108 in total: six unique permutations, three repeats, in each of Full and No-context. Invalid or truncated answers score zero in the fixed denominator; there are no retries or answer repairs. Full-context mean task score strictly between zero and one is required for the candidate pool; No-context and auxiliary explanation/citation compliance are diagnostics. Cross-run semantic deduplication and final selection remain separate, and no training or export is authorized by this run.
+
+The unchanged supplement adapter enforces generic ceilings of 68 items and 2,448 calls; the stricter three-item/108-call limit here must be independently checked before preparation and again against the generated requests before inference. Its seed namespace and root indexing are unchanged, so root-level sampling seeds match the corresponding prior FS1 root, but the questions differ. INPUT_FREEZE.json is an unchanged copy of the earlier 68-root source inventory and supplies global numeric root indices; it does not imply this run has 68 candidates or a 2,448-call budget.
